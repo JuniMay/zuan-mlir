@@ -1,0 +1,8 @@
+/.vscode
+/.zed
+/.venv
+/.cache
+
+/build*
+
+.DS_Store

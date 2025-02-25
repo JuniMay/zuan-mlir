@@ -1,0 +1,192 @@
+//===- VPOps.td - VP Operations ----------------------------*- tablegen -*-===//
+//
+// This file declares the Vector Predication operations.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef VP_IR_VPOPS
+#define VP_IR_VPOPS
+
+include "VPDialect.td"
+
+include "mlir/IR/CommonTypeConstraints.td"
+
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
+
+include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+
+def VPScalar : AnyTypeOf<[
+  F16, F32, F64, F128, BF16, I8, I16, I32, I64, I128, Index]>;
+
+def VPVector : ScalableVectorOfRankAndLengthAndType<
+  [1], [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
+
+def VPMask : ScalableVectorOfRankAndLengthAndType<
+  [1], [64, 32, 16, 8, 4, 2, 1], [I1]>;
+
+def VP_PredicateOp : VP_Op<"predicate", [
+  SingleBlockImplicitTerminator<"vector::YieldOp">,
+  RecursiveMemoryEffects, NoRegionArguments, AttrSizedOperandSegments
+]> {
+  let summary = "VP predicate operation";
+  let description = [{
+    VP predicate operation is a wrapper around arith or vector dialect
+    operations. It specifies the explicit vector length, optional mask and
+    optional passthru values.
+  }];
+  
+  let arguments = (ins AnySignlessIntegerOrIndex:$evl,
+                       Optional<VPMask>:$mask,
+                       Optional<VPVector>:$passthru,
+                       Optional<VPVector>:$maskedoff);
+  let results = (outs Variadic<AnyType>:$result);
+  let regions = (region SizedRegion<1>:$body);
+
+  let assemblyFormat = [{
+    $evl `:` type($evl)
+    `,` `mask` `=` ($mask^ `:` type($mask)):(`none`)? 
+    `,` `passthru` `=` ($passthru^ `:` type($passthru)):(`none`)?
+    `,` `maskedoff` `=` ($maskedoff^ `:` type($maskedoff)):(`none`)?
+    $body attr-dict (`:` type($result)^)?
+  }];
+
+  let builders = [
+    // Builder with EVL, mask, passthru, maskedoff, and operation-to-be-predicated.
+    OpBuilder<(ins "Value":$evl,
+                   "Operation *":$predicatedOp,
+                   CArg<"function_ref<void(OpBuilder &, Operation *)>">:$bodyBuilder,
+                   CArg<"Value", "nullptr">:$mask,
+                   CArg<"Value", "nullptr">:$passthru,
+                   CArg<"Value", "nullptr">:$maskedoff)>,
+
+    // Builder with result types, EVL, mask, passthru, maskedoff, and operation-to-be-predicated.
+    OpBuilder<(ins "TypeRange":$resultTypes,
+                   "Value":$evl,
+                   "Operation *":$predicatedOp,
+                   CArg<"function_ref<void(OpBuilder &, Operation *)>">:$bodyBuilder,
+                   CArg<"Value", "nullptr">:$mask,
+                   CArg<"Value", "nullptr">:$passthru,
+                   CArg<"Value", "nullptr">:$maskedoff)>
+  ];
+
+  let hasCanonicalizer = 1;
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+def VP_GetVLOp : VP_Op<"getvl", [
+  AllTypesMatch<["cnt", "result"]>
+]> {
+  let summary = "Get Vector Length Operation.";
+  let description = [{
+    The MLIR version of `llvm.experimental.get.vector.lenth` intrinsic.
+
+    See: https://llvm.org/docs/LangRef.html#llvm-experimental-get-vector-length-intrinsic
+  }];
+  
+  let arguments = (ins AnySignlessIntegerOrIndex:$cnt,
+                       I32Attr:$vf,
+                       TypeAttr:$computeType,
+                       I1Attr:$scalable);
+  let results = (outs AnySignlessIntegerOrIndex:$result);
+
+  let assemblyFormat = [{
+    $cnt `,` $vf `x` $computeType `,` $scalable attr-dict `:` type($cnt)
+  }];
+}
+
+def VP_LoadOp : VP_Op<"load", []> {
+  let summary = "reads an 1-D slice of memory into an 1-D vector";
+  let description = [{
+    This is a replacement of `vector.load` operation in the vector dialect,
+    which does not support strided load at the most minor dimension.
+
+    Different from vector dialect, this operation only suppotr 1-D vector
+    loading from n-D memory.
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "the reference to load from", [MemRead]>:$base,
+                       Variadic<Index>:$indices);
+  let results = (outs VPVector:$result);
+
+  let extraClassDeclaration = [{
+    MemRefType getMemRefType() {
+      return ::llvm::cast<MemRefType>(getBase().getType());
+    }
+
+    VectorType getVectorType() {
+      return ::llvm::cast<VectorType>(getResult().getType());
+    }
+  }];
+
+  let assemblyFormat = [{
+    $base `[` $indices `]` attr-dict `:` type($base) `,` type($result)
+  }];
+}
+
+def VP_StoreOp : VP_Op<"store", []> {
+  let summary = "writes an 1-D vector to an 1-D slice of memory";
+  let description = [{
+    This is a replacement of `vector.store` operation in the vector dialect,
+    which does not support strided store at the most minor dimension.
+
+    Different from vector dialect, this operation only suppotr 1-D vector
+    storing to n-D memory.
+  }];
+
+  let arguments = (ins VPVector:$value,
+                       Arg<AnyMemRef, "the reference to store to", [MemWrite]>:$base,
+                       Variadic<Index>:$indices);
+
+  let extraClassDeclaration = [{
+    MemRefType getMemRefType() {
+      return ::llvm::cast<MemRefType>(getBase().getType());
+    }
+
+    VectorType getVectorType() {
+      return ::llvm::cast<VectorType>(getValue().getType());
+    }
+  }];
+
+  let assemblyFormat = [{
+    $value `,` $base `[` $indices `]` attr-dict `:` type($value) `,` type($base)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// Target Specific Intrinsic Operations
+//===----------------------------------------------------------------------===//
+
+class VP_RVVIntrOp<string mnemonic, 
+                list<int> overloadedResults = [],
+                list<int> overloadedOperands = [],
+                list<Trait> traits = [],
+                int numResults = 1> :
+  LLVM_IntrOpBase</*Dialect dialect=*/VP_Dialect, 
+                  /*string opName=*/"intr.rvv." # mnemonic,
+                  /*string enumName=*/"riscv_" # !subst(".", "_", mnemonic),
+                  /*list<int> overloadedResults=*/overloadedResults, 
+                  /*list<int> overloadedOperands=*/overloadedOperands, 
+                  /*list<Trait> traits=*/traits, 
+                  /*int numResults=*/numResults>;
+
+def VP_RVVIntrSetVliOp :
+  VP_RVVIntrOp<"vsetvli", [0], [], [], 1>,
+  Arguments<(ins AnyInteger, AnyInteger, AnyInteger)>;
+
+def VP_RVVIntrSetVliMaxOp :
+  VP_RVVIntrOp<"vsetvlimax", [0], [], [], 1>,
+  Arguments<(ins AnyInteger, AnyInteger)>;
+
+def VP_RVVIntrVidOp :
+  VP_RVVIntrOp<"vid", [0], [1], [], 1>,
+  Arguments<(ins VPVector, AnyInteger)>;
+
+def VP_RVVIntrVidMaskedOp:
+  VP_RVVIntrOp<"vid_mask", [0], [2], [], 1>,
+  Arguments<(ins VPVector, VPMask, AnyInteger, AnyInteger)>;
+
+
+#endif // VP_IR_VPOPS
