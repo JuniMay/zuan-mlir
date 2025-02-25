@@ -1,3 +1,8 @@
+//===- VPToLLVM.cpp - VP to LLVM dialect conversion -------------*- C++ -*-===//
+//
+// This file implements the VP to LLVM dialect conversion patterns.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/Conversion/ArithCommon/AttrToLLVMConverter.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"

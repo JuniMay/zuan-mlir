@@ -1,4 +1,4 @@
-//=== VPOps.cpp - VP Operation Implementations ------------------*- C++ -*-===//
+//===- VPOps.cpp - VP Operation Implementations -----------------*- C++ -*-===//
 //
 // This file implements the operations of the VP dialect.
 //

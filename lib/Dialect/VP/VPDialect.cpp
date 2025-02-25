@@ -1,4 +1,4 @@
-//=== VPDialect.cpp - VP Dialect Implementations ----------------*- C++ -*-===//
+//===- VPDialect.cpp - VP Dialect Implementations ---------------*- C++ -*-===//
 //
 // This file implements the initialization of VP dialect.
 //

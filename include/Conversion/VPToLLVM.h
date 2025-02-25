@@ -1,3 +1,9 @@
+//===- VPToLLVM.h - VP to LLVM conversion pass ------------------*- C++ -*-===//
+//
+// This file declares the VP to LLVM dialect conversion pass.
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef CONVERSION_VPTOLLVM_H
 #define CONVERSION_VPTOLLVM_H
 
