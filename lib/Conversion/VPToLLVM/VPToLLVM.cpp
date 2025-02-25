@@ -19,6 +19,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -145,6 +146,7 @@ template <> struct LLVMVPIntrNameMapping<arith::MinNumFOp> {
   static constexpr llvm::StringRef name = "llvm.vp.minnum";
 };
 
+/// Materialize the given operand if needed.
 [[maybe_unused]]
 static Value materializeOperand(OpBuilder &b,
                                 const LLVMTypeConverter *typeConverter,
@@ -157,6 +159,7 @@ static Value materializeOperand(OpBuilder &b,
                                                     targetType, {operand});
 }
 
+/// Build an all-true mask with the given shape in the vector type.
 [[maybe_unused]]
 static Value buildAllTrueMask(ConversionPatternRewriter &rewriter, Location loc,
                               VectorType vecType) {
@@ -200,6 +203,52 @@ buildRVVPassthru(ConversionPatternRewriter &rewriter, Location loc, Value evl,
     passthru = passthruMerged.getResult();
   }
   return {passthru, policy};
+}
+
+static Value buildPtrVec(Location loc, MemRefType type,
+                         const LLVMTypeConverter *typeConverter,
+                         Value memrefDescValue, ValueRange indices, Value mask,
+                         Value evl, VectorType vectorType,
+                         ConversionPatternRewriter &rewriter) {
+  auto [strides, offset] = type.getStridesAndOffset();
+  MemRefDescriptor memrefDesc(memrefDescValue);
+
+  Type indexType = typeConverter->getIndexType();
+  auto indexVecType = vectorType.cloneWith(std::nullopt, indexType);
+  // The start address pointer of the memref.
+  Value bufferPtr = memrefDesc.bufferPtr(rewriter, loc, *typeConverter, type);
+  // Bitcast the buffer pointer to the index type.
+  Value bufferPtrCasted =
+      rewriter.create<LLVM::PtrToIntOp>(loc, indexType, bufferPtr);
+  auto splatIntrName = rewriter.getStringAttr("llvm.experimental.vp.splat");
+  // Splats the offset value to the vector type.
+  Value indexVec =
+      rewriter
+          .create<LLVM::CallIntrinsicOp>(loc, indexVecType, splatIntrName,
+                                         ValueRange{bufferPtrCasted, mask, evl})
+          ->getResult(0);
+
+  for (int i = 0, e = indices.size(); i < e; ++i) {
+    Value increment = indices[i];
+    if (strides[i] != 1) {
+      Value stride = memrefDesc.stride(rewriter, loc, i);
+      Value strideSplat = rewriter
+                              .create<LLVM::CallIntrinsicOp>(
+                                  loc, increment.getType(), splatIntrName,
+                                  ValueRange{stride, mask, evl})
+                              ->getResult(0);
+      increment = rewriter.create<LLVM::VPMulOp>(
+          loc, increment.getType(), increment, strideSplat, mask, evl);
+    }
+    indexVec = rewriter.create<LLVM::VPAddOp>(loc, indexVec.getType(), indexVec,
+                                              increment, mask, evl);
+  }
+  Type ptrType = rewriter.getType<LLVM::LLVMPointerType>();
+  Type ptrVecType = rewriter.getType<LLVM::LLVMScalableVectorType>(
+      ptrType, vectorType.getNumElements());
+  Value ptrVec =
+      rewriter.create<LLVM::VPIntToPtrOp>(loc, ptrVecType, indexVec, mask, evl);
+  return ptrVec;
 }
 
 struct PredicateOpLowering : ConvertOpToLLVMPattern<vp::PredicateOp> {
@@ -455,11 +504,11 @@ public:
               rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, dataPtr);
 
           auto [strides, offset] = loadOp.getMemRefType().getStridesAndOffset();
-          if (!loadOp.getMemRefType().getLayout().isIdentity()) {
+          auto rank = loadOp.getMemRefType().getRank();
+          if (strides[rank - 1] != 1) {
             // strided load
             MemRefDescriptor memrefDesc(baseStruct);
-            unsigned pos = loadOp.getMemRefType().getRank() - 1;
-            Value stride = memrefDesc.stride(rewriter, loc, pos);
+            Value stride = memrefDesc.stride(rewriter, loc, rank - 1);
             auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
                 loc, vectorType, dataPtrCasted, stride, mask, evl);
             loweredOp = intrOp.getOperation();
@@ -504,6 +553,71 @@ public:
                 loc, value, dataPtrCasted, mask, evl);
             loweredOp = intrOp.getOperation();
           }
+        })
+        .Case([&](arith::SelectOp selectOp) {
+          if (!isa<VectorType>(selectOp.getCondition().getType())) {
+            loweredOp = rewriter.notifyMatchFailure(
+                op, "only vector condition is supported");
+          }
+          auto vcond = materializeOperand(rewriter, typeConverter,
+                                          selectOp.getCondition());
+          auto vtrue = materializeOperand(rewriter, typeConverter,
+                                          selectOp.getTrueValue());
+          auto vfalse = materializeOperand(rewriter, typeConverter,
+                                           selectOp.getFalseValue());
+          auto targetResType =
+              typeConverter->convertType(selectOp.getResult().getType());
+
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc,
+                                    cast<VectorType>(vtrue.getType()));
+          }
+          auto intrOp = rewriter.create<LLVM::VPSelectMinOp>(
+              loc, targetResType, vcond, vtrue, vfalse, evl);
+          loweredOp = intrOp.getOperation();
+        })
+        .Case([&](vp::GatherOp gatherOp) {
+          auto memrefType = gatherOp.getBase().getType();
+          auto baseStruct =
+              materializeOperand(rewriter, typeConverter, gatherOp.getBase());
+          SmallVector<Value> indices = gatherOp.getIndices();
+          for (auto &index : indices) {
+            index = materializeOperand(rewriter, typeConverter, index);
+          }
+          auto resultType = gatherOp.getResult().getType();
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc, resultType);
+          }
+          auto ptrVec = buildPtrVec(loc, memrefType, typeConverter, baseStruct,
+                                    indices, mask, evl, resultType, rewriter);
+
+          auto targetResType = typeConverter->convertType(resultType);
+          auto gatherIntrName = rewriter.getStringAttr("llvm.vp.gather");
+          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+              loc, targetResType, gatherIntrName,
+              ValueRange{ptrVec, mask, evl});
+          loweredOp = intrOp.getOperation();
+        })
+        .Case([&](vp::ScatterOp scatterOp) {
+          auto memrefType = scatterOp.getBase().getType();
+          auto baseStruct =
+              materializeOperand(rewriter, typeConverter, scatterOp.getBase());
+          SmallVector<Value> indices = scatterOp.getIndices();
+          for (auto &index : indices) {
+            index = materializeOperand(rewriter, typeConverter, index);
+          }
+          auto valueType = scatterOp.getValue().getType();
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc, valueType);
+          }
+          auto ptrVec = buildPtrVec(loc, memrefType, typeConverter, baseStruct,
+                                    indices, mask, evl, valueType, rewriter);
+          auto gatherIntrName = rewriter.getStringAttr("llvm.vp.scatter");
+          auto value =
+              materializeOperand(rewriter, typeConverter, scatterOp.getValue());
+          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+              loc, gatherIntrName, ValueRange{value, ptrVec, mask, evl});
+          loweredOp = intrOp.getOperation();
         })
         .Default([&](Operation *) {});
 
@@ -632,7 +746,8 @@ void populateVPToLLVMConversionPatterns(LLVMTypeConverter &converter,
 }
 
 void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
-  target.addIllegalOp<PredicateOp, GetVLOp, LoadOp, StoreOp>();
+  target.addIllegalOp<PredicateOp, GetVLOp, LoadOp, StoreOp, GatherOp,
+                      ScatterOp>();
   target.addLegalOp<RVVIntrSetVliOp, RVVIntrSetVliMaxOp, RVVIntrVidOp,
                     RVVIntrVidMaskedOp>();
 }

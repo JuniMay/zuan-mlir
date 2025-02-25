@@ -23,6 +23,9 @@ def VPScalar : AnyTypeOf<[
 def VPVector : ScalableVectorOfRankAndLengthAndType<
   [1], [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
 
+def VPIndexVector : ScalableVectorOfRankAndLengthAndType<
+  [1], [64, 32, 16, 8, 4, 2, 1], [Index]>;
+
 def VPMask : ScalableVectorOfRankAndLengthAndType<
   [1], [64, 32, 16, 8, 4, 2, 1], [I1]>;
 
@@ -152,6 +155,36 @@ def VP_StoreOp : VP_Op<"store", []> {
 
   let assemblyFormat = [{
     $value `,` $base `[` $indices `]` attr-dict `:` type($value) `,` type($base)
+  }];
+}
+
+def VP_GatherOp : VP_Op<"gather", []> {
+  let summary = "reads an 1-D vector from memref with vector indices";
+  let description = [{
+    This operation support multiple indexing vectors to read from a N-D memref.
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "the reference to load from", [MemRead]>:$base,
+                       Variadic<VPIndexVector>:$indices);
+  let results = (outs VPVector:$result);
+
+  let assemblyFormat = [{
+    $base `[` $indices `:` type($indices) `]` attr-dict `:` type($base) `,` type($result)
+  }];
+}
+
+def VP_ScatterOp : VP_Op<"scatter", []> {
+  let summary = "writes an 1-D vector to memref with vector indices";
+  let description = [{
+    This operation support multiple indexing vectors to write to a N-D memref.
+  }];
+
+  let arguments = (ins VPVector:$value,
+                       Arg<AnyMemRef, "the reference to store to", [MemWrite]>:$base,
+                       Variadic<VPIndexVector>:$indices);
+
+  let assemblyFormat = [{
+    $value `,` $base `[` $indices `:` type($indices) `]` attr-dict `:` type($value) `,` type($base)
   }];
 }
 
