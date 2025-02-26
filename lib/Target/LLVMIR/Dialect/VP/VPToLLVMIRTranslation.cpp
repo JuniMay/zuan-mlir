@@ -1,3 +1,8 @@
+//===- VPToLLVMIRTranslation.cpp - VP to LLVM IR translation --------------===//
+//
+// This file implements the translation of VP intrinsics to LLVM IR.
+//
+//===----------------------------------------------------------------------===//
 
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
@@ -22,6 +27,35 @@ struct VPDialectLLVMIRTranslationInterface : LLVMTranslationDialectInterface {
                    LLVM::ModuleTranslation &moduleTranslation) const override {
     Operation &opInst = *op;
 #include "VP/IR/VPOpsConversions.inc"
+
+    auto &ctx = moduleTranslation.getLLVMContext();
+    if (auto op = dyn_cast<vp::VPIntrFCmpOp>(opInst)) {
+      auto operands = moduleTranslation.lookupValues(op.getOperands());
+      auto predAttr = op->getAttrOfType<StringAttr>("predicate").getValue();
+      auto predMetadata = llvm::MDString::get(ctx, predAttr);
+      auto predValue = llvm::MetadataAsValue::get(ctx, predMetadata);
+      // The metatdata is #2 in the operand list.
+      operands.insert(operands.begin() + 2, predValue);
+      SmallVector<llvm::Type *> overloadedTypes{operands[0]->getType()};
+      auto inst = LLVM::detail::createIntrinsicCall(
+          builder, llvm::Intrinsic::vp_fcmp, operands, overloadedTypes);
+      moduleTranslation.mapValue(op.getResult(), inst);
+      return success();
+    }
+
+    if (auto op = dyn_cast<vp::VPIntrICmpOp>(opInst)) {
+      auto operands = moduleTranslation.lookupValues(op.getOperands());
+      auto predAttr = op->getAttrOfType<StringAttr>("predicate").getValue();
+      auto predMetadata = llvm::MDString::get(ctx, predAttr);
+      auto predValue = llvm::MetadataAsValue::get(ctx, predMetadata);
+      // The metatdata is #2 in the operand list.
+      operands.insert(operands.begin() + 2, predValue);
+      SmallVector<llvm::Type *> overloadedTypes{operands[0]->getType()};
+      auto inst = LLVM::detail::createIntrinsicCall(
+          builder, llvm::Intrinsic::vp_icmp, operands, overloadedTypes);
+      moduleTranslation.mapValue(op.getResult(), inst);
+      return success();
+    }
 
     return failure();
   }

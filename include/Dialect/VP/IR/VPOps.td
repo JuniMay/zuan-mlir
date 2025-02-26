@@ -221,5 +221,40 @@ def VP_RVVIntrVidMaskedOp:
   VP_RVVIntrOp<"vid_mask", [0], [2], [], 1>,
   Arguments<(ins VPVector, VPMask, AnyInteger, AnyInteger)>;
 
+//===----------------------------------------------------------------------===//
+// Additional vp intrinsics
+//===----------------------------------------------------------------------===//
+
+def VP_VPIntrFCmpOp : VP_Op<"intr.fcmp", [Pure]> {
+  let summary = "VP fcmp operation";
+  let description = [{
+    Workaround intrinsic for the vp.fcmp operation, which has a metadata in it,
+    and cannot be directly lowered to LLVM dialect.
+  }];
+
+  let arguments = (ins VPVector:$lhs, VPVector:$rhs, VPMask:$mask, I32:$evl);
+  let results = (outs VPMask:$result);
+
+  let assemblyFormat = [{
+    $lhs `,` $rhs `,` $mask `,` $evl attr-dict `:` 
+    type($lhs) `,` type($rhs) `,` type($mask) `,` type($evl) `,` type($result)
+  }];
+}
+
+def VP_VPIntrICmpOp : VP_Op<"intr.icmp", [Pure]> {
+  let summary = "VP icmp operation";
+  let description = [{
+    Workaround intrinsic for the vp.icmp operation, which has a metadata in it,
+    and cannot be directly lowered to LLVM dialect.
+  }];
+
+  let arguments = (ins VPVector:$lhs, VPVector:$rhs, VPMask:$mask, I32:$evl);
+  let results = (outs VPMask:$result);
+
+  let assemblyFormat = [{
+    $lhs `,` $rhs `,` $mask `,` $evl attr-dict `:` 
+    type($lhs) `,` type($rhs) `,` type($mask) `,` type($evl) `,` type($result)
+  }];
+}
 
 #endif // VP_IR_VPOPS

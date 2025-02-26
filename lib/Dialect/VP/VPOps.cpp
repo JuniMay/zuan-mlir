@@ -23,7 +23,6 @@ void PredicateOp::build(
     Value evl, Operation *predicatedOp,
     function_ref<void(OpBuilder &, Operation *)> bodyBuilder, Value mask,
     Value passthru, Value maskedoff) {
-
   assert(bodyBuilder &&
          "builder callback for the predicated region must be present");
 
@@ -114,6 +113,8 @@ Operation *predicateOperation(OpBuilder &builder, Operation *predicatedOp,
 }
 
 LogicalResult PredicateOp::verify() {
+  // TODO: Check the vector types of the predicated operation and the results.
+  // TODO: Check the passthru & maskedoff semantics.
   Block &block = getBody().front();
   if (block.empty()) {
     return emitOpError("expects a terminator within the predication block");

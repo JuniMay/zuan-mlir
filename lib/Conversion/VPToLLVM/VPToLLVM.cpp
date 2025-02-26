@@ -122,8 +122,67 @@ template <> struct LLVMVPIntrOpMapping<arith::MaxSIOp> {
   using VPIntrT = LLVM::VPSMaxOp;
 };
 
+template <> struct LLVMVPIntrOpMapping<arith::RemFOp> {
+  using VPIntrT = LLVM::VPFRemOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::RemSIOp> {
+  using VPIntrT = LLVM::VPSRemOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::RemUIOp> {
+  using VPIntrT = LLVM::VPURemOp;
+};
+
 template <> struct LLVMVPIntrOpMapping<arith::MaxUIOp> {
   using VPIntrT = LLVM::VPUMaxOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::TruncFOp> {
+  using VPIntrT = LLVM::VPFPTruncOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::TruncIOp> {
+  using VPIntrT = LLVM::VPTruncOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::ExtUIOp> {
+  using VPIntrT = LLVM::VPZExtOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::ExtSIOp> {
+  using VPIntrT = LLVM::VPSExtOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::ExtFOp> {
+  using VPIntrT = LLVM::VPFPExtOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::FPToSIOp> {
+  using VPIntrT = LLVM::VPFPToSIOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::FPToUIOp> {
+  using VPIntrT = LLVM::VPFPToUIOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::SIToFPOp> {
+  using VPIntrT = LLVM::VPSIToFPOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::UIToFPOp> {
+  using VPIntrT = LLVM::VPUIToFPOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::IndexCastOp> {
+  // Both index_cast and index_castui uses vptrunc when the target width is
+  // smaller, The difference is when the target width is larger, index_castui
+  // uses zext while index_cast uses sext.
+  using VPIntrT = LLVM::VPSExtOp;
+};
+
+template <> struct LLVMVPIntrOpMapping<arith::IndexCastUIOp> {
+  using VPIntrT = LLVM::VPZExtOp;
 };
 
 /// Some VP intrinsics are either not implemented in the LLVM dialect, or
@@ -288,24 +347,25 @@ public:
               arith::SubIOp, arith::SubFOp, arith::DivSIOp, arith::DivUIOp,
               arith::DivFOp, arith::AndIOp, arith::OrIOp, arith::XOrIOp,
               arith::ShLIOp, arith::ShRUIOp, arith::ShRSIOp, arith::MaxSIOp,
-              arith::MaxUIOp>([&](auto predicatedOp) {
-          using VPIntrOp =
-              typename LLVMVPIntrOpMapping<decltype(predicatedOp)>::VPIntrT;
+              arith::MaxUIOp, arith::RemFOp, arith::RemSIOp, arith::RemUIOp>(
+            [&](auto predicatedOp) {
+              using VPIntrOp =
+                  typename LLVMVPIntrOpMapping<decltype(predicatedOp)>::VPIntrT;
 
-          Value lhs = predicatedOp.getLhs();
-          Value rhs = predicatedOp.getRhs();
-          if (!mask) {
-            auto vectorType = cast<VectorType>(lhs.getType());
-            mask = buildAllTrueMask(rewriter, loc, vectorType);
-          }
-          Type targetResType =
-              typeConverter->convertType(predicatedOp.getResult().getType());
-          lhs = materializeOperand(rewriter, typeConverter, lhs);
-          rhs = materializeOperand(rewriter, typeConverter, rhs);
-          auto intrOp = rewriter.create<VPIntrOp>(loc, targetResType, lhs, rhs,
-                                                  mask, evl);
-          loweredOp = intrOp.getOperation();
-        })
+              Value lhs = predicatedOp.getLhs();
+              Value rhs = predicatedOp.getRhs();
+              if (!mask) {
+                auto vectorType = cast<VectorType>(lhs.getType());
+                mask = buildAllTrueMask(rewriter, loc, vectorType);
+              }
+              Type targetResType = typeConverter->convertType(
+                  predicatedOp.getResult().getType());
+              lhs = materializeOperand(rewriter, typeConverter, lhs);
+              rhs = materializeOperand(rewriter, typeConverter, rhs);
+              auto intrOp = rewriter.create<VPIntrOp>(loc, targetResType, lhs,
+                                                      rhs, mask, evl);
+              loweredOp = intrOp.getOperation();
+            })
         .Case<arith::MaximumFOp, arith::MinimumFOp, arith::MaxNumFOp,
               arith::MinNumFOp>([&](auto predicatedOp) {
           using IntrName = LLVMVPIntrNameMapping<decltype(predicatedOp)>;
@@ -400,6 +460,7 @@ public:
               loc, targetResType, rewriter.getStringAttr(intrName),
               ValueRange{acc, vec, mask, evl}, llvmFmf);
           loweredOp = intrOp.getOperation();
+          doMerge = false;
         })
         .Case([&](vector::SplatOp splatOp) {
           auto src = splatOp.getOperand();
@@ -417,45 +478,6 @@ public:
               rewriter.getStringAttr("llvm.experimental.vp.splat"),
               ValueRange{src, mask, evl});
           loweredOp = vp_splat.getOperation();
-        })
-        .Case([&](arith::IndexCastOp indexcastOp) {
-          auto src = indexcastOp.getOperand();
-          src = materializeOperand(rewriter, typeConverter, src);
-
-          auto srcElemBits = cast<VectorType>(src.getType())
-                                 .getElementType()
-                                 .getIntOrFloatBitWidth();
-          auto targetResType =
-              typeConverter->convertType(indexcastOp.getResult().getType());
-          auto dstElemBits = cast<VectorType>(targetResType)
-                                 .getElementType()
-                                 .getIntOrFloatBitWidth();
-          if (!mask) {
-            mask = buildAllTrueMask(rewriter, loc,
-                                    cast<VectorType>(src.getType()));
-          }
-          if (srcElemBits > dstElemBits) {
-            auto intrOp = rewriter.create<LLVM::VPTruncOp>(loc, targetResType,
-                                                           src, mask, evl);
-            loweredOp = intrOp.getOperation();
-          } else if (srcElemBits == dstElemBits) {
-            loweredOp = src.getDefiningOp();
-          } else {
-            auto intrOp = rewriter.create<LLVM::VPSExtOp>(loc, targetResType,
-                                                          src, mask, evl);
-            loweredOp = intrOp.getOperation();
-          }
-        })
-        .Case([&](arith::ExtFOp extfOp) {
-          auto src = extfOp.getOperand();
-          auto targetResType = extfOp.getResult().getType();
-          if (!mask) {
-            mask = buildAllTrueMask(rewriter, loc,
-                                    cast<VectorType>(src.getType()));
-          }
-          auto intrOp = rewriter.create<LLVM::VPFPExtOp>(loc, targetResType,
-                                                         src, mask, evl);
-          loweredOp = intrOp.getOperation();
         })
         .Case([&](vector::StepOp stepOp) {
           auto targetResType =
@@ -560,10 +582,6 @@ public:
           }
         })
         .Case([&](arith::SelectOp selectOp) {
-          if (!isa<VectorType>(selectOp.getCondition().getType())) {
-            loweredOp = rewriter.notifyMatchFailure(
-                op, "only vector condition is supported");
-          }
           auto vcond = materializeOperand(rewriter, typeConverter,
                                           selectOp.getCondition());
           auto vtrue = materializeOperand(rewriter, typeConverter,
@@ -624,7 +642,98 @@ public:
               loc, gatherIntrName, ValueRange{value, ptrVec, mask, evl});
           loweredOp = intrOp.getOperation();
         })
-        .Default([&](Operation *) {});
+        .Case<arith::TruncFOp, arith::TruncIOp, arith::ExtUIOp, arith::ExtSIOp,
+              arith::ExtFOp, arith::FPToSIOp, arith::FPToUIOp, arith::UIToFPOp,
+              arith::SIToFPOp>([&](auto castOp) {
+          using VPIntrOp =
+              typename LLVMVPIntrOpMapping<decltype(castOp)>::VPIntrT;
+
+          Value src = castOp->getOperand(0);
+          Value res = castOp->getResult(0);
+          src = materializeOperand(rewriter, typeConverter, src);
+          Type targetResType = typeConverter->convertType(res.getType());
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc,
+                                    cast<VectorType>(src.getType()));
+          }
+          auto intrOp =
+              rewriter.create<VPIntrOp>(loc, targetResType, src, mask, evl);
+          loweredOp = intrOp.getOperation();
+        })
+        .Case<arith::IndexCastOp, arith::IndexCastUIOp>([&](auto indexcastOp) {
+          Value src = indexcastOp.getOperand();
+          src = materializeOperand(rewriter, typeConverter, src);
+
+          unsigned srcElemBits = cast<VectorType>(src.getType())
+                                     .getElementType()
+                                     .getIntOrFloatBitWidth();
+          auto targetResType =
+              typeConverter->convertType(indexcastOp.getResult().getType());
+          unsigned dstElemBits = cast<VectorType>(targetResType)
+                                     .getElementType()
+                                     .getIntOrFloatBitWidth();
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc,
+                                    cast<VectorType>(src.getType()));
+          }
+          if (srcElemBits > dstElemBits) {
+            auto intrOp = rewriter.create<LLVM::VPTruncOp>(loc, targetResType,
+                                                           src, mask, evl);
+            loweredOp = intrOp.getOperation();
+          } else if (srcElemBits == dstElemBits) {
+            loweredOp = src.getDefiningOp();
+          } else {
+            // Select between zext and sext.
+            using VPIntrOp =
+                typename LLVMVPIntrOpMapping<decltype(indexcastOp)>::VPIntrT;
+            auto intrOp =
+                rewriter.create<VPIntrOp>(loc, targetResType, src, mask, evl);
+            loweredOp = intrOp.getOperation();
+          }
+        })
+        .Case([&](arith::CmpFOp cmpOp) {
+          auto lhs =
+              materializeOperand(rewriter, typeConverter, cmpOp.getLhs());
+          auto rhs =
+              materializeOperand(rewriter, typeConverter, cmpOp.getRhs());
+          auto targetResType =
+              typeConverter->convertType(cmpOp.getResult().getType());
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc,
+                                    cast<VectorType>(lhs.getType()));
+          }
+          auto predicate = cmpOp.getPredicate();
+          StringRef prefStr = arith::stringifyCmpFPredicate(predicate);
+
+          auto llvmPred = rewriter.getStringAttr(prefStr);
+          auto intrOp = rewriter.create<vp::VPIntrFCmpOp>(loc, targetResType,
+                                                          lhs, rhs, mask, evl);
+          intrOp->setAttr("predicate", llvmPred);
+          loweredOp = intrOp.getOperation();
+        })
+        .Case([&](arith::CmpIOp cmpOp) {
+          auto lhs =
+              materializeOperand(rewriter, typeConverter, cmpOp.getLhs());
+          auto rhs =
+              materializeOperand(rewriter, typeConverter, cmpOp.getRhs());
+          auto targetResType =
+              typeConverter->convertType(cmpOp.getResult().getType());
+          if (!mask) {
+            mask = buildAllTrueMask(rewriter, loc,
+                                    cast<VectorType>(lhs.getType()));
+          }
+          auto predicate = cmpOp.getPredicate();
+          StringRef prefStr = arith::stringifyCmpIPredicate(predicate);
+
+          auto llvmPred = rewriter.getStringAttr(prefStr);
+          auto intrOp = rewriter.create<vp::VPIntrICmpOp>(loc, targetResType,
+                                                          lhs, rhs, mask, evl);
+          intrOp->setAttr("predicate", llvmPred);
+          loweredOp = intrOp.getOperation();
+        })
+        .Default([&](Operation *) {
+          loweredOp = rewriter.notifyMatchFailure(op, "unsupported operation");
+        });
 
     if (failed(loweredOp)) {
       return failure();
@@ -754,7 +863,7 @@ void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
   target.addIllegalOp<PredicateOp, GetVLOp, LoadOp, StoreOp, GatherOp,
                       ScatterOp>();
   target.addLegalOp<RVVIntrSetVliOp, RVVIntrSetVliMaxOp, RVVIntrVidOp,
-                    RVVIntrVidMaskedOp>();
+                    RVVIntrVidMaskedOp, VPIntrFCmpOp, VPIntrICmpOp>();
 }
 
 void ConvertVPToLLVMPass::runOnOperation() {

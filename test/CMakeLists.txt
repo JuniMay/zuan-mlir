@@ -8,9 +8,10 @@ configure_lit_site_cfg(
 set(ZUAN_TEST_DEPENDS
   FileCheck count not
   zuan-opt
+  zuan-translate
 )
 
-add_lit_testsuite(check-zuan "Running the zuan-opt regression tests"
+add_lit_testsuite(check-zuan "Running the zuan compiler regression tests"
   ${CMAKE_CURRENT_BINARY_DIR}
   DEPENDS ${ZUAN_TEST_DEPENDS}
 )
