@@ -18,11 +18,20 @@ def Zuan_Dialect : Dialect {
     vector operations.
   }];
 
-  let dependentDialects = ["memref::MemRefDialect"];
+  let extraClassDeclaration = [{
+    void registerTypes();  
+  }];
+  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
 }
 
 // Base class of Zuan dialect operations.
 class Zuan_Op<string mnemonic, list<Trait> traits = []> :
     Op<Zuan_Dialect, mnemonic, traits> {}
+
+class Zuan_Type<string name, string typeMnemonic, list<Trait> traits = []> :
+    TypeDef<Zuan_Dialect, name, traits> {
+  let mnemonic = typeMnemonic;
+}
 
 #endif // ZUAN_IR_ZUANDIALECT

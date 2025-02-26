@@ -74,6 +74,7 @@ def VP_PredicateOp : VP_Op<"predicate", [
                    CArg<"Value", "nullptr">:$maskedoff)>
   ];
 
+  let skipDefaultBuilders = 1;
   let hasCanonicalizer = 1;
   let hasFolder = 1;
   let hasVerifier = 1;

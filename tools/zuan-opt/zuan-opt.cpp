@@ -6,6 +6,7 @@
 
 #include "Conversion/VPToLLVM.h"
 #include "VP/IR/VP.h"
+#include "Zuan/IR/Zuan.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
@@ -14,6 +15,7 @@ int main(int argc, char **argv) {
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::vp::VPDialect>();
+  registry.insert<mlir::zuan::ZuanDialect>();
   mlir::registerAllDialects(registry);
 
   return mlir::asMainReturnCode(
