@@ -509,6 +509,23 @@ public:
             loweredOp = intrOp.getOperation();
           }
         })
+        .Case([&](vector::FMAOp fmaOp) {
+          Value lhs = fmaOp.getLhs();
+          Value rhs = fmaOp.getRhs();
+          Value acc = fmaOp.getAcc();
+          if (!mask) {
+            auto vectorType = cast<VectorType>(lhs.getType());
+            mask = buildAllTrueMask(rewriter, loc, vectorType);
+          }
+          auto targetResType =
+              typeConverter->convertType(fmaOp.getResult().getType());
+          lhs = materializeOperand(rewriter, typeConverter, lhs);
+          rhs = materializeOperand(rewriter, typeConverter, rhs);
+          acc = materializeOperand(rewriter, typeConverter, acc);
+          auto intrOp = rewriter.create<LLVM::VPFmaOp>(loc, targetResType, lhs,
+                                                       rhs, acc, mask, evl);
+          loweredOp = intrOp.getOperation();
+        })
         .Case([&](vp::LoadOp loadOp) {
           auto vectorType = loadOp.getVectorType();
           vectorType = cast<VectorType>(typeConverter->convertType(vectorType));
