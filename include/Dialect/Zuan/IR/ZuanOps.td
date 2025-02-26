@@ -97,7 +97,10 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
 // High-level tile operations
 //===----------------------------------------------------------------------===//
 
-def Zuan_MatmulOp : Zuan_Op<"matmul", [Pure, InferTypeOpAdaptor]> {
+def Zuan_MatmulOp : Zuan_Op<"matmul", [
+  Pure, InferTypeOpAdaptor,
+  AllRanksMatch<["lhs", "rhs", "result"]>,
+]> {
   let summary = "Matrix multiplication operation in Zuan dialect";
   let description = [{
     `zuan.matmul` operation computes the matrix multiplication of two tiles in
@@ -114,8 +117,9 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [Pure, InferTypeOpAdaptor]> {
 
 def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
   Pure, InferTypeOpAdaptor,
+  AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
-                          "result", "init", "$_self", "TileType::isCompatible">
+                          "result", "init", "$_self", "TileType::isCompatible">,
 ]> {
   let summary = "Multi-dimensional reduction operation in Zuan dialect";
   let description = [{
@@ -141,7 +145,11 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
 // General Operations
 //===----------------------------------------------------------------------===//
 
-def Zuan_LoadOp : Zuan_Op<"load", [InferTypeOpAdaptor]> {
+def Zuan_LoadOp : Zuan_Op<"load", [
+  InferTypeOpAdaptor,
+  AllShapesMatch<["base", "result"]>,
+  AllElementTypesMatch<["base", "result"]>
+]> {
   let summary = "Load a tile from a memref";
   let description = [{
     `zuan.load` operation reads a tile from a memref. The shape of the tile
@@ -174,7 +182,7 @@ def Zuan_SplatOp : Zuan_Op<"splat", [Pure, InferTypeOpAdaptor]> {
   ];
 
   let extraClassDeclaration = [{
-    SmallVector<OpFoldResult> getMixedDims() const;
+    SmallVector<OpFoldResult> getMixedDims();
   }];
 }
 
@@ -206,6 +214,54 @@ def Zuan_OuterOp : Zuan_Op<"outer", [Pure, InferTypeOpAdaptor]> {
   let results = (outs Zuan_TileType:$result);
   let assemblyFormat = [{
     $kind $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `,` qualified(type($rhs))
+  }];
+}
+
+def Zuan_CastOp : Zuan_Op<"cast", [
+  Pure,
+  AllShapesMatch<["tile", "result"]>
+]> {
+  let summary = "Cast all elements of a tile to another type";
+  let description = [{
+    `zuan.cast` operation casts all elements of a tile to another type. The cast
+    ops in arith dialect only support `vector` and `tensor` types, other types
+    are regarded as cast-incompatible. So here is a dedicated cast op for
+    `zuan.tile`, implemented with `CastKind` for simplicity.
+  }];
+  let arguments = (ins Zuan_CastKindAttr:$kind, Zuan_TileType:$tile);
+  let results = (outs Zuan_TileType:$result);
+  let assemblyFormat = [{
+    $kind $tile attr-dict `:` qualified(type($tile)) `to` qualified(type($result))
+  }];
+}
+
+def Zuan_StepOp : Zuan_Op<"step", [
+  Pure, InferTypeOpAdaptor,
+  AllElementTypesMatch<["result", "start"]>
+]> {
+  let summary = "Step operation";
+  let description = [{
+    `zuan.step` operation generates a tile with the specified shape and fills
+    the elements with increasing values on a certain dimension from the given
+    start value.
+  }];
+  let arguments = (ins AnySignlessIntegerOrIndex:$start,
+                       IndexAttr:$dim,
+                       Variadic<Index>:$sizes,
+                       DenseI64ArrayAttr:$staticSizes);
+  let results = (outs ZuanTileOfType<[AnySignlessIntegerOrIndex]>:$result);
+  let assemblyFormat = [{
+    $start `,` $dim `,` custom<DynamicIndexList>($sizes, $staticSizes) attr-dict
+    `:` type($start)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$start, "int64_t":$dim, "ArrayRef<OpFoldResult>":$sizes)>,
+    OpBuilder<(ins "Value":$start, "int64_t":$dim, "ArrayRef<int64_t>":$staticSizes)>,
+  ];
+
+  let extraClassDeclaration = [{
+    SmallVector<OpFoldResult> getMixedSizes();
   }];
 }
 

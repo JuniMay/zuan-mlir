@@ -13,8 +13,7 @@ include "mlir/IR/CommonTypeConstraints.td"
 
 include "Zuan/IR/ZuanDialect.td"
 
-def ZuanTileElement : AnyTypeOf<[
-  F32, F64, F128, BF16, F16, I1, I8, I16, I32, I64, I128, Index]>;
+def ZuanTileElement : AnyTypeOf<[AnySignlessIntegerOrIndex, AnyFloat]>;
 
 def Zuan_TileType : Zuan_Type<"Tile", "tile", [
   ShapedTypeInterface, ValueSemantics
@@ -55,5 +54,12 @@ def Zuan_TileType : Zuan_Type<"Tile", "tile", [
   let hasCustomAssemblyFormat = 1;
   let skipDefaultBuilders = 1;
 }
+
+class ZuanTileOfType<list<Type> allowedTypes> :
+  ShapedContainerType<
+    allowedTypes, 
+    CPred<[{ ::llvm::isa<::mlir::zuan::TileType>($_self) }]>,
+    "zuan.tile",
+    "::mlir::zuan::TileType">;
 
 #endif // ZUAN_IR_ZUANTYPES

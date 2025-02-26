@@ -207,6 +207,11 @@ void SplatOp::build(OpBuilder &builder, OperationState &result, Value value,
   build(builder, result, value, dynamicDims, staticDims);
 }
 
+SmallVector<OpFoldResult> SplatOp::getMixedDims() {
+  Builder builder((*this)->getContext());
+  return getMixedValues(getStaticDims(), getDims(), builder);
+}
+
 LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
                                         std::optional<Location> location,
                                         Adaptor adaptor,
@@ -243,6 +248,39 @@ LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
   }
   inferred.push_back(TileType::get(resultShape, lhsType.getElementType()));
   return success();
+}
+
+LogicalResult StepOp::inferReturnTypes(MLIRContext *context,
+                                       std::optional<Location> location,
+                                       Adaptor adaptor,
+                                       SmallVectorImpl<Type> &inferred) {
+  auto staticSizes = adaptor.getStaticSizes();
+  auto start = adaptor.getStart();
+  inferred.push_back(TileType::get(staticSizes, start.getType()));
+  return success();
+}
+
+void StepOp::build(OpBuilder &builder, OperationState &result, Value start,
+                   int64_t dim, ArrayRef<int64_t> staticSizes) {
+  SmallVector<OpFoldResult> ofrSizes = llvm::to_vector(
+      llvm::map_range(staticSizes, [&](int64_t v) -> OpFoldResult {
+        return builder.getIndexAttr(v);
+      }));
+  build(builder, result, start, dim, ofrSizes);
+}
+
+void StepOp::build(OpBuilder &builder, OperationState &result, Value start,
+                   int64_t dim, ArrayRef<OpFoldResult> staticSizes) {
+  SmallVector<int64_t> staticSizesVec;
+  SmallVector<Value> dynamicSizes;
+  dispatchIndexOpFoldResults(staticSizes, dynamicSizes, staticSizesVec);
+  build(builder, result, start, builder.getIndexAttr(dim), dynamicSizes,
+        builder.getDenseI64ArrayAttr(staticSizesVec));
+}
+
+SmallVector<OpFoldResult> StepOp::getMixedSizes() {
+  Builder builder((*this)->getContext());
+  return getMixedValues(getStaticSizes(), getSizes(), builder);
 }
 
 } // namespace zuan
