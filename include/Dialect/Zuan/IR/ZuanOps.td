@@ -22,32 +22,41 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 //===----------------------------------------------------------------------===//
 
 def Zuan_YieldOp : Zuan_Op<"yield", [
-  ReturnLike, Terminator, AttrSizedOperandSegments
+  // The yield op is the terminator of the dynamic region.
+  ReturnLike, Terminator,
+  // There might be memory effects in the store region.
+  RecursiveMemoryEffects,
+  // The store region does not have any arguments, nor terminators.
+  NoRegionArguments, NoTerminator,
+  HasParent<"zuan::DynamicOp">,
 ]> {
   let summary = "Yield operation in Zuan dialect";
   let description = [{
     `zuan.yield` operation brings the computed value out of the dynamic region.
-    The scalars will be yielded as results, and tiles will be stored back into
-    the corresponding memref arguments.
+    The scalars will be yielded as results. And all the stores should be done in
+    the yield region.
   }];
 
-  let arguments = (ins Variadic<Zuan_TileType>:$tiles,
-                       Variadic<ZuanTileElement>:$scalars);
+  let arguments = (ins Variadic<ZuanTileElement>:$scalars);
+  let regions = (region AnyRegion:$body);
+
   let builders = [
-    OpBuilder<(ins), [{ /* do nothing */ }]>
+    OpBuilder<(ins)>,
+    OpBuilder<(ins "ValueRange":$scalars,
+                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder)>
   ];
+
   let assemblyFormat = [{
-    `(` ($tiles^ `:` type($tiles))? `)` `,`
-    `(` ($scalars^ `:` type($scalars))? `)` attr-dict
+    ($scalars^ `:` type($scalars))? $body attr-dict
   }];
   let hasVerifier = 1;
+  let skipDefaultBuilders = 1;
 }
 
 def Zuan_DynamicOp : Zuan_Op<"dynamic", [
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DestinationStyleOpInterface,
-  SingleBlockImplicitTerminator<"zuan::YieldOp">,
-  RecursiveMemoryEffects
+  RecursiveMemoryEffects // The memory effects are in the yield op region.
 ]> {
   let summary = "A region that contains size-agnostic tile operations.";
   let description = [{
@@ -64,7 +73,7 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
     Scalars produced with reduction can be yielded as results. To lower this
     operation, the reductions and stores will be separate first. And then the
     leading dimensions will be expanded into loops. If any init memrefs differ
-    in shape, the dynamic region will be duplicated with each of their
+    in the dimension, the dynamic region will be duplicated with each of their
     dependencies. The shape differences are computed by a shape inference.
 
     The dynamic regions cannot be nested.
@@ -91,6 +100,8 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
   ];
 
   let skipDefaultBuilders = 1;
+  let hasCanonicalizer = 1;
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -159,6 +170,25 @@ def Zuan_LoadOp : Zuan_Op<"load", [
   let arguments = (ins Arg<AnyMemRef, "the reference to load from", [MemRead]>:$base);
   let results = (outs Zuan_TileType:$result);
   let assemblyFormat = [{ $base attr-dict `:` type($base) }];
+}
+
+def Zuan_StoreOp : Zuan_Op<"store", [
+  AllShapesMatch<["value", "base"]>,
+  AllElementTypesMatch<["value", "base"]>,
+  // Stores can only occur in the yield region.
+  HasParent<"zuan::YieldOp">
+]> {
+  let summary = "Store a tile to a memref";
+  let description = [{
+    `zuan.store` operation writes a tile to a memref. The shape of the tile
+    should be the same as the memref.
+  }];
+
+  let arguments = (ins Zuan_TileType:$value,
+                       Arg<AnyMemRef, "the reference to store to", [MemWrite]>:$base);
+  let assemblyFormat = [{ 
+    $value `,` $base attr-dict `:` type($value) `,` type($base)
+  }];
 }
 
 def Zuan_SplatOp : Zuan_Op<"splat", [Pure, InferTypeOpAdaptor]> {

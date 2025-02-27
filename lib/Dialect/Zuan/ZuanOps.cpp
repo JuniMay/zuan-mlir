@@ -10,6 +10,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -29,9 +30,6 @@ void DynamicOp::getEffects(
         &effects) {
   for (auto &operand : getDpsInitsMutable()) {
     effects.emplace_back(MemoryEffects::Read::get(), &operand, /*stage=*/0,
-                         /*effectOnFullRegion=*/true,
-                         SideEffects::DefaultResource::get());
-    effects.emplace_back(MemoryEffects::Write::get(), &operand, /*stage=*/0,
                          /*effectOnFullRegion=*/true,
                          SideEffects::DefaultResource::get());
   }
@@ -55,9 +53,7 @@ void DynamicOp::build(
         TileType::get(memrefType.getShape(), memrefType.getElementType());
     bodyBlock->addArgument(tileType, init.getLoc());
   }
-  if (inits.empty() && !bodybuilder) {
-    DynamicOp::ensureTerminator(*bodyRegion, builder, result.location);
-  } else if (bodybuilder) {
+  if (bodybuilder) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(bodyBlock);
     bodybuilder(builder, result.location, bodyBlock->getArguments());
@@ -68,6 +64,93 @@ void DynamicOp::build(
     OpBuilder &builder, OperationState &result, ValueRange inits,
     function_ref<void(OpBuilder &, Location, ValueRange)> bodybuilder) {
   build(builder, result, {}, inits, bodybuilder);
+}
+
+LogicalResult DynamicOp::verify() {
+  auto block = &getBody().front();
+  // Check terminator
+  if (block->mightHaveTerminator() && !isa<YieldOp>(block->getTerminator())) {
+    return emitOpError("expected a `zuan.yield` terminator");
+  }
+  // Verify that the only memory writes are happening in the yield op.
+  for (auto &op : getBody().getOps()) {
+    if (isa<YieldOp>(op)) {
+      // Yield op is the terminator, just break.
+      break;
+    }
+    auto effects = *mlir::getEffectsRecursively(&op);
+    for (auto effect : effects) {
+      if (isa<MemoryEffects::Write>(effect.getEffect())) {
+        return emitOpError("expected only memory reads in the dynamic region");
+      }
+    }
+  }
+  return success();
+}
+
+/// Elide the dynamic op if there are no memory write effects and all the
+/// yielded scalars are defined outside the dynamic op.
+struct ElideEmptyDynamicOp : OpRewritePattern<DynamicOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const override {
+    Block *block = &op.getBody().front();
+    auto terminator = cast<YieldOp>(block->getTerminator());
+
+    // The only memory write effects are in the yield op, so only check if the
+    // yielded region has memory effects. Other operations in the dynamic region
+    // will not be checked.
+    auto effects = *mlir::getEffectsRecursively(terminator);
+    for (auto effect : effects) {
+      if (isa<MemoryEffects::Write>(effect.getEffect())) {
+        return rewriter.notifyMatchFailure(op, "memory write effect");
+      }
+    }
+
+    auto yieldedOperands = terminator.getScalars();
+    if (yieldedOperands.empty()) {
+      rewriter.eraseOp(op);
+    } else {
+      // Check if the yielded scalars are defined outside the dynamic op.
+      for (auto operand : yieldedOperands) {
+        if (auto defOp = operand.getDefiningOp()) {
+          if (defOp->getBlock() == block) {
+            // The operand is defined inside the dynamic op.
+            return rewriter.notifyMatchFailure(
+                op, "operand defined inside the dynamic op");
+          }
+        }
+      }
+      // All the operands are defined outside the dynamic op, replace the
+      // dynamic op with the yielded operands.
+      rewriter.replaceOp(op, yieldedOperands);
+    }
+    return success();
+  }
+};
+
+void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                            MLIRContext *context) {
+  results.add<ElideEmptyDynamicOp>(context);
+}
+
+void YieldOp::build(OpBuilder &builder, OperationState &result) {
+  (void)result.addRegion();
+}
+
+void YieldOp::build(OpBuilder &builder, OperationState &result,
+                    ValueRange scalars,
+                    function_ref<void(OpBuilder &, Location)> bodyBuilder) {
+  result.addOperands(scalars);
+  Region *bodyRegion = result.addRegion();
+  if (bodyBuilder) {
+    OpBuilder::InsertionGuard guard(builder);
+
+    Block *bodyBlock = builder.createBlock(bodyRegion);
+    builder.setInsertionPointToStart(bodyBlock);
+    bodyBuilder(builder, result.location);
+  }
 }
 
 LogicalResult YieldOp::verify() {
@@ -86,23 +169,6 @@ LogicalResult YieldOp::verify() {
     if (scalar.getType() != result.getType()) {
       return emitOpError("expected the type of the scalar and the parent "
                          "result to be the same");
-    }
-  }
-  // Check the tiles and the inits of the parent.
-  if (this->getTiles().size() != parentOp.getInits().size()) {
-    return emitOpError("expected the number of tiles and inits to be the same");
-  }
-  for (auto [tile, init] : llvm::zip(this->getTiles(), parentOp.getInits())) {
-    auto tileType = cast<TileType>(tile.getType());
-    auto initType = cast<MemRefType>(init.getType());
-    if (tileType.getElementType() != initType.getElementType()) {
-      return emitOpError(
-          "expected the element type of the tile and the init to be the same");
-    }
-    if (!TileType::isShapeCompatible(tileType.getShape(),
-                                     initType.getShape())) {
-      return emitOpError(
-          "expected the shape of the tile and the init to be compatible");
     }
   }
   return success();

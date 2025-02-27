@@ -2,7 +2,9 @@
 
 // CHECK-LABEL: func.func @empty
 func.func @empty() {
-  zuan.dynamic {}
+  zuan.dynamic {
+    zuan.yield {}
+  }
   return
 }
 
@@ -10,7 +12,9 @@ func.func @empty() {
 func.func @roundtrip(%c: memref<?x?xf32>) {
   zuan.dynamic (%c : memref<?x?xf32>) {
   ^bb0(%arg: !zuan.tile<?x?xf32>):
-    zuan.yield (%arg : !zuan.tile<?x?xf32>), ()
+    zuan.yield {
+      zuan.store %arg, %c : !zuan.tile<?x?xf32>, memref<?x?xf32>
+    }
   }
   return
 }
@@ -23,7 +27,9 @@ func.func @matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>)
     %b_tile = zuan.load %b : memref<?x?xf32>
     %mm = zuan.matmul %a_tile, %b_tile : !zuan.tile<?x?xf32>, !zuan.tile<?x?xf32>
     %add = arith.addf %mm, %c_tile : !zuan.tile<?x?xf32>
-    zuan.yield (%add : !zuan.tile<?x?xf32>), ()
+    zuan.yield {
+      zuan.store %add, %c : !zuan.tile<?x?xf32>, memref<?x?xf32>
+    }
   }
   return
 }
@@ -34,7 +40,9 @@ func.func @multi_reduction(%a: memref<?x?x?x?xf32>, %b: memref<?x?xf32>) {
   ^bb0(%b_tile: !zuan.tile<?x?xf32>):
     %a_tile = zuan.load %a : memref<?x?x?x?xf32>
     %reduced = zuan.multi_reduction <add> %a_tile [1, 2], %b_tile : !zuan.tile<?x?x?x?xf32>, !zuan.tile<?x?xf32>
-    zuan.yield (%reduced : !zuan.tile<?x?xf32>), ()
+    zuan.yield {
+      zuan.store %reduced, %b : !zuan.tile<?x?xf32>, memref<?x?xf32>
+    }
   }
   return
 }
@@ -52,7 +60,10 @@ func.func @splat(%a: memref<?x?xf32>, %b: memref<?x4xf32>, %c: memref<4x?x?xf32>
     %a_tile = zuan.load %a : memref<?x?xf32>
     %a_splat = zuan.splat %a_tile [4] : !zuan.tile<?x?xf32>
     // writeback to memref, yield the scalar for testing
-    zuan.yield (%splat_cst, %a_splat : !zuan.tile<?x4xf32>, !zuan.tile<4x?x?xf32>), (%cst : f32)
+    zuan.yield %cst : f32 {
+      zuan.store %splat_cst, %b : !zuan.tile<?x4xf32>, memref<?x4xf32>
+      zuan.store %a_splat, %c : !zuan.tile<4x?x?xf32>, memref<4x?x?xf32>
+    }
   } : f32
   return %res : f32
 }
@@ -65,7 +76,10 @@ func.func @outer_samerank(%a: memref<?x4xf32>, %b: memref<?x7xf32>, %c: memref<?
     %b_tile = zuan.load %b : memref<?x7xf32>
     %outer = zuan.outer <add> %a_tile, %b_tile : !zuan.tile<?x4xf32>, !zuan.tile<?x7xf32>
     %add = arith.addf %outer, %c_tile : !zuan.tile<?x4x7xf32>
-    zuan.yield (%add : !zuan.tile<?x4x7xf32>), ()
+    zuan.yield {
+      %c_cast = memref.cast %c : memref<?x?x?xf32> to memref<?x4x7xf32>
+      zuan.store %add, %c_cast : !zuan.tile<?x4x7xf32>, memref<?x4x7xf32>
+    }
   }
   return
 }
@@ -78,7 +92,10 @@ func.func @outer_diffrank(%a: memref<?x4xf32>, %b: memref<?xf32>, %c: memref<?x?
     %b_tile = zuan.load %b : memref<?xf32>
     %outer = zuan.outer <add> %a_tile, %b_tile : !zuan.tile<?x4xf32>, !zuan.tile<?xf32>
     %add = arith.addf %outer, %c_tile : !zuan.tile<?x4xf32>
-    zuan.yield (%add : !zuan.tile<?x4xf32>), ()
+    zuan.yield {
+      %c_cast = memref.cast %c : memref<?x?xf32> to memref<?x4xf32>
+      zuan.store %add, %c_cast : !zuan.tile<?x4xf32>, memref<?x4xf32>
+    }
   }
   return
 }
