@@ -369,4 +369,81 @@ def Zuan_StepOp : Zuan_Op<"step", [
   let hasVerifier = 1;
 }
 
+def Zuan_SelectOp : Zuan_Op<"select", [
+  Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
+  AllTypesMatch<["lhs", "rhs", "result"]>
+]> {
+  let summary = "Select operation";
+  let description = [{
+    `zuan.select` operation selects elements from the two tiles based on the
+    condition tile. The shape of the condition tile should be the same as the
+    other two tiles.
+  }];
+  let arguments = (ins Zuan_TileType:$cond,
+                       Zuan_TileType:$lhs,
+                       Zuan_TileType:$rhs);
+  let results = (outs Zuan_TileType:$result);
+  let assemblyFormat = [{
+    $cond `,` $lhs `,` $rhs attr-dict `:` type($cond) `,` type($lhs)
+  }];
+  let hasVerifier = 1;
+}
+
+def Zuan_GatherOp : Zuan_Op<"gather", [
+  InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  AllElementTypesMatch<["base", "result"]>
+]> {
+  let summary = "Memory gather operation";
+  let description = [{
+    Given the source memref and indices, `zuan.gather` loads the values
+    from the source with the following behavior:
+
+    ```
+    res[i_0, i_1, ... i_n] = source[indices_0[i_0, i_1, ... i_n], 
+                                    indices_1[i_0, i_1, ... i_n],
+                                    ...
+                                    indices_k[i_0, i_1, ... i_n]]
+    ```
+
+    The indices are expected to be the same shape as the result.
+  }];
+
+  let arguments = (ins Arg<AnyMemRef, "The memref to gather from", [MemRead]>:$base,
+                       Variadic<ZuanTileOfType<[Index]>>:$indices);
+  let results = (outs Zuan_TileType:$result);
+  let assemblyFormat = [{
+    $base `[` $indices `]` attr-dict `:` type($base) (`,` type($indices)^)?
+  }];
+  let hasVerifier = 1;
+}
+
+def Zuan_ScatterOp : Zuan_Op<"scatter", [
+  AllElementTypesMatch<["value", "base"]>,
+  ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
+]> {
+  let summary = "Memory scatter operation";
+  let description = [{
+    Given the source tile, indices, and the destination memref, `zuan.scatter`
+    writes the values to the destination with the following behavior:
+
+    ```
+    dest[indices_0[i_0, i_1, ... i_n], 
+         indices_1[i_0, i_1, ... i_n],
+         ...
+         indices_k[i_0, i_1, ... i_n]] = source[i_0, i_1, ... i_n]
+    ```
+
+    The indices are expected to be the same shape as the value.
+  }];
+
+  let arguments = (ins Zuan_TileType:$value,
+                       Variadic<ZuanTileOfType<[Index]>>:$indices,
+                       Arg<AnyMemRef, "The memref to scatter to", [MemWrite]>:$base);
+  let assemblyFormat = [{
+    $value `,` $base `[` $indices `]` attr-dict `:` type($value) `,` type($base) (`,` type($indices)^)?
+  }];
+  let hasVerifier = 1;
+}
+
 #endif // ZUAN_IR_ZUANOPS

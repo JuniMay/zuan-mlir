@@ -121,3 +121,21 @@ func.func @masking(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>
   }
   return
 }
+
+// CHECK-LABEL: func.func @gather_scatter
+func.func @gather_scatter(
+  %a : memref<?x?xf32>, %a_idx0: memref<?x?x?xindex>, %a_idx1: memref<?x?x?xindex>, 
+  %b : memref<?x?xf32>, %b_idx0: memref<?x?x?xindex>, %b_idx1: memref<?x?x?xindex>) {
+  zuan.dynamic (%b : memref<?x?xf32>) {
+  ^bb0(%b_tile: !zuan.tile<?x?xf32>):
+    %a_idx0_tile = zuan.load %a_idx0 : memref<?x?x?xindex>
+    %a_idx1_tile = zuan.load %a_idx1 : memref<?x?x?xindex>
+    %b_idx0_tile = zuan.load %b_idx0 : memref<?x?x?xindex>
+    %b_idx1_tile = zuan.load %b_idx1 : memref<?x?x?xindex>
+    %gathered = zuan.gather %a[%a_idx0_tile, %a_idx1_tile] : memref<?x?xf32>, !zuan.tile<?x?x?xindex>, !zuan.tile<?x?x?xindex>
+    zuan.yield {
+      zuan.scatter %gathered, %b[%b_idx0_tile, %b_idx1_tile] : !zuan.tile<?x?x?xf32>, memref<?x?xf32>, !zuan.tile<?x?x?xindex>, !zuan.tile<?x?x?xindex>
+    }
+  }
+  return
+}

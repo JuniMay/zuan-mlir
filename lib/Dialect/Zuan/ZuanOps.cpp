@@ -462,5 +462,57 @@ LogicalResult OuterOp::verify() {
   return success();
 }
 
+LogicalResult SelectOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.select` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
+}
+
+LogicalResult GatherOp::inferReturnTypes(MLIRContext *context,
+                                         std::optional<Location> location,
+                                         Adaptor adaptor,
+                                         SmallVectorImpl<Type> &inferred) {
+  auto baseType = cast<MemRefType>(adaptor.getBase().getType());
+  auto indices = adaptor.getIndices();
+  auto elementType = baseType.getElementType();
+  ArrayRef<int64_t> shape;
+  if (!indices.empty()) {
+    auto tileType = cast<TileType>(indices.front().getType());
+    shape = tileType.getShape();
+  }
+  inferred.push_back(TileType::get(shape, elementType));
+  return success();
+}
+
+LogicalResult GatherOp::verify() {
+  auto baseType = cast<MemRefType>(getBase().getType());
+  auto indices = getIndices();
+  if (indices.size() != static_cast<size_t>(baseType.getRank())) {
+    return emitOpError("expected the number of indices to be the same as the "
+                       "rank of the base memref");
+  }
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.gather` cannot be nested inside a `zuan.yield`");
+  }
+  // TODO: Verify index shapes.
+  return success();
+}
+
+LogicalResult ScatterOp::verify() {
+  auto baseType = cast<MemRefType>(getBase().getType());
+  auto indices = getIndices();
+  if (indices.size() != static_cast<size_t>(baseType.getRank())) {
+    return emitOpError("expected the number of indices to be the same as the "
+                       "rank of the base memref");
+  }
+  // TODO: Verify index shapes.
+  return success();
+}
+
 } // namespace zuan
 } // namespace mlir
