@@ -1,4 +1,4 @@
-//RUN: zuan-opt -verify-diagnostics %s | FileCheck %s
+// RUN: zuan-opt -verify-diagnostics %s | FileCheck %s
 
 // CHECK-LABEL: func.func @empty
 func.func @empty() {

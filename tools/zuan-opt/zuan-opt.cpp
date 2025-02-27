@@ -4,6 +4,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
+#include "Conversion/LinalgToZuan.h"
 #include "Conversion/VPToLLVM.h"
 #include "VP/IR/VP.h"
 #include "Zuan/IR/Zuan.h"
@@ -12,6 +13,7 @@ int main(int argc, char **argv) {
   mlir::registerAllPasses();
 
   mlir::vp::registerConvertVPToLLVMPass();
+  mlir::zuan::registerConvertLinalgToZuanPass();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::vp::VPDialect>();

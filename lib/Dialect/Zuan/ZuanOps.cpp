@@ -17,7 +17,9 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 #include <cassert>
+#include <iostream>
 
 #define GET_OP_CLASSES
 #include "Zuan/IR/ZuanOps.cpp.inc"
@@ -140,7 +142,10 @@ void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 void YieldOp::build(OpBuilder &builder, OperationState &result) {
-  (void)result.addRegion();
+  OpBuilder::InsertionGuard guard(builder);
+  Region *bodyRegion = result.addRegion();
+  Block *bodyBlock = builder.createBlock(bodyRegion);
+  (void)bodyBlock;
 }
 
 void YieldOp::build(OpBuilder &builder, OperationState &result,
@@ -148,10 +153,10 @@ void YieldOp::build(OpBuilder &builder, OperationState &result,
                     function_ref<void(OpBuilder &, Location)> bodyBuilder) {
   result.addOperands(scalars);
   Region *bodyRegion = result.addRegion();
+  Block *bodyBlock = builder.createBlock(bodyRegion);
+
   if (bodyBuilder) {
     OpBuilder::InsertionGuard guard(builder);
-
-    Block *bodyBlock = builder.createBlock(bodyRegion);
     builder.setInsertionPointToStart(bodyBlock);
     bodyBuilder(builder, result.location);
   }
