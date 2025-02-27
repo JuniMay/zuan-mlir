@@ -104,12 +104,73 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
   let hasVerifier = 1;
 }
 
+def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
+  Pure, ReturnLike, Terminator, HasParent<"zuan::MaskOp">,
+]> {
+  let summary = "Terminator for the mask region";
+  let description = [{
+    `zuan.mask_yield` operation is the terminator of the mask region. The
+    results of the mask region will be yielded as results in mask op.
+  }];
+  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$tiles);
+  let builders = [
+    OpBuilder<(ins), [{ /* do nothing */ }]>
+  ];
+  let assemblyFormat = [{
+    ($tiles^ `:` type($tiles))? attr-dict
+  }];
+}
+
+def Zuan_MaskOp : Zuan_Op<"mask", [
+  RecursiveMemoryEffects,
+  SingleBlockImplicitTerminator<"zuan::MaskYieldOp">,
+  ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp", "zuan::YieldOp"]>,
+]> {
+  let summary = "A mask region for conditional execution";
+  let description = [{
+    `zuan.mask` operation is a region that contains conditional tile operations.
+    Only the elements whose corresponding mask is true will be computed. An
+    Optional passthru tile `maskedoff` can be provided to fill the masked-off
+    elements.
+
+    If no passthru provided, using the masked-off values is undefined, the
+    result can be arbitrary. The mask region can be nested, all the masks will
+    be combined with logical AND.
+
+    The passthru and mask are up to operations to decide their semantics.
+
+    The mask op can also be used inside the yield op to implement masked stores.
+  }];
+  let arguments = (ins ZuanTileOfType<[I1]>:$mask,
+                       Optional<Zuan_TileType>:$maskedoff);
+  let regions = (region SizedRegion<1>:$body);
+  let results = (outs Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$results);
+  
+  let assemblyFormat = [{
+    $mask `:` type($mask) 
+    (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict
+    (`:` type($results)^)?
+  }];
+
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes,
+                   "Value":$mask,
+                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder,
+                   CArg<"Value", "nullptr">:$maskedoff)>,
+    OpBuilder<(ins "Value":$mask,
+                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder,
+                   CArg<"Value", "nullptr">:$maskedoff)>
+  ];
+  let skipDefaultBuilders = 1;
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // High-level tile operations
 //===----------------------------------------------------------------------===//
 
 def Zuan_MatmulOp : Zuan_Op<"matmul", [
-  Pure, InferTypeOpAdaptor,
+  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllRanksMatch<["lhs", "rhs", "result"]>,
 ]> {
   let summary = "Matrix multiplication operation in Zuan dialect";
@@ -124,10 +185,12 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
   let assemblyFormat = [{
     $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `,` qualified(type($rhs))
   }];
+
+  let hasVerifier = 1;
 }
 
 def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
-  Pure, InferTypeOpAdaptor,
+  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
                           "result", "init", "$_self", "TileType::isCompatible">,
@@ -150,6 +213,8 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
     $kind $tile $dims (`,` $init^)? attr-dict 
     `:` qualified(type($tile)) `,` qualified(type($init))
   }];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -157,7 +222,7 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
 //===----------------------------------------------------------------------===//
 
 def Zuan_LoadOp : Zuan_Op<"load", [
-  InferTypeOpAdaptor,
+  InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllShapesMatch<["base", "result"]>,
   AllElementTypesMatch<["base", "result"]>
 ]> {
@@ -170,13 +235,12 @@ def Zuan_LoadOp : Zuan_Op<"load", [
   let arguments = (ins Arg<AnyMemRef, "the reference to load from", [MemRead]>:$base);
   let results = (outs Zuan_TileType:$result);
   let assemblyFormat = [{ $base attr-dict `:` type($base) }];
+  let hasVerifier = 1;
 }
 
 def Zuan_StoreOp : Zuan_Op<"store", [
-  AllShapesMatch<["value", "base"]>,
-  AllElementTypesMatch<["value", "base"]>,
-  // Stores can only occur in the yield region.
-  HasParent<"zuan::YieldOp">
+  AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>,
+  ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
 ]> {
   let summary = "Store a tile to a memref";
   let description = [{
@@ -191,7 +255,10 @@ def Zuan_StoreOp : Zuan_Op<"store", [
   }];
 }
 
-def Zuan_SplatOp : Zuan_Op<"splat", [Pure, InferTypeOpAdaptor]> {
+def Zuan_SplatOp : Zuan_Op<"splat", [
+  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  AllElementTypesMatch<["value", "result"]>  
+]> {
   let summary = "Extend the leading dimensions of a vector or scalar";
   let description = [{
     `zuan.splat` extends the leading dims of a `zuan.tile`, or broadcasts a
@@ -214,9 +281,13 @@ def Zuan_SplatOp : Zuan_Op<"splat", [Pure, InferTypeOpAdaptor]> {
   let extraClassDeclaration = [{
     SmallVector<OpFoldResult> getMixedDims();
   }];
+  let hasVerifier = 1;
 }
 
-def Zuan_OuterOp : Zuan_Op<"outer", [Pure, InferTypeOpAdaptor]> {
+def Zuan_OuterOp : Zuan_Op<"outer", [
+  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  AllElementTypesMatch<["lhs", "rhs", "result"]>
+]> {
   let summary = "Outer operation";
   let description = [{
     `zuan.outer` operation computes the outer product/sum/... of two tiles.
@@ -245,10 +316,11 @@ def Zuan_OuterOp : Zuan_Op<"outer", [Pure, InferTypeOpAdaptor]> {
   let assemblyFormat = [{
     $kind $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `,` qualified(type($rhs))
   }];
+  let hasVerifier = 1;
 }
 
 def Zuan_CastOp : Zuan_Op<"cast", [
-  Pure,
+  Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllShapesMatch<["tile", "result"]>
 ]> {
   let summary = "Cast all elements of a tile to another type";
@@ -263,10 +335,11 @@ def Zuan_CastOp : Zuan_Op<"cast", [
   let assemblyFormat = [{
     $kind $tile attr-dict `:` qualified(type($tile)) `to` qualified(type($result))
   }];
+  let hasVerifier = 1;
 }
 
 def Zuan_StepOp : Zuan_Op<"step", [
-  Pure, InferTypeOpAdaptor,
+  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["result", "start"]>
 ]> {
   let summary = "Step operation";
@@ -293,6 +366,7 @@ def Zuan_StepOp : Zuan_Op<"step", [
   let extraClassDeclaration = [{
     SmallVector<OpFoldResult> getMixedSizes();
   }];
+  let hasVerifier = 1;
 }
 
 #endif // ZUAN_IR_ZUANOPS

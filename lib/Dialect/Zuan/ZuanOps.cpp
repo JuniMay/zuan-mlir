@@ -78,7 +78,9 @@ LogicalResult DynamicOp::verify() {
       // Yield op is the terminator, just break.
       break;
     }
-    auto effects = *mlir::getEffectsRecursively(&op);
+    // Aggressively check the memory writes.
+    auto effects = mlir::getEffectsRecursively(&op).value_or(
+        SmallVector<MemoryEffects::EffectInstance>{});
     for (auto effect : effects) {
       if (isa<MemoryEffects::Write>(effect.getEffect())) {
         return emitOpError("expected only memory reads in the dynamic region");
@@ -100,8 +102,10 @@ struct ElideEmptyDynamicOp : OpRewritePattern<DynamicOp> {
 
     // The only memory write effects are in the yield op, so only check if the
     // yielded region has memory effects. Other operations in the dynamic region
-    // will not be checked.
-    auto effects = *mlir::getEffectsRecursively(terminator);
+    // will not be checked. Here the check is aggressive, if no side-effects
+    // interface provided, it is assumed to have no memory writes.
+    auto effects = mlir::getEffectsRecursively(terminator)
+                       .value_or(SmallVector<MemoryEffects::EffectInstance>{});
     for (auto effect : effects) {
       if (isa<MemoryEffects::Write>(effect.getEffect())) {
         return rewriter.notifyMatchFailure(op, "memory write effect");
@@ -174,6 +178,50 @@ LogicalResult YieldOp::verify() {
   return success();
 }
 
+void MaskOp::build(OpBuilder &builder, OperationState &result,
+                   TypeRange resultTypes, Value mask,
+                   function_ref<void(OpBuilder &, Location)> bodyBuilder,
+                   Value maskedoff) {
+  OpBuilder::InsertionGuard guard(builder);
+
+  result.addOperands(mask);
+  if (maskedoff) {
+    result.addOperands(maskedoff);
+  }
+  result.addTypes(resultTypes);
+
+  Region *bodyRegion = result.addRegion();
+  Block *bodyBlock = builder.createBlock(bodyRegion);
+
+  if (bodyBuilder) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(bodyBlock);
+    bodyBuilder(builder, result.location);
+  } else {
+    MaskOp::ensureTerminator(*bodyRegion, builder, result.location);
+  }
+}
+
+void MaskOp::build(OpBuilder &builder, OperationState &result, Value mask,
+                   function_ref<void(OpBuilder &, Location)> bodyBuilder,
+                   Value maskedoff) {
+  build(builder, result, {}, mask, bodyBuilder, maskedoff);
+}
+
+LogicalResult MaskOp::verify() {
+  auto mask = getMask();
+  // Check the returned types are the same as the maskedoff value.
+  if (auto maskedoff = getMaskedoff()) {
+    auto maskedoffType = maskedoff.getType();
+    if (!TileType::isShapeCompatible(mask.getType().getShape(),
+                                     maskedoffType.getShape())) {
+      return emitOpError(
+          "expected the mask and maskedoff types to be compatible");
+    }
+  }
+  return success();
+}
+
 LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
                                          std::optional<Location> location,
                                          Adaptor adaptor,
@@ -208,6 +256,15 @@ LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
+LogicalResult MatmulOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.matmul` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
+}
+
 LogicalResult MultiReductionOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, Adaptor adaptor,
     SmallVectorImpl<Type> &inferred) {
@@ -229,6 +286,16 @@ LogicalResult MultiReductionOp::inferReturnTypes(
   return success();
 }
 
+LogicalResult MultiReductionOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError(
+        "`zuan.multi_reduction` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
+}
+
 LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
                                        std::optional<Location> location,
                                        Adaptor adaptor,
@@ -236,6 +303,15 @@ LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
   auto baseType = cast<MemRefType>(adaptor.getBase().getType());
   auto tileType = TileType::get(baseType.getShape(), baseType.getElementType());
   inferred.push_back(tileType);
+  return success();
+}
+
+LogicalResult LoadOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.load` cannot be nested inside a `zuan.yield`");
+  }
   return success();
 }
 
@@ -253,6 +329,15 @@ LogicalResult SplatOp::inferReturnTypes(MLIRContext *context,
   }
   auto tileType = TileType::get(splatShape, valueType);
   inferred.push_back(tileType);
+  return success();
+}
+
+LogicalResult SplatOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.splat` cannot be nested inside a `zuan.yield`");
+  }
   return success();
 }
 
@@ -347,6 +432,34 @@ void StepOp::build(OpBuilder &builder, OperationState &result, Value start,
 SmallVector<OpFoldResult> StepOp::getMixedSizes() {
   Builder builder((*this)->getContext());
   return getMixedValues(getStaticSizes(), getSizes(), builder);
+}
+
+LogicalResult StepOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.step` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
+}
+
+LogicalResult CastOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.cast` cannot be nested inside a `zuan.yield`");
+  }
+  // TODO: Verify the types.
+  return success();
+}
+
+LogicalResult OuterOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
 }
 
 } // namespace zuan

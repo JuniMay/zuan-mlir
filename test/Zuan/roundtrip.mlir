@@ -99,3 +99,25 @@ func.func @outer_diffrank(%a: memref<?x4xf32>, %b: memref<?xf32>, %c: memref<?x?
   }
   return
 }
+
+// CHECK-LABEL: func.func @masking
+func.func @masking(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>) {
+  zuan.dynamic (%c : memref<?x?xf32>) {
+  ^bb0(%c_tile: !zuan.tile<?x?xf32>):
+    %a_tile = zuan.load %a : memref<?x?xf32>
+    %b_tile = zuan.load %b : memref<?x?xf32>
+    
+    %slt = arith.cmpf olt, %a_tile, %b_tile : !zuan.tile<?x?xf32> 
+    %masked_add = zuan.mask %slt : !zuan.tile<?x?xi1> {
+      %add = arith.addf %a_tile, %b_tile : !zuan.tile<?x?xf32>
+      zuan.mask_yield %add : !zuan.tile<?x?xf32>
+    } : !zuan.tile<?x?xf32>
+
+    zuan.yield {
+      zuan.mask %slt : !zuan.tile<?x?xi1> {
+        zuan.store %masked_add, %c : !zuan.tile<?x?xf32>, memref<?x?xf32>
+      }
+    }
+  }
+  return
+}
