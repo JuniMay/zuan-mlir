@@ -19,6 +19,7 @@
 #include "llvm/ADT/TypeSwitch.h"
 
 #include "Zuan/Interfaces/ZuanInferShapeInterface.h"
+#include "Zuan/Interfaces/ZuanUnrollingInterface.h"
 
 #include "Zuan/IR/ZuanEnums.h.inc"
 #define GET_ATTRDEF_CLASSES

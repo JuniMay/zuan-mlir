@@ -59,6 +59,9 @@ private:
       dimsize;
 };
 
+using ShapeVector = SmallVector<DimSize>;
+using ShapeRef = ArrayRef<DimSize>;
+
 /// Stateful information for shape inference.
 struct ShapeInferenceState {
   ShapeInferenceState() = default;
@@ -88,14 +91,14 @@ struct ShapeInfo {
   ShapeInfo() = default;
 
   /// Get the stored shape for a value.
-  std::optional<ArrayRef<DimSize>> getShape(Value value) const;
+  std::optional<ShapeRef> getShape(Value value) const;
   /// Get the stored shape, and map each dim into the leader of the equivalence
   /// class, and return the mapped shape.
-  std::optional<SmallVector<DimSize>> getShapeWithEquivalence(Value value);
+  std::optional<ShapeVector> getShapeWithEquivalence(Value value);
 
   /// Mark two dims as equivalent.
   void markEquivalent(DimSize lhs, DimSize rhs);
-  void markEquivalent(ArrayRef<DimSize> lhs, ArrayRef<DimSize> rhs);
+  void markEquivalent(ShapeRef lhs, ShapeRef rhs);
   /// Mark two values as shape-equivalent.
   ///
   /// If two shapes are already present, this will mark all corresponding dims
@@ -105,7 +108,7 @@ struct ShapeInfo {
   /// Mark the shape of a value equivalent to another shape. If the value is
   /// already computed, just mark two shapes as equivalent. Otherwise set the
   /// shape.
-  void markEquivalent(Value val, ArrayRef<DimSize> shape);
+  void markEquivalent(Value val, ShapeRef shape);
 
   /// Entry function for shape inference.
   void inferShape(Operation *rootOp, ShapeInferenceState &state);
@@ -114,7 +117,7 @@ struct ShapeInfo {
 
 private:
   /// The value shapes.
-  DenseMap<Value, SmallVector<DimSize>> shapes;
+  DenseMap<Value, ShapeVector> shapes;
   /// The equivalence relationship of dim sizes.
   llvm::EquivalenceClasses<DimSize> dimEquivalences;
 
@@ -124,7 +127,7 @@ private:
   /// be overwritten when traversing the IR. That is, no matter how the
   /// traversing order is, all shape information are kept in a non-decreasing
   /// manner.
-  void setShape(Value value, SmallVector<DimSize> shape);
+  void setShape(Value value, ShapeVector shape);
 };
 
 /// Helper function to handle dim reduction. Given the idx in the reduced shape,

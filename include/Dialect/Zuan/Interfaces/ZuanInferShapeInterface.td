@@ -23,7 +23,8 @@ def ZuanInferShapeInterface : OpInterface<"ZuanInferShapeInterface"> {
       /*desc=*/"Inject the local information into the ShapeInfo struct.",
       /*retTy=*/"void",
       /*methodName=*/"inferShape",
-      /*args=*/(ins "ShapeInfo &":$shapeInfo, "ShapeInferenceState &":$state)>
+      /*args=*/(ins "::mlir::zuan::ShapeInfo &":$shapeInfo,
+                    "::mlir::zuan::ShapeInferenceState &":$state)>
   ];
 }
 

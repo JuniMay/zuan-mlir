@@ -133,17 +133,16 @@ std::optional<int64_t> DimSize::getInteger() const {
   return std::nullopt;
 }
 
-std::optional<ArrayRef<DimSize>> ShapeInfo::getShape(Value value) const {
+std::optional<ShapeRef> ShapeInfo::getShape(Value value) const {
   if (shapes.contains(value)) {
     return shapes.lookup(value);
   }
   return std::nullopt;
 }
 
-std::optional<SmallVector<DimSize>>
-ShapeInfo::getShapeWithEquivalence(Value value) {
+std::optional<ShapeVector> ShapeInfo::getShapeWithEquivalence(Value value) {
   if (auto shape = getShape(value)) {
-    SmallVector<DimSize> result = llvm::map_to_vector(*shape, [&](DimSize dim) {
+    ShapeVector result = llvm::map_to_vector(*shape, [&](DimSize dim) {
       return dimEquivalences.getOrInsertLeaderValue(dim);
     });
     return result;
@@ -155,7 +154,7 @@ void ShapeInfo::markEquivalent(DimSize lhs, DimSize rhs) {
   dimEquivalences.unionSets(lhs, rhs);
 }
 
-void ShapeInfo::markEquivalent(ArrayRef<DimSize> lhs, ArrayRef<DimSize> rhs) {
+void ShapeInfo::markEquivalent(ShapeRef lhs, ShapeRef rhs) {
   assert(lhs.size() == rhs.size() && "expected same rank");
   for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
     markEquivalent(lhsDim, rhsDim);
@@ -167,26 +166,26 @@ void ShapeInfo::markEquivalent(Value lhs, Value rhs) {
   auto rhsShape = getShape(rhs);
   assert(lhsShape || rhsShape && "expected shapes to be present");
   if (!lhsShape) {
-    setShape(lhs, SmallVector<DimSize>{*rhsShape});
+    setShape(lhs, ShapeVector{*rhsShape});
     return;
   }
   if (!rhsShape) {
-    setShape(rhs, SmallVector<DimSize>{*lhsShape});
+    setShape(rhs, ShapeVector{*lhsShape});
     return;
   }
   markEquivalent(*lhsShape, *rhsShape);
 }
 
-void ShapeInfo::markEquivalent(Value val, ArrayRef<DimSize> shape) {
+void ShapeInfo::markEquivalent(Value val, ShapeRef shape) {
   auto valShape = getShape(val);
   if (valShape) {
     markEquivalent(*valShape, shape);
   } else {
-    setShape(val, SmallVector<DimSize>{shape});
+    setShape(val, ShapeVector{shape});
   }
 }
 
-void ShapeInfo::setShape(Value value, SmallVector<DimSize> shape) {
+void ShapeInfo::setShape(Value value, ShapeVector shape) {
   shapes.insert({value, shape});
 }
 
