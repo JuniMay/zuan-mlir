@@ -11,6 +11,7 @@ include "Zuan/IR/ZuanAttributes.td"
 include "Zuan/IR/ZuanDialect.td"
 include "Zuan/IR/ZuanTypes.td"
 include "Zuan/IR/ZuanAttributes.td"
+include "Zuan/Interfaces/ZuanShapedOpInterface.td"
 
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
@@ -22,6 +23,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 //===----------------------------------------------------------------------===//
 
 def Zuan_YieldOp : Zuan_Op<"yield", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   // The yield op is the terminator of the dynamic region.
   ReturnLike, Terminator,
   // There might be memory effects in the store region.
@@ -54,6 +56,7 @@ def Zuan_YieldOp : Zuan_Op<"yield", [
 }
 
 def Zuan_DynamicOp : Zuan_Op<"dynamic", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DestinationStyleOpInterface,
   RecursiveMemoryEffects // The memory effects are in the yield op region.
@@ -105,6 +108,7 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
 }
 
 def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, ReturnLike, Terminator, HasParent<"zuan::MaskOp">,
 ]> {
   let summary = "Terminator for the mask region";
@@ -112,16 +116,17 @@ def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
     `zuan.mask_yield` operation is the terminator of the mask region. The
     results of the mask region will be yielded as results in mask op.
   }];
-  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$tiles);
+  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$operands);
   let builders = [
     OpBuilder<(ins), [{ /* do nothing */ }]>
   ];
   let assemblyFormat = [{
-    ($tiles^ `:` type($tiles))? attr-dict
+    ($operands^ `:` type($operands))? attr-dict
   }];
 }
 
 def Zuan_MaskOp : Zuan_Op<"mask", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   RecursiveMemoryEffects,
   SingleBlockImplicitTerminator<"zuan::MaskYieldOp">,
   ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp", "zuan::YieldOp"]>,
@@ -170,6 +175,7 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
 //===----------------------------------------------------------------------===//
 
 def Zuan_MatmulOp : Zuan_Op<"matmul", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllRanksMatch<["lhs", "rhs", "result"]>,
 ]> {
@@ -190,6 +196,7 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
 }
 
 def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
@@ -222,6 +229,7 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
 //===----------------------------------------------------------------------===//
 
 def Zuan_LoadOp : Zuan_Op<"load", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllShapesMatch<["base", "result"]>,
   AllElementTypesMatch<["base", "result"]>
@@ -239,6 +247,7 @@ def Zuan_LoadOp : Zuan_Op<"load", [
 }
 
 def Zuan_StoreOp : Zuan_Op<"store", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>,
   ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
 ]> {
@@ -256,6 +265,7 @@ def Zuan_StoreOp : Zuan_Op<"store", [
 }
 
 def Zuan_SplatOp : Zuan_Op<"splat", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["value", "result"]>  
 ]> {
@@ -285,6 +295,7 @@ def Zuan_SplatOp : Zuan_Op<"splat", [
 }
 
 def Zuan_OuterOp : Zuan_Op<"outer", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["lhs", "rhs", "result"]>
 ]> {
@@ -320,6 +331,7 @@ def Zuan_OuterOp : Zuan_Op<"outer", [
 }
 
 def Zuan_CastOp : Zuan_Op<"cast", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllShapesMatch<["tile", "result"]>
 ]> {
@@ -339,6 +351,7 @@ def Zuan_CastOp : Zuan_Op<"cast", [
 }
 
 def Zuan_StepOp : Zuan_Op<"step", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["result", "start"]>
 ]> {
@@ -370,6 +383,7 @@ def Zuan_StepOp : Zuan_Op<"step", [
 }
 
 def Zuan_SelectOp : Zuan_Op<"select", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
   AllTypesMatch<["lhs", "rhs", "result"]>
@@ -391,6 +405,7 @@ def Zuan_SelectOp : Zuan_Op<"select", [
 }
 
 def Zuan_GatherOp : Zuan_Op<"gather", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["base", "result"]>
 ]> {
@@ -419,6 +434,7 @@ def Zuan_GatherOp : Zuan_Op<"gather", [
 }
 
 def Zuan_ScatterOp : Zuan_Op<"scatter", [
+  DeclareOpInterfaceMethods<ShapedOpInterface>,
   AllElementTypesMatch<["value", "base"]>,
   ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
 ]> {

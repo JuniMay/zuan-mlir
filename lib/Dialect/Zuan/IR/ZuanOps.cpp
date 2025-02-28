@@ -4,7 +4,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Zuan/IR/Zuan.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -17,9 +16,11 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/ADT/SmallVectorExtras.h"
 #include <cassert>
-#include <iostream>
+
+#include "Zuan/IR/Zuan.h"
+#include "Zuan/Utils/ShapeInference.h"
 
 #define GET_OP_CLASSES
 #include "Zuan/IR/ZuanOps.cpp.inc"
@@ -90,6 +91,23 @@ LogicalResult DynamicOp::verify() {
     }
   }
   return success();
+}
+
+void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto bodyBlock = &getBody().front();
+  for (auto [bbArg, memref] :
+       llvm::zip(bodyBlock->getArguments(), getDpsInits())) {
+    auto memrefType = cast<MemRefType>(memref.getType());
+    SmallVector<DimSize> shape;
+    for (unsigned i = 0, e = memrefType.getRank(); i < e; ++i) {
+      shape.push_back(DimSize(bbArg, i));
+    }
+    shapeInfo.markEquivalent(bbArg, shape);
+  }
+  // Recursively infer the shape of the dynamic region.
+  for (auto &op : bodyBlock->getOperations()) {
+    shapeInfo.inferShape(&op, state);
+  }
 }
 
 /// Elide the dynamic op if there are no memory write effects and all the
@@ -183,6 +201,13 @@ LogicalResult YieldOp::verify() {
   return success();
 }
 
+void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto bodyBlock = &getBody().front();
+  for (auto &op : bodyBlock->getOperations()) {
+    shapeInfo.inferShape(&op, state);
+  }
+}
+
 void MaskOp::build(OpBuilder &builder, OperationState &result,
                    TypeRange resultTypes, Value mask,
                    function_ref<void(OpBuilder &, Location)> bodyBuilder,
@@ -225,6 +250,26 @@ LogicalResult MaskOp::verify() {
     }
   }
   return success();
+}
+
+void MaskOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto mask = getMask();
+  auto maskedoff = getMaskedoff();
+  if (maskedoff) {
+    // Mask and Maskedoff (passthru) are shape-equivalent.
+    shapeInfo.markEquivalent(mask, maskedoff);
+  }
+  if (auto parentMask = state.getMask()) {
+    // Nested masks are shape-equivalent.
+    shapeInfo.markEquivalent(mask, *parentMask);
+  }
+  state.pushMask(mask);
+  // Recursively infer the shape of the masked region.
+  auto bodyBlock = &getBody().front();
+  for (auto &op : bodyBlock->getOperations()) {
+    shapeInfo.inferShape(&op, state);
+  }
+  state.popMask();
 }
 
 LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
@@ -270,6 +315,35 @@ LogicalResult MatmulOp::verify() {
   return success();
 }
 
+void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto lhs = getLhs();
+  auto rhs = getRhs();
+  auto result = getResult();
+
+  auto lhsShape = *shapeInfo.getShape(lhs);
+  auto rhsShape = *shapeInfo.getShape(rhs);
+
+  auto m = lhsShape[lhsShape.size() - 2];
+  auto lhsK = lhsShape.back();
+  auto rhsK = rhsShape[rhsShape.size() - 2];
+  auto n = rhsShape.back();
+
+  auto lhsLeadingDims = lhsShape.take_front(lhsShape.size() - 2);
+  auto rhsLeadingDims = rhsShape.take_front(rhsShape.size() - 2);
+
+  shapeInfo.markEquivalent(lhsK, rhsK);
+  shapeInfo.markEquivalent(lhsLeadingDims, rhsLeadingDims);
+
+  SmallVector<DimSize> resultShape(lhsLeadingDims.begin(),
+                                   lhsLeadingDims.end());
+  resultShape.push_back(m);
+  resultShape.push_back(n);
+  shapeInfo.markEquivalent(result, resultShape);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
 LogicalResult MultiReductionOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location, Adaptor adaptor,
     SmallVectorImpl<Type> &inferred) {
@@ -301,6 +375,31 @@ LogicalResult MultiReductionOp::verify() {
   return success();
 }
 
+void MultiReductionOp::inferShape(ShapeInfo &shapeInfo,
+                                  ShapeInferenceState &state) {
+  auto tile = getTile();
+  auto result = getResult();
+  auto dims = getDims();
+  SetVector<int64_t> reductionDimSet(dims.begin(), dims.end());
+
+  auto tileShape = *shapeInfo.getShape(tile);
+  SmallVector<DimSize> resultShape;
+  for (size_t i = 0, e = tileShape.size(); i < e; ++i) {
+    if (!reductionDimSet.contains(i)) {
+      resultShape.push_back(tileShape[i]);
+    }
+  }
+  shapeInfo.markEquivalent(result, resultShape);
+
+  auto init = getInit();
+  if (init) {
+    shapeInfo.markEquivalent(result, init);
+  }
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
 LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
                                        std::optional<Location> location,
                                        Adaptor adaptor,
@@ -318,6 +417,33 @@ LogicalResult LoadOp::verify() {
     return emitOpError("`zuan.load` cannot be nested inside a `zuan.yield`");
   }
   return success();
+}
+
+void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto base = getBase();
+  auto result = getResult();
+  SmallVector<DimSize> shape;
+  for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
+    shape.push_back(DimSize(base, i));
+  }
+  shapeInfo.markEquivalent(result, shape);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
+void StoreOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto value = getValue();
+  auto base = getBase();
+
+  SmallVector<DimSize> shape;
+  for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
+    shape.push_back(DimSize(base, i));
+  }
+  shapeInfo.markEquivalent(value, shape);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(value, *mask);
+  }
 }
 
 LogicalResult SplatOp::inferReturnTypes(MLIRContext *context,
@@ -368,6 +494,24 @@ SmallVector<OpFoldResult> SplatOp::getMixedDims() {
   return getMixedValues(getStaticDims(), getDims(), builder);
 }
 
+void SplatOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto value = getValue();
+  auto dims = getMixedDims();
+
+  SmallVector<DimSize> shape =
+      llvm::map_to_vector(dims, [&](OpFoldResult ofr) { return DimSize(ofr); });
+
+  if (auto tileType = dyn_cast<TileType>(value.getType())) {
+    auto tileShape = *shapeInfo.getShape(value);
+    shape.append(tileShape.begin(), tileShape.end());
+  }
+  auto result = getResult();
+  shapeInfo.markEquivalent(result, shape);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
 LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
                                         std::optional<Location> location,
                                         Adaptor adaptor,
@@ -390,13 +534,11 @@ LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
 
   auto lhsShape = lhsType.getShape();
   auto rhsShape = rhsType.getShape();
-  for (unsigned i = 0; i < leadingRank; ++i) {
-    auto lhsDim = lhsShape[i];
-    auto rhsDim = rhsShape[i];
-    if (!TileType::isDimCompatible(lhsDim, rhsDim)) {
-      return emitOptionalError(location, "expected the leading dimensions of "
-                                         "the lhs and rhs to be compatible");
-    }
+  if (!TileType::isShapeCompatible(lhsShape.take_front(leadingRank),
+                                   rhsShape.take_front(leadingRank))) {
+    return emitOptionalError(
+        location,
+        "expected the leading dimensions of the lhs and rhs to be compatible");
   }
   SmallVector<int64_t> resultShape{lhsShape.begin(), lhsShape.end()};
   if (lhsRank <= rhsRank) {
@@ -404,6 +546,46 @@ LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
   }
   inferred.push_back(TileType::get(resultShape, lhsType.getElementType()));
   return success();
+}
+
+LogicalResult OuterOp::verify() {
+  int64_t lhsRank = getLhs().getType().getRank();
+  int64_t rhsRank = getRhs().getType().getRank();
+  if (std::abs(lhsRank - rhsRank) > 1) {
+    return emitOpError(
+        "expected the rank of the lhs and rhs to differ by at most one");
+  }
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
+}
+
+void OuterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto lhs = getLhs();
+  auto rhs = getRhs();
+  auto result = getResult();
+
+  auto lhsShape = *shapeInfo.getShape(lhs);
+  auto rhsShape = *shapeInfo.getShape(rhs);
+
+  unsigned leadingRank = lhsShape.size();
+  if (lhsShape.size() >= rhsShape.size()) {
+    leadingRank -= 1; // Ignore the last dimension.
+  }
+
+  SmallVector<DimSize> resultShape(lhsShape.begin(), lhsShape.end());
+  if (lhsShape.size() <= rhsShape.size()) {
+    resultShape.push_back(rhsShape.back());
+  }
+  shapeInfo.markEquivalent(result, resultShape);
+  shapeInfo.markEquivalent(lhsShape.take_front(leadingRank),
+                           rhsShape.take_front(leadingRank));
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
 }
 
 LogicalResult StepOp::inferReturnTypes(MLIRContext *context,
@@ -439,6 +621,19 @@ SmallVector<OpFoldResult> StepOp::getMixedSizes() {
   return getMixedValues(getStaticSizes(), getSizes(), builder);
 }
 
+void StepOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto sizes = getMixedSizes();
+  auto result = getResult();
+
+  SmallVector<DimSize> shape = llvm::map_to_vector(
+      sizes, [&](OpFoldResult ofr) { return DimSize(ofr); });
+
+  shapeInfo.markEquivalent(result, shape);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
 LogicalResult StepOp::verify() {
   // The mask op is allowed to be inside the yield op. But only store is allowed
   // to be nested within the yield region.
@@ -458,13 +653,13 @@ LogicalResult CastOp::verify() {
   return success();
 }
 
-LogicalResult OuterOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
+void CastOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto source = getTile();
+  auto result = getResult();
+  shapeInfo.markEquivalent(source, result);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
   }
-  return success();
 }
 
 LogicalResult SelectOp::verify() {
@@ -474,6 +669,20 @@ LogicalResult SelectOp::verify() {
     return emitOpError("`zuan.select` cannot be nested inside a `zuan.yield`");
   }
   return success();
+}
+
+void SelectOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto cond = getCond();
+  auto lhs = getLhs();
+  auto rhs = getRhs();
+  auto result = getResult();
+
+  shapeInfo.markEquivalent(lhs, cond);
+  shapeInfo.markEquivalent(lhs, rhs);
+  shapeInfo.markEquivalent(lhs, result);
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
 }
 
 LogicalResult GatherOp::inferReturnTypes(MLIRContext *context,
@@ -508,6 +717,22 @@ LogicalResult GatherOp::verify() {
   return success();
 }
 
+void GatherOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto indices = getIndices();
+  auto result = getResult();
+  if (indices.empty()) {
+    shapeInfo.markEquivalent(result, SmallVector<DimSize>{});
+    return;
+  }
+  shapeInfo.markEquivalent(indices[0], result);
+  for (unsigned i = 1, e = indices.size(); i < e; ++i) {
+    shapeInfo.markEquivalent(indices[0], indices[i]);
+  }
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(result, *mask);
+  }
+}
+
 LogicalResult ScatterOp::verify() {
   auto baseType = cast<MemRefType>(getBase().getType());
   auto indices = getIndices();
@@ -517,6 +742,26 @@ LogicalResult ScatterOp::verify() {
   }
   // TODO: Verify index shapes.
   return success();
+}
+
+void ScatterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto value = getValue();
+  auto indices = getIndices();
+  if (indices.empty()) {
+    return;
+  }
+  shapeInfo.markEquivalent(indices[0], value);
+  for (unsigned i = 1, e = indices.size(); i < e; ++i) {
+    shapeInfo.markEquivalent(indices[0], indices[i]);
+  }
+  if (auto mask = state.getMask()) {
+    shapeInfo.markEquivalent(value, *mask);
+  }
+}
+
+void MaskYieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  // No need to infer anything for the mask yield op, as all the operand shapes
+  // are inferred.
 }
 
 } // namespace zuan
