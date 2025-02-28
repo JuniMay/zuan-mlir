@@ -344,9 +344,10 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   }
 }
 
-LogicalResult MultiReductionOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, Adaptor adaptor,
-    SmallVectorImpl<Type> &inferred) {
+LogicalResult ReductionOp::inferReturnTypes(MLIRContext *context,
+                                            std::optional<Location> location,
+                                            Adaptor adaptor,
+                                            SmallVectorImpl<Type> &inferred) {
   auto tile = adaptor.getTile();
   auto dims = adaptor.getDims();
   if (dims.empty()) {
@@ -365,7 +366,7 @@ LogicalResult MultiReductionOp::inferReturnTypes(
   return success();
 }
 
-LogicalResult MultiReductionOp::verify() {
+LogicalResult ReductionOp::verify() {
   // The mask op is allowed to be inside the yield op. But only store is allowed
   // to be nested within the yield region.
   if ((*this)->getParentOfType<YieldOp>()) {
@@ -375,8 +376,7 @@ LogicalResult MultiReductionOp::verify() {
   return success();
 }
 
-void MultiReductionOp::inferShape(ShapeInfo &shapeInfo,
-                                  ShapeInferenceState &state) {
+void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto tile = getTile();
   auto result = getResult();
   auto dims = getDims();
@@ -762,6 +762,20 @@ void ScatterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 void MaskYieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   // No need to infer anything for the mask yield op, as all the operand shapes
   // are inferred.
+}
+
+void TileCastOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  // Do nothing, no shape inference needed.
+}
+
+LogicalResult TileCastOp::verify() {
+  // The mask op is allowed to be inside the yield op. But only store is allowed
+  // to be nested within the yield region.
+  if ((*this)->getParentOfType<YieldOp>()) {
+    return emitOpError(
+        "`zuan.tile_cast` cannot be nested inside a `zuan.yield`");
+  }
+  return success();
 }
 
 } // namespace zuan

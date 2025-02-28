@@ -55,6 +55,15 @@ def Zuan_TileType : Zuan_Type<"Tile", "tile", [
   let skipDefaultBuilders = 1;
 }
 
+class IsZuanTileOfRankPref<list<int> allowedRanks> :
+  Or<!foreach(allowed, allowedRanks,
+              CPred<[{ ::llvm::cast<::mlir::zuan::TileType>($_self).getRank()
+                       == }] # allowed>)>;
+
+class ZuanTileOfRank<list<int> allowedRanks> : Type<
+  IsZuanTileOfRankPref<allowedRanks>,
+  " of ranks " # !interleave(allowedRanks, "/"), "::mlir::zuan::TileType">;
+
 class ZuanTileOfType<list<Type> allowedTypes> :
   ShapedContainerType<
     allowedTypes, 

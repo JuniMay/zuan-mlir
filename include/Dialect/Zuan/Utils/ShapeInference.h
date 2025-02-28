@@ -4,14 +4,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef ZUAN_TRANSFORMS_SHAPEINFERENCE_H
-#define ZUAN_TRANSFORMS_SHAPEINFERENCE_H
+#ifndef ZUAN_UTILS_SHAPEINFERENCE_H
+#define ZUAN_UTILS_SHAPEINFERENCE_H
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include <variant>
 
@@ -162,4 +161,4 @@ Value getOrCreateIndexValue(OpBuilder &builder, OpFoldResult ofr, Location loc);
 } // namespace zuan
 } // namespace mlir
 
-#endif // ZUAN_TRANSFORMS_SHAPEINFERENCE_H
+#endif // ZUAN_UTILS_SHAPEINFERENCE_H

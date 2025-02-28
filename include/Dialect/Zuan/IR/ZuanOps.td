@@ -195,7 +195,7 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
   let hasVerifier = 1;
 }
 
-def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
+def Zuan_ReductionOp : Zuan_Op<"reduction", [
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
   AllElementTypesMatch<["tile", "result"]>,
@@ -204,10 +204,9 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
 ]> {
   let summary = "Multi-dimensional reduction operation in Zuan dialect";
   let description = [{
-    `zuan.multi_reduction` operation computes the reduction of the input tile
-    along the specified dimensions. The reduced dimensions will be removed.
-
-    The init tile should be shape-compatible with the result.
+    `zuan.reduction` operation computes the reduction of the input tile along
+    the specified dimensions. The reduced dimensions will be removed. The init
+    tile should be shape-compatible with the result.
   }];
 
   let arguments = (ins Zuan_CombiningKindAttr:$kind,
@@ -218,7 +217,7 @@ def Zuan_MultiReductionOp : Zuan_Op<"multi_reduction", [
 
   let assemblyFormat = [{
     $kind $tile $dims (`,` $init^)? attr-dict 
-    `:` qualified(type($tile)) `,` qualified(type($init))
+    `:` qualified(type($tile)) (`,` qualified(type($init))^)?
   }];
 
   let hasVerifier = 1;
@@ -458,6 +457,24 @@ def Zuan_ScatterOp : Zuan_Op<"scatter", [
                        Arg<AnyMemRef, "The memref to scatter to", [MemWrite]>:$base);
   let assemblyFormat = [{
     $value `,` $base `[` $indices `]` attr-dict `:` type($value) `,` type($base) (`,` type($indices)^)?
+  }];
+  let hasVerifier = 1;
+}
+
+def Zuan_TileCastOp : Zuan_Op<"tile_cast", [
+  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
+  ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  AllElementTypesMatch<["value", "result"]>
+]> {
+  let summary = "Tile cast operation";
+  let description = [{
+    `zuan.tile_cast` operation casts the 0-D tile to scalar and vice versa.
+  }];
+  let arguments = (ins AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>:$value);
+  let results = (outs AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>:$result);
+
+  let assemblyFormat = [{
+    $value attr-dict `:` type($value) `,` type($result)
   }];
   let hasVerifier = 1;
 }

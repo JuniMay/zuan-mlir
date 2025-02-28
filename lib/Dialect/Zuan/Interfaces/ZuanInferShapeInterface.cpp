@@ -1,4 +1,4 @@
-//===- InferShapeInterface.cpp ----------------------------------*- C++ -*-===//
+//===- ZuanInferShapeInterface.cpp ------------------------------*- C++ -*-===//
 //
 // This file implements the ZuanInferShapeInterface.
 //

@@ -143,7 +143,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
       return failure();
     }
     auto combiningKind = static_cast<zuan::CombiningKind>(*vectorCombiningKind);
-    auto multiReduction = builder.create<zuan::MultiReductionOp>(
+    auto multiReduction = builder.create<zuan::ReductionOp>(
         loc, combiningKind, reduceTile, dimsToReduce, initialTile);
     valueMap.map(op->getResult(0), multiReduction.getResult());
     return success();

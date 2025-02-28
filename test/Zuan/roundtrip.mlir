@@ -34,12 +34,12 @@ func.func @matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>)
   return
 }
 
-// CHECK-LABEL: func.func @multi_reduction
-func.func @multi_reduction(%a: memref<?x?x?x?xf32>, %b: memref<?x?xf32>) {
+// CHECK-LABEL: func.func @reduction
+func.func @reduction(%a: memref<?x?x?x?xf32>, %b: memref<?x?xf32>) {
   zuan.dynamic (%b : memref<?x?xf32>) {
   ^bb0(%b_tile: !zuan.tile<?x?xf32>):
     %a_tile = zuan.load %a : memref<?x?x?x?xf32>
-    %reduced = zuan.multi_reduction <add> %a_tile [1, 2], %b_tile : !zuan.tile<?x?x?x?xf32>, !zuan.tile<?x?xf32>
+    %reduced = zuan.reduction <add> %a_tile [1, 2], %b_tile : !zuan.tile<?x?x?x?xf32>, !zuan.tile<?x?xf32>
     zuan.yield {
       zuan.store %reduced, %b : !zuan.tile<?x?xf32>, memref<?x?xf32>
     }
@@ -138,4 +138,15 @@ func.func @gather_scatter(
     }
   }
   return
+}
+
+// CHECK-LABEL: func.func @reduction1d
+func.func @reduction1d(%seq: memref<?xf32>) -> f32 {
+  %res = zuan.dynamic (%seq : memref<?xf32>) {
+  ^bb0(%seq_tile: !zuan.tile<?xf32>):
+    %reduced = zuan.reduction <add> %seq_tile [0] : !zuan.tile<?xf32>
+    %scalar = zuan.tile_cast %reduced : !zuan.tile<f32>, f32
+    zuan.yield %scalar : f32 {}
+  } : f32
+  return %res : f32
 }
