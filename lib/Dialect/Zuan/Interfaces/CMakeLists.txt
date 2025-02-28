@@ -1,8 +1,8 @@
 add_mlir_library(
   ZuanInterfaces
 
-  ZuanShapedOpInterface.cpp
+  ZuanInferShapeInterface.cpp
 
   DEPENDS
-  MLIRZuanShapedOpInterfaceIncGen
+  MLIRZuanInferShapeInterfaceIncGen
 )

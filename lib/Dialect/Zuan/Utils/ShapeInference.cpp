@@ -4,7 +4,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Zuan/Interfaces/ZuanShapedOpInterface.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -15,6 +14,7 @@
 #include "llvm/ADT/SmallVectorExtras.h"
 #include <variant>
 
+#include "Zuan/Interfaces/ZuanInferShapeInterface.h"
 #include "Zuan/Utils/ShapeInference.h"
 
 namespace mlir {
@@ -155,8 +155,7 @@ void ShapeInfo::markEquivalent(DimSize lhs, DimSize rhs) {
   dimEquivalences.unionSets(lhs, rhs);
 }
 
-void ShapeInfo::markEquivalent(ArrayRef<DimSize> lhs,
-                                   ArrayRef<DimSize> rhs) {
+void ShapeInfo::markEquivalent(ArrayRef<DimSize> lhs, ArrayRef<DimSize> rhs) {
   assert(lhs.size() == rhs.size() && "expected same rank");
   for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
     markEquivalent(lhsDim, rhsDim);
@@ -201,7 +200,7 @@ void ShapeInfo::dump(llvm::raw_ostream &os) {
 }
 
 void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
-  if (auto shapedOp = dyn_cast<zuan::ShapedOpInterface>(rootOp)) {
+  if (auto shapedOp = dyn_cast<ZuanInferShapeInterface>(rootOp)) {
     shapedOp.inferShape(*this, state);
   }
 

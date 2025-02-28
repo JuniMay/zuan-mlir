@@ -1,21 +1,21 @@
-//===- ShapedOpInterface.td - Shape inference interface ----*- tablegen -*-===//
+//===- ZuanInferShapeInterface.td --------------------------*- tablegen -*-===//
 //
 // This file defines the shape inference interface for operations that have
 // can have their operands and results shape inferred.
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef ZUAN_INTERFACES_ZUANSHAPEDOPINTERFACE_TD
-#define ZUAN_INTERFACES_ZUANSHAPEDOPINTERFACE_TD
+#ifndef ZUAN_INTERFACES_ZUANINFERSHAPEINTERFACE_TD
+#define ZUAN_INTERFACES_ZUANINFERSHAPEINTERFACE_TD
 
 include "mlir/IR/OpBase.td"
 
-def ShapedOpInterface : OpInterface<"ShapedOpInterface"> {
+def ZuanInferShapeInterface : OpInterface<"ZuanInferShapeInterface"> {
   let description = [{
-    The `ShapedOpInterface` from zuan dialect defines an operation that holds
-    the information of the shape of its operands and results. This includes the
-    shape equivalence and the constraints that the shape of the operands and
-    results must satisfy.
+    The `ZuanInferShapeInterface` from zuan dialect defines an operation that
+    holds the information of the shape of its operands and results. This
+    includes the shape equivalence and the constraints that the shape of the
+    operands and results must satisfy.
   }];
   let cppNamespace = "::mlir::zuan";
   let methods = [
@@ -27,4 +27,4 @@ def ShapedOpInterface : OpInterface<"ShapedOpInterface"> {
   ];
 }
 
-#endif // ZUAN_INTERFACES_ZUANSHAPEDOPINTERFACE_TD
+#endif // ZUAN_INTERFACES_ZUANINFERSHAPEINTERFACE_TD

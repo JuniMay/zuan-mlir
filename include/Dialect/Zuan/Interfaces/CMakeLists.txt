@@ -1,1 +1,1 @@
-add_mlir_interface(ZuanShapedOpInterface)
+add_mlir_interface(ZuanInferShapeInterface)

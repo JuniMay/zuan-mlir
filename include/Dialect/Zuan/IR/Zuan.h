@@ -18,7 +18,7 @@
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#include "Zuan/Interfaces/ZuanShapedOpInterface.h"
+#include "Zuan/Interfaces/ZuanInferShapeInterface.h"
 
 #include "Zuan/IR/ZuanEnums.h.inc"
 #define GET_ATTRDEF_CLASSES
