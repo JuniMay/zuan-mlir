@@ -6,6 +6,7 @@
 
 #include "Conversion/LinalgToZuan.h"
 #include "Zuan/IR/Zuan.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Affine/Utils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
@@ -77,7 +78,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
           return ShapedType::kDynamic;
         }
       });
-  SmallVector<zuan::TileType> resultTypes;
+  SmallVector<Type> resultTypes;
   for (auto resultType : op->getResultTypes()) {
     resultTypes.push_back(zuan::TileType::get(staticShape, resultType));
   }
@@ -102,7 +103,63 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     return success();
   }
 
-  return failure();
+  if (!OpTrait::hasElementwiseMappableTraits(op)) {
+    return failure();
+  }
+
+  SmallVector<std::pair<Value, Value>> reductionOperands;
+  for (Value opd : op->getOperands()) {
+    auto blockArg = dyn_cast<BlockArgument>(opd);
+    if (!blockArg || blockArg.getOwner() != linalgOp.getBlock() ||
+        blockArg.getArgNumber() < linalgOp.getNumDpsInputs()) {
+      // The operand is not a reduction operand if it is not a block argument
+      // or it is not the argument corresponding to dps inits.
+      continue;
+    }
+    SmallVector<Operation *> reductionOps;
+    Value reduceOpd = matchReduction(
+        linalgOp.getRegionOutputArgs(),
+        blockArg.getArgNumber() - linalgOp.getNumDpsInputs(), reductionOps);
+    if (!reduceOpd) {
+      continue;
+    }
+    reductionOperands.push_back({reduceOpd, opd});
+  }
+
+  if (!reductionOperands.empty()) {
+    assert(reductionOperands.size() == 1);
+    auto [reduceOpd, initialOpd] = reductionOperands.front();
+    auto reduceTile = getOrSplat(builder, valueMap, reduceOpd, commonShape);
+    auto initialTile = getOrSplat(builder, valueMap, initialOpd, commonShape);
+    SmallVector<int64_t> dimsToReduce;
+    for (auto [i, iterType] :
+         llvm::enumerate(linalgOp.getIteratorTypesArray())) {
+      if (linalg::isReductionIterator(iterType)) {
+        dimsToReduce.push_back(i);
+      }
+    }
+    auto vectorCombiningKind = linalg::getCombinerOpKind(op);
+    if (!vectorCombiningKind.has_value()) {
+      return failure();
+    }
+    auto combiningKind = static_cast<zuan::CombiningKind>(*vectorCombiningKind);
+    auto multiReduction = builder.create<zuan::MultiReductionOp>(
+        loc, combiningKind, reduceTile, dimsToReduce, initialTile);
+    valueMap.map(op->getResult(0), multiReduction.getResult());
+    return success();
+  }
+
+  SmallVector<Value> tileOperands;
+  for (Value opd : op->getOperands()) {
+    Value tileOpd = getOrSplat(builder, valueMap, opd, commonShape);
+    tileOperands.push_back(tileOpd);
+  }
+  // All the operands should share the common shape, so it is ok to build the
+  // elementwise operations.
+  auto newOp = builder.create(loc, op->getName().getIdentifier(), tileOperands,
+                              resultTypes, op->getAttrs());
+  valueMap.map(op->getResults(), newOp->getResults());
+  return success();
 }
 
 struct LinalgGenericToZuanPattern : RewritePattern {
