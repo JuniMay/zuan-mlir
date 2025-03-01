@@ -24,7 +24,6 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 //===----------------------------------------------------------------------===//
 
 def Zuan_YieldOp : Zuan_Op<"yield", [
-  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   // The yield op is the terminator of the dynamic region.
   ReturnLike, Terminator,
@@ -39,9 +38,12 @@ def Zuan_YieldOp : Zuan_Op<"yield", [
     `zuan.yield` operation brings the computed value out of the dynamic region.
     The scalars will be yielded as results. And all the stores should be done in
     the yield region.
+
+    The yielded values corresponds to the results of the dynamic region. 0-D
+    tiles can also be yielded as scalars.
   }];
 
-  let arguments = (ins Variadic<ZuanTileElement>:$scalars);
+  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>>:$scalars);
   let regions = (region AnyRegion:$body);
 
   let builders = [
@@ -58,7 +60,6 @@ def Zuan_YieldOp : Zuan_Op<"yield", [
 }
 
 def Zuan_DynamicOp : Zuan_Op<"dynamic", [
-  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DestinationStyleOpInterface,
@@ -117,15 +118,15 @@ def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
 ]> {
   let summary = "Terminator for the mask region";
   let description = [{
-    `zuan.mask_yield` operation is the terminator of the mask region. The
-    results of the mask region will be yielded as results in mask op.
+    `zuan.mask_yield` operation is the terminator of the mask region. Only tile
+    type can be yielded, including 0-D tiles.
   }];
-  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$operands);
+  let arguments = (ins Optional<Zuan_TileType>:$tile);
   let builders = [
     OpBuilder<(ins), [{ /* do nothing */ }]>
   ];
   let assemblyFormat = [{
-    ($operands^ `:` type($operands))? attr-dict
+    ($tile^ `:` type($tile))? attr-dict
   }];
 }
 
@@ -150,20 +151,23 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
     The passthru and mask are up to operations to decide their semantics.
 
     The mask op can also be used inside the yield op to implement masked stores.
+
+    At most one operation can be inside the mask operation, and the result must
+    be tile type.
   }];
   let arguments = (ins ZuanTileOfType<[I1]>:$mask,
                        Optional<Zuan_TileType>:$maskedoff);
   let regions = (region SizedRegion<1>:$body);
-  let results = (outs Variadic<AnyTypeOf<[ZuanTileElement, Zuan_TileType]>>:$results);
+  let results = (outs Optional<Zuan_TileType>:$result);
   
   let assemblyFormat = [{
     $mask `:` type($mask) 
-    (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict
-    (`:` type($results)^)?
+    (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict 
+    (`:` type($result)^)?
   }];
 
   let builders = [
-    OpBuilder<(ins "TypeRange":$resultTypes,
+    OpBuilder<(ins "Type":$resultType,
                    "Value":$mask,
                    CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder,
                    CArg<"Value", "nullptr">:$maskedoff)>,
@@ -469,29 +473,10 @@ def Zuan_ScatterOp : Zuan_Op<"scatter", [
   }];
 
   let arguments = (ins Zuan_TileType:$value,
-                       Variadic<ZuanTileOfType<[Index]>>:$indices,
-                       Arg<AnyMemRef, "The memref to scatter to", [MemWrite]>:$base);
+                       Arg<AnyMemRef, "The memref to scatter to", [MemWrite]>:$base,
+                       Variadic<ZuanTileOfType<[Index]>>:$indices);
   let assemblyFormat = [{
     $value `,` $base `[` $indices `]` attr-dict `:` type($value) `,` type($base) (`,` type($indices)^)?
-  }];
-  let hasVerifier = 1;
-}
-
-def Zuan_TileCastOp : Zuan_Op<"tile_cast", [
-  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
-  AllElementTypesMatch<["value", "result"]>
-]> {
-  let summary = "Tile cast operation";
-  let description = [{
-    `zuan.tile_cast` operation casts the 0-D tile to scalar and vice versa.
-  }];
-  let arguments = (ins AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>:$value);
-  let results = (outs AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>:$result);
-
-  let assemblyFormat = [{
-    $value attr-dict `:` type($value) `,` type($result)
   }];
   let hasVerifier = 1;
 }

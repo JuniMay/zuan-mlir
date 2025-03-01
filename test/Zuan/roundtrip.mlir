@@ -70,6 +70,7 @@ func.func @splat(%a: memref<?x?xf32>, %b: memref<?x4xf32>, %c: memref<4x?x?xf32>
 
 // CHECK-LABEL: func.func @outer_samerank
 func.func @outer_samerank(%a: memref<?x4xf32>, %b: memref<?x7xf32>, %c: memref<?x?x?xf32>) {
+  %c_cast = memref.cast %c : memref<?x?x?xf32> to memref<?x4x7xf32>
   zuan.dynamic (%c : memref<?x?x?xf32>) {
   ^bb0(%c_tile: !zuan.tile<?x4x7xf32>):
     %a_tile = zuan.load %a : memref<?x4xf32>
@@ -77,7 +78,6 @@ func.func @outer_samerank(%a: memref<?x4xf32>, %b: memref<?x7xf32>, %c: memref<?
     %outer = zuan.outer <add> %a_tile, %b_tile : !zuan.tile<?x4xf32>, !zuan.tile<?x7xf32>
     %add = arith.addf %outer, %c_tile : !zuan.tile<?x4x7xf32>
     zuan.yield {
-      %c_cast = memref.cast %c : memref<?x?x?xf32> to memref<?x4x7xf32>
       zuan.store %add, %c_cast : !zuan.tile<?x4x7xf32>, memref<?x4x7xf32>
     }
   }
@@ -86,6 +86,7 @@ func.func @outer_samerank(%a: memref<?x4xf32>, %b: memref<?x7xf32>, %c: memref<?
 
 // CHECK-LABEL: func.func @outer_diffrank
 func.func @outer_diffrank(%a: memref<?x4xf32>, %b: memref<?xf32>, %c: memref<?x?xf32>) {
+  %c_cast = memref.cast %c : memref<?x?xf32> to memref<?x4xf32>
   zuan.dynamic (%c : memref<?x?xf32>) {
   ^bb0(%c_tile: !zuan.tile<?x4xf32>):
     %a_tile = zuan.load %a : memref<?x4xf32>
@@ -93,7 +94,6 @@ func.func @outer_diffrank(%a: memref<?x4xf32>, %b: memref<?xf32>, %c: memref<?x?
     %outer = zuan.outer <add> %a_tile, %b_tile : !zuan.tile<?x4xf32>, !zuan.tile<?xf32>
     %add = arith.addf %outer, %c_tile : !zuan.tile<?x4xf32>
     zuan.yield {
-      %c_cast = memref.cast %c : memref<?x?xf32> to memref<?x4xf32>
       zuan.store %add, %c_cast : !zuan.tile<?x4xf32>, memref<?x4xf32>
     }
   }
@@ -145,8 +145,7 @@ func.func @reduction1d(%seq: memref<?xf32>) -> f32 {
   %res = zuan.dynamic (%seq : memref<?xf32>) {
   ^bb0(%seq_tile: !zuan.tile<?xf32>):
     %reduced = zuan.reduction <add> %seq_tile [0] : !zuan.tile<?xf32>
-    %scalar = zuan.tile_cast %reduced : !zuan.tile<f32>, f32
-    zuan.yield %scalar : f32 {}
+    zuan.yield %reduced : !zuan.tile<f32> {}
   } : f32
   return %res : f32
 }

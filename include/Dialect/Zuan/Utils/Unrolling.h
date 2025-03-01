@@ -17,22 +17,27 @@
 namespace mlir {
 namespace zuan {
 
+class TileType;
+
+/// The policy for 1-D reduction.
+enum class Reduction1DPolicy {
+  /// Unroll the scalars and accumulate the results.
+  Parallel,
+  /// Partially accumulate chunks and reduce the final result.
+  Partial,
+};
+
 /// Options and parameters that controls the unrolling process.
 struct UnrollOptions {
   UnrollOptions(const UnrollOptions &) = default;
   UnrollOptions &operator=(const UnrollOptions &) = default;
 
-  UnrollOptions(OpFoldResult offset, OpFoldResult chunkSize, unsigned dim,
-                bool reduceUnitDim)
-      : offset(offset), chunkSize(chunkSize), dim(dim),
-        reduceUnitDim(reduceUnitDim) {}
+  UnrollOptions(OpFoldResult offset, OpFoldResult chunkSize, unsigned idx)
+      : offset(offset), chunkSize(chunkSize), unrollIdx(idx),
+        reduceUnitDim(true) {}
 
   void overrideReduceUnitDim(bool reduce) { reduceUnitDim = reduce; }
-  void overrideOffset(OpFoldResult newOffset) { offset = newOffset; }
-  void overrideChunkSize(OpFoldResult newChunkSize) {
-    chunkSize = newChunkSize;
-  }
-  void overrideDim(unsigned newDim) { dim = newDim; }
+  void overrideUnrollIdx(unsigned newDim) { unrollIdx = newDim; }
 
   /// If this dimension-to-unroll should be reduced.
   bool shouldReduce() const {
@@ -45,7 +50,10 @@ struct UnrollOptions {
 
   OpFoldResult getOffset() const { return offset; }
   OpFoldResult getChunkSize() const { return chunkSize; }
-  unsigned getDim() const { return dim; }
+  unsigned getUnrollIdx() const { return unrollIdx; }
+
+  /// Sentinel dim value for not unrolling
+  static constexpr unsigned kNoUnrollIdx = -1;
 
 private:
   /// The offset of this iteration.
@@ -53,7 +61,7 @@ private:
   /// The chunk size of this iteration.
   OpFoldResult chunkSize;
   /// The dimension to unroll.
-  unsigned dim;
+  unsigned unrollIdx;
   /// If reduce the unit dimension (as specified by chunkSize) after unrolling.
   bool reduceUnitDim;
 };
@@ -65,6 +73,8 @@ struct UnrollState {
   /// dependencies. Operations-to-unroll are handled each time it is needed and
   /// are not stored in the valueMap.
   IRMapping valueMap;
+  /// The final yield block for store operations to insert.
+  Block* yieldBlock;
 };
 
 /// Check if a memref value is defined inside a dynamic op.
@@ -84,6 +94,11 @@ Value getUnrolledMemref(OpBuilder &builder, Value memref, UnrollOptions options,
 /// Slice the memref by the configurations specified in the options.
 Value createMemrefSlice(OpBuilder &rewriter, Value memref,
                         UnrollOptions options);
+
+SmallVector<int64_t> getUnrolledShape(ArrayRef<int64_t> shape,
+                                      UnrollOptions options);
+
+TileType getUnrolledTileType(TileType tileType, UnrollOptions options);
 
 } // namespace zuan
 } // namespace mlir

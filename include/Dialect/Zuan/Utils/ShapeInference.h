@@ -130,33 +130,17 @@ private:
   void setShape(Value value, ShapeVector shape);
 };
 
+unsigned computeUnreducedIdx(unsigned idx, size_t rank,
+                             function_ref<bool(unsigned)> isReduced);
+
 /// Helper function to handle dim reduction. Given the idx in the reduced shape,
 /// the original shape, a callback to test if the idx is reduced, compute the
 /// corresponding idx in the original shape.
 template <typename T>
 T computeUnreducedDim(unsigned idx, ArrayRef<T> originalShape,
                       function_ref<bool(unsigned)> isReduced) {
-  /// The index in original shape that we're trying to match with the current
-  /// result shape idx.
-  unsigned currSourceIdx = 0;
-  /// The index in result shape that is not matched yet.
-  unsigned currResultIdx = 0;
-  while (currSourceIdx < originalShape.size()) {
-    if (isReduced(currSourceIdx)) {
-      // This dim is reduced, have not found the source dim for currResultIdx
-      currSourceIdx += 1;
-      continue;
-    }
-    // This dim is not reduced, found the source dim for currResultIdx.
-    if (currResultIdx == idx) {
-      // We found the source dim for the current result dim.
-      break;
-    }
-    // Not found yet, trying to find for the next result dim.
-    currSourceIdx += 1;
-    currResultIdx += 1;
-  }
-  return originalShape[currSourceIdx];
+  auto sourceIdx = computeUnreducedIdx(idx, originalShape.size(), isReduced);
+  return originalShape[sourceIdx];
 }
 
 Value getOrCreateIndexValue(OpBuilder &builder, OpFoldResult ofr, Location loc);
