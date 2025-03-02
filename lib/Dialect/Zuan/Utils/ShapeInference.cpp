@@ -181,6 +181,13 @@ void ShapeInfo::markEquivalent(Value lhs, Value rhs) {
   markEquivalent(*lhsShape, *rhsShape);
 }
 
+void ShapeInfo::markEquivalent(ValueRange lhs, ValueRange rhs) {
+  assert(lhs.size() == rhs.size() && "expected same number of values");
+  for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
+    markEquivalent(lhsDim, rhsDim);
+  }
+}
+
 void ShapeInfo::markEquivalent(Value val, ShapeRef shape) {
   auto valShape = getShape(val);
   if (valShape) {
@@ -234,6 +241,11 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
         this->markEquivalent(opd, rootOp->getOperand(0));
       }
     }
+
+    if (auto mask = state.getMask()) {
+      this->markEquivalent(rootOp->getResult(0), *mask);
+    }
+
     return;
   }
 
@@ -246,6 +258,9 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     }
     this->markEquivalent(rootOp->getResult(0), lhs);
     this->markEquivalent(lhs, rhs);
+    if (auto mask = state.getMask()) {
+      this->markEquivalent(rootOp->getResult(0), *mask);
+    }
     return;
   }
 
@@ -292,8 +307,6 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
         inferShape(&op, state);
       }
     }
-
-    this->dump(llvm::dbgs());
 
     if (auto results = iface.getLoopResults()) {
       auto yieldValues = iface.getYieldedValues();

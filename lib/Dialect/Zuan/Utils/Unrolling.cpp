@@ -249,6 +249,8 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
                     UnrollState &state) {
   assert(op && "expected a non-null operation");
 
+  LLVM_DEBUG(DBGS() << "unrolling: " << op->getName() << "\n");
+
   if (auto iface = dyn_cast<ZuanUnrollingInterface>(op)) {
     return iface.unroll(builder, options, state);
   }
@@ -305,6 +307,7 @@ SmallVector<int64_t> getUnrolledShape(ArrayRef<int64_t> shape,
           newShape.push_back(ShapedType::kDynamic);
         }
       }
+    } else {
       newShape.push_back(dim);
     }
   }

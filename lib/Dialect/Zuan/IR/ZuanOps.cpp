@@ -6,6 +6,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -16,13 +17,13 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/Support/Debug.h"
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -167,9 +168,37 @@ struct ElideEmptyDynamicOp : OpRewritePattern<DynamicOp> {
   }
 };
 
+/// Hoist memref processing operations from the dynamic region to the parent
+/// region.
+struct HoistMemRefOpPattern : OpRewritePattern<DynamicOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const override {
+    auto block = &op.getBody().front();
+    bool hoisted = false;
+
+    // TODO: More general implementation.
+    for (auto &operation : llvm::make_early_inc_range(block->getOperations())) {
+      if (auto dimOp = dyn_cast<memref::DimOp>(&operation)) {
+        // check if dimOp operands is defined outside the dynamic op.
+        bool canHoist = llvm::all_of(dimOp.getOperands(), [&](Value operand) {
+          return operand.getParentBlock() != block;
+        });
+        if (canHoist) {
+          rewriter.moveOpBefore(dimOp, op);
+          hoisted = true;
+        }
+      }
+    }
+
+    return hoisted ? success() : failure();
+  }
+};
+
 void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.add<ElideEmptyDynamicOp>(context);
+  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -231,12 +260,46 @@ void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 // MaskOp
 //===----------------------------------------------------------------------===//
 
-void MaskOp::build(OpBuilder &builder, OperationState &result, Type resultType,
-                   Value mask,
+void createMaskOpRegion(OpBuilder &builder, Operation *maskedOp) {
+  if (!maskedOp) {
+    return;
+  }
+  assert(maskedOp->getBlock() && "maskedOp must be inserted into a block");
+  Block *insBlock = builder.getInsertionBlock();
+  insBlock->getOperations().splice(
+      insBlock->begin(), maskedOp->getBlock()->getOperations(), maskedOp);
+  builder.create<MaskYieldOp>(maskedOp->getLoc(), maskedOp->getResults());
+}
+
+Operation *maskOperation(OpBuilder &builder, Operation *maskedOp, Value mask,
+                         Value maskedoff) {
+  if (!mask) {
+    return maskedOp;
+  }
+  auto resultTypes = maskedOp->getResultTypes();
+  return builder.create<MaskOp>(
+      maskedOp->getLoc(), resultTypes, mask,
+      [&](OpBuilder &b, Location loc) { createMaskOpRegion(b, maskedOp); },
+      maskedoff);
+}
+
+Operation *MaskOp::getMaskedOp() {
+  Block *bodyBlock = &getBody().front();
+  assert(bodyBlock->mightHaveTerminator() && "expected a terminator");
+  auto terminator = cast<MaskYieldOp>(bodyBlock->getTerminator());
+  auto maskedOp = &bodyBlock->front();
+  if (maskedOp == terminator) {
+    return nullptr;
+  }
+  return maskedOp;
+}
+
+void MaskOp::build(OpBuilder &builder, OperationState &result,
+                   TypeRange resultTypes, Value mask,
                    function_ref<void(OpBuilder &, Location)> bodyBuilder,
                    Value maskedoff) {
   build(builder, result, mask, bodyBuilder, maskedoff);
-  result.addTypes(resultType);
+  result.addTypes(resultTypes);
 }
 
 void MaskOp::build(OpBuilder &builder, OperationState &result, Value mask,
@@ -272,7 +335,7 @@ LogicalResult MaskOp::verify() {
           "expected the mask and maskedoff types to be compatible");
     }
   }
-  // Expect only one operation inside.
+  // At most one operation inside.
   Block *bodyBlock = &getBody().front();
   if (bodyBlock->empty()) {
     return emitOpError("expected the masked region to have an operation");
@@ -312,33 +375,9 @@ Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
   if (maskedoff) {
     maskedoff = getUnrolledValue(builder, maskedoff, options, state);
   }
-  auto bodyBlock = &getBody().front();
-  assert(bodyBlock->mightHaveTerminator() &&
-         "expected the masked region to have a terminator");
-  auto terminator = cast<MaskYieldOp>(bodyBlock->getTerminator());
-
-  auto resultTypes = getUnrolledTypes(options);
-  assert(resultTypes.size() <= 1 && "expected a single result type");
-
-  MaskOp maskOp;
-  if (resultTypes.empty()) {
-    maskOp = builder.create<MaskOp>(
-        getLoc(), mask,
-        [&](OpBuilder &b, Location loc) {
-          terminator.unroll(b, options, state);
-        },
-        maskedoff);
-    return maskOp;
-  } else {
-    maskOp = builder.create<MaskOp>(
-        getLoc(), resultTypes[0], mask,
-        [&](OpBuilder &b, Location loc) {
-          terminator.unroll(b, options, state);
-        },
-        maskedoff);
-    return maskOp;
-  }
-  return maskOp;
+  auto maskableOp = getMaskedOp();
+  auto unrolledOp = unrollOp(builder, maskableOp, options, state);
+  return maskOperation(builder, unrolledOp, mask, maskedoff);
 }
 
 std::optional<ShapeVector> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
@@ -346,12 +385,29 @@ std::optional<ShapeVector> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(mask);
 }
 
-SmallVector<Type> MaskOp::getUnrolledTypes(UnrollOptions options) {
-  auto bodyBlock = &getBody().front();
-  assert(bodyBlock->mightHaveTerminator() &&
-         "expected the masked region to have a terminator");
-  auto terminator = cast<MaskYieldOp>(bodyBlock->getTerminator());
-  return terminator.getUnrolledTypes(options);
+struct ElideEmptyMaskOp : OpRewritePattern<MaskOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MaskOp op,
+                                PatternRewriter &rewriter) const override {
+    Block *block = &op.getBody().front();
+
+    if (block->getOperations().size() > 1) {
+      return rewriter.notifyMatchFailure(op, "expected a single mask yield op");
+    }
+
+    auto terminator = cast<MaskYieldOp>(block->getTerminator());
+    if (!terminator.getTiles().empty()) {
+      rewriter.replaceAllUsesWith(op.getResults(), terminator.getTiles());
+    }
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+void MaskOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                         MLIRContext *context) {
+  results.add<ElideEmptyMaskOp>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -376,9 +432,6 @@ LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
   auto rhsRank = rhsType.getRank();
 
   size_t leadingSize;
-
-  llvm::dbgs() << "lhsRank: " << lhsRank << "\n";
-  llvm::dbgs() << "rhsRank: " << rhsRank << "\n";
 
   if (lhsRank < rhsRank) {
     assert(rhsRank >= 2 && "expected rank >= 2");
@@ -429,19 +482,11 @@ LogicalResult MatmulOp::verify() {
   return success();
 }
 
-void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto lhs = getLhs();
-  auto rhs = getRhs();
-  auto result = getResult();
-
-  auto lhsShape = *shapeInfo.getShape(lhs);
-  auto rhsShape = *shapeInfo.getShape(rhs);
-
-  auto lhsRank = lhs.getType().getRank();
-  auto rhsRank = rhs.getType().getRank();
+unsigned MatmulOp::getLeadingSize() {
+  auto lhsRank = getLhs().getType().getRank();
+  auto rhsRank = getRhs().getType().getRank();
 
   size_t leadingSize;
-
   if (lhsRank < rhsRank) {
     assert(rhsRank >= 2 && "expected rank >= 2");
     // (1) * k @ k * n => (1) * n
@@ -454,6 +499,21 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     assert(lhsRank >= 2 && "expected rank >= 2");
     leadingSize = lhsRank - 2;
   }
+  return leadingSize;
+}
+
+void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  auto lhs = getLhs();
+  auto rhs = getRhs();
+  auto result = getResult();
+
+  auto lhsShape = *shapeInfo.getShape(lhs);
+  auto rhsShape = *shapeInfo.getShape(rhs);
+
+  size_t leadingSize = getLeadingSize();
+  
+  auto lhsRank = lhs.getType().getRank();
+  auto rhsRank = rhs.getType().getRank();
 
   auto lhsK = lhsShape.back();
   auto rhsK = rhsShape[leadingSize];
@@ -479,20 +539,44 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 
 Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
                             UnrollState &state) {
-  auto rank = getResult().getType().getRank();
-
   UnrollOptions lhsOptions = options;
   UnrollOptions rhsOptions = options;
 
-  auto unrollIdx = options.getUnrollIdx();
+  size_t leadingSize = getLeadingSize();
+  auto lhsRank = getLhs().getType().getRank();
+  auto rhsRank = getRhs().getType().getRank();
 
-  if (unrollIdx == rank - 1) {
-    // Unrolling on the rhs last dimension, no need to unroll the lhs.
+  auto unrollIdx = options.getUnrollIdx();
+  /// If use elementwise mul & reduction to compute the result.
+  bool useDot = false;
+
+  if (unrollIdx == leadingSize) {
+    if (lhsRank < rhsRank) {
+      // (1) * k @ k * n => (1) * n, unrolling on `n`.
+      lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
+      rhsOptions.overrideUnrollIdx(rhsRank - 1);
+      if (options.shouldReduce()) {
+        useDot = true;
+      }
+    } else if (lhsRank > rhsRank) {
+      // m * k @ k * (1) => m * (1), unrolling on `m`.
+      lhsOptions.overrideUnrollIdx(lhsRank - 2);
+      rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
+      if (options.shouldReduce()) {
+        useDot = true;
+      }
+    } else {
+      // result: m * n, unrolling on `m`
+      lhsOptions.overrideUnrollIdx(lhsRank - 2);
+      rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
+    }
+  } else if (unrollIdx == leadingSize + 1) {
+    // Unrolling on `n`.
+    assert(lhsRank == rhsRank && lhsRank >= 2 &&
+           "expected lhs and rhs to have the same rank >= 2");
     lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  } else if (unrollIdx == rank - 2) {
-    // Unrolling on the lhs second last dimension.
-    rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  } else if (unrollIdx < rank - 2) {
+    rhsOptions.overrideUnrollIdx(rhsRank - 1);
+  } else if (unrollIdx < leadingSize) {
     // Unrolling the shared leading dims.
   } else {
     // Canonicalize the unroll index.
@@ -502,18 +586,26 @@ Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto lhs = getUnrolledValue(builder, getLhs(), lhsOptions, state);
   auto rhs = getUnrolledValue(builder, getRhs(), rhsOptions, state);
 
-  auto matmulOp = builder.create<MatmulOp>(getLoc(), lhs, rhs);
-  return matmulOp;
+  if (useDot) {
+    Value mul;
+    if (isa<FloatType>(getLhs().getType().getElementType())) {
+      mul = builder.create<arith::MulFOp>(getLoc(), lhs, rhs);
+    } else {
+      mul = builder.create<arith::MulIOp>(getLoc(), lhs, rhs);
+    }
+    SmallVector<int64_t> dims{static_cast<int64_t>(leadingSize)};
+    auto reduction = builder.create<ReductionOp>(getLoc(), CombiningKind::ADD,
+                                                 mul, dims, /*init=*/nullptr);
+    return reduction;
+  } else {
+    auto matmulOp = builder.create<MatmulOp>(getLoc(), lhs, rhs);
+    return matmulOp;
+  }
 }
 
 std::optional<ShapeVector> MatmulOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
-}
-
-SmallVector<Type> MatmulOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
 }
 
 //===----------------------------------------------------------------------===//
@@ -621,11 +713,6 @@ std::optional<ShapeVector> ReductionOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(result);
 }
 
-SmallVector<Type> ReductionOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
-}
-
 //===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
@@ -674,11 +761,6 @@ std::optional<ShapeVector> LoadOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(result);
 }
 
-SmallVector<Type> LoadOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
-}
-
 //===----------------------------------------------------------------------===//
 // StoreOp
 //===----------------------------------------------------------------------===//
@@ -712,10 +794,6 @@ Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
 std::optional<ShapeVector> StoreOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto value = getValue();
   return shapeInfo.getShapeWithEquivalence(value);
-}
-
-SmallVector<Type> StoreOp::getUnrolledTypes(UnrollOptions options) {
-  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -823,11 +901,6 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
 std::optional<ShapeVector> SplatOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
-}
-
-SmallVector<Type> SplatOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
 }
 
 //===----------------------------------------------------------------------===//
@@ -964,11 +1037,6 @@ std::optional<ShapeVector> OuterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(result);
 }
 
-SmallVector<Type> OuterOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
-}
-
 //===----------------------------------------------------------------------===//
 // StepOp
 //===----------------------------------------------------------------------===//
@@ -1095,11 +1163,6 @@ std::optional<ShapeVector> StepOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(result);
 }
 
-SmallVector<Type> StepOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
-}
-
 //===----------------------------------------------------------------------===//
 // CastOp
 //===----------------------------------------------------------------------===//
@@ -1126,7 +1189,7 @@ void CastOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
                           UnrollState &state) {
   auto tile = getUnrolledValue(builder, getTile(), options, state);
-  auto targetType = getUnrolledTypes(options).front();
+  auto targetType = getUnrolledTileType(getResult().getType(), options);
   auto castOp = builder.create<CastOp>(getLoc(), targetType, getKind(), tile);
   return castOp;
 }
@@ -1134,11 +1197,6 @@ Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
 std::optional<ShapeVector> CastOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
-}
-
-SmallVector<Type> CastOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1180,11 +1238,6 @@ Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
 std::optional<ShapeVector> SelectOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
-}
-
-SmallVector<Type> SelectOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1258,11 +1311,6 @@ std::optional<ShapeVector> GatherOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(result);
 }
 
-SmallVector<Type> GatherOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getResult().getType(), options);
-  return {type};
-}
-
 //===----------------------------------------------------------------------===//
 // ScatterOp
 //===----------------------------------------------------------------------===//
@@ -1319,33 +1367,13 @@ std::optional<ShapeVector> ScatterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return shapeInfo.getShapeWithEquivalence(value);
 }
 
-SmallVector<Type> ScatterOp::getUnrolledTypes(UnrollOptions options) {
-  return {};
-}
-
 //===----------------------------------------------------------------------===//
 // MaskYieldOp
 //===----------------------------------------------------------------------===//
 
 void MaskYieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  // No need to infer anything for the mask yield op, as all the operand shapes
-  // are inferred.
-}
-
-Operation *MaskYieldOp::unroll(OpBuilder &builder, UnrollOptions options,
-                               UnrollState &state) {
-  auto tile = getUnrolledValue(builder, getTile(), options, state);
-  auto maskYieldOp = builder.create<MaskYieldOp>(getLoc(), tile);
-  return maskYieldOp;
-}
-
-std::optional<ShapeVector> MaskYieldOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  return std::nullopt;
-}
-
-SmallVector<Type> MaskYieldOp::getUnrolledTypes(UnrollOptions options) {
-  auto type = getUnrolledTileType(getTile().getType(), options);
-  return {type};
+  auto maskOp = this->getParentOp();
+  shapeInfo.markEquivalent(maskOp.getResults(), getTiles());
 }
 
 } // namespace zuan

@@ -31,15 +31,7 @@ def ZuanUnrollingInterface : OpInterface<"ZuanUnrollingInterface"> {
       }],
       /*retTy=*/"::std::optional<::mlir::zuan::ShapeVector>",
       /*methodName=*/"getShapeToUnroll",
-      /*args=*/(ins "::mlir::zuan::ShapeInfo &":$shapeInfo)>,
-    InterfaceMethod<
-      /*desc=*/[{
-        Get the unrolled types of the operations before actually unrolling it.
-        Typically result type, but could be different for yield operations.
-      }],
-      /*retTy=*/"::mlir::SmallVector<::mlir::Type>",
-      /*methodName=*/"getUnrolledTypes",
-      /*args=*/(ins "::mlir::zuan::UnrollOptions":$options)>
+      /*args=*/(ins "::mlir::zuan::ShapeInfo &":$shapeInfo)>
   ];
 }
 

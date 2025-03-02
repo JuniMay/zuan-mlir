@@ -112,7 +112,6 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
 }
 
 def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
-  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, ReturnLike, Terminator, HasParent<"zuan::MaskOp">,
 ]> {
@@ -121,12 +120,12 @@ def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
     `zuan.mask_yield` operation is the terminator of the mask region. Only tile
     type can be yielded, including 0-D tiles.
   }];
-  let arguments = (ins Optional<Zuan_TileType>:$tile);
+  let arguments = (ins Variadic<Zuan_TileType>:$tiles);
   let builders = [
     OpBuilder<(ins), [{ /* do nothing */ }]>
   ];
   let assemblyFormat = [{
-    ($tile^ `:` type($tile))? attr-dict
+    ($tiles^ `:` type($tiles))? attr-dict
   }];
 }
 
@@ -134,8 +133,7 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   RecursiveMemoryEffects,
-  SingleBlockImplicitTerminator<"zuan::MaskYieldOp">,
-  ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp", "zuan::YieldOp"]>,
+  SingleBlockImplicitTerminator<"zuan::MaskYieldOp">
 ]> {
   let summary = "A mask region for conditional execution";
   let description = [{
@@ -158,16 +156,16 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   let arguments = (ins ZuanTileOfType<[I1]>:$mask,
                        Optional<Zuan_TileType>:$maskedoff);
   let regions = (region SizedRegion<1>:$body);
-  let results = (outs Optional<Zuan_TileType>:$result);
+  let results = (outs Variadic<Zuan_TileType>:$results);
   
   let assemblyFormat = [{
     $mask `:` type($mask) 
     (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict 
-    (`:` type($result)^)?
+    (`:` type($results)^)?
   }];
 
   let builders = [
-    OpBuilder<(ins "Type":$resultType,
+    OpBuilder<(ins "TypeRange":$resultTypes,
                    "Value":$mask,
                    CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder,
                    CArg<"Value", "nullptr">:$maskedoff)>,
@@ -177,6 +175,11 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   ];
   let skipDefaultBuilders = 1;
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
+
+  let extraClassDeclaration = [{
+    Operation* getMaskedOp();
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -191,8 +194,10 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
 ]> {
   let summary = "Matrix multiplication operation in Zuan dialect";
   let description = [{
-    `zuan.matmul` operation computes the matrix multiplication of two tiles in
-    the most minor two dimensions. The leading should be compatible.
+    `zuan.matmul` operation computes the matrix multiplication of two tiles. If
+    the two operands differ in ranks, it will execute a matvec or vecmat mul.
+
+    The leading dims of the two tiles should be compatible.
   }];
 
   let arguments = (ins Zuan_TileType:$lhs, Zuan_TileType:$rhs);
@@ -203,6 +208,10 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
   }];
 
   let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Get the shared leading size of two operands.
+    unsigned getLeadingSize();
+  }];
 }
 
 def Zuan_ReductionOp : Zuan_Op<"reduction", [

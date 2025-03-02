@@ -17,7 +17,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/Support/LogicalResult.h"
 
 namespace mlir {
 namespace zuan {
@@ -70,6 +69,12 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
     auto dynamicOp = op->getParentOfType<DynamicOp>();
     shapeInfo.inferShape(dynamicOp, shapeInferenceState);
 
+    std::optional<std::pair<Value, Value>> masks;
+    if (auto maskOp = dyn_cast<MaskOp>(op->getParentOp())) {
+      masks = std::make_pair(maskOp.getMask(), maskOp.getMaskedoff());
+      rewriter.setInsertionPoint(maskOp);
+    }
+
     auto loc = op.getLoc();
 
     auto lhs = op.getLhs();
@@ -106,6 +111,7 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
           state.valueMap.map(valuesDefinedAbove.getArrayRef(),
                              valuesDefinedAbove.getArrayRef());
 
+          // Unrolling on the last dimension, regardless of the rank.
           UnrollOptions options(iv, b.getIndexAttr(1), lhsShape.size() - 1);
           options.overrideReduceUnitDim(true);
           auto unrolledLhs = getUnrolledValue(b, lhs, options, state);
@@ -118,17 +124,45 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
           }
           auto unrolledRhs = getUnrolledValue(b, rhs, options, state);
 
-          Value outer = rewriter.create<OuterOp>(loc, CombiningKind::MUL,
-                                                 unrolledLhs, unrolledRhs);
-          if (isa<FloatType>(elementType)) {
-            outer = rewriter.create<arith::AddFOp>(loc, accIter, outer);
+          Value res;
+          if (masks) {
+            auto [mask, maskedoff] = *masks;
+            auto type = op.getResult().getType();
+
+            auto outerOp = b.create<MaskOp>(
+                loc, type, mask, [&](OpBuilder &b, Location loc) {
+                  Value outer = b.create<OuterOp>(loc, CombiningKind::MUL,
+                                                  unrolledLhs, unrolledRhs);
+                  b.create<MaskYieldOp>(loc, outer);
+                });
+            Value outer = outerOp.getResult(0);
+            auto maskOp = b.create<MaskOp>(
+                loc, type, mask,
+                [&](OpBuilder &b, Location loc) {
+                  Value add;
+                  if (isa<FloatType>(elementType)) {
+                    add = b.create<arith::AddFOp>(loc, accIter, outer);
+                  } else {
+                    add = b.create<arith::AddIOp>(loc, accIter, outer);
+                  }
+                  b.create<MaskYieldOp>(loc, add);
+                },
+                maskedoff);
+            res = maskOp.getResult(0);
           } else {
-            outer = rewriter.create<arith::AddIOp>(loc, accIter, outer);
+            res = b.create<OuterOp>(loc, CombiningKind::MUL, unrolledLhs,
+                                    unrolledRhs);
+            if (isa<FloatType>(elementType)) {
+              res = b.create<arith::AddFOp>(loc, accIter, res);
+            } else {
+              res = b.create<arith::AddIOp>(loc, accIter, res);
+            }
           }
-          rewriter.create<scf::YieldOp>(loc, outer);
+
+          b.create<scf::YieldOp>(loc, res);
         });
 
-    op->getParentOfType<func::FuncOp>().dump();
+    // op->getParentOfType<func::FuncOp>().dump();
 
     rewriter.replaceOp(op, forOp.getResults());
     return success();

@@ -10,6 +10,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include <variant>
@@ -105,6 +106,7 @@ struct ShapeInfo {
   /// into the equivalence class. Otherwise, propagate the shape from the
   /// present one to the absent one.
   void markEquivalent(Value lhs, Value rhs);
+  void markEquivalent(ValueRange lhs, ValueRange rhs);
   /// Mark the shape of a value equivalent to another shape. If the value is
   /// already computed, just mark two shapes as equivalent. Otherwise set the
   /// shape.

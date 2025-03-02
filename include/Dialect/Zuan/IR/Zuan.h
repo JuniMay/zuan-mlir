@@ -33,4 +33,18 @@
 #define GET_OP_CLASSES
 #include "Zuan/IR/ZuanOps.h.inc"
 
+namespace mlir {
+namespace zuan {
+
+void createMaskOpRegion(OpBuilder &builder, Operation *maskedOp);
+
+/// Mask a given operation with a mas. If the mask is nullptr, return the
+/// original operation. This function does not handle def-use chains, and the
+/// caller is responsible for updating the uses of the original operation.
+Operation *maskOperation(OpBuilder &builder, Operation *maskedOp, Value mask,
+                         Value maskedoff = nullptr);
+
+} // namespace zuan
+} // namespace mlir
+
 #endif // DIALECT_ZUAN_IR_ZUAN_H
