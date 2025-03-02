@@ -8,6 +8,7 @@ set(
   MLIROptLib
   VPToLLVMConversion
   LinalgToZuanConversion
+  LowerZuan
 )
 
 add_llvm_executable(zuan-opt zuan-opt.cpp)

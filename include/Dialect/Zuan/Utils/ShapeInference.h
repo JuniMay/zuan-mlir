@@ -91,7 +91,7 @@ struct ShapeInfo {
   ShapeInfo() = default;
 
   /// Get the stored shape for a value.
-  std::optional<ShapeRef> getShape(Value value) const;
+  std::optional<ShapeRef> getShape(Value value);
   /// Get the stored shape, and map each dim into the leader of the equivalence
   /// class, and return the mapped shape.
   std::optional<ShapeVector> getShapeWithEquivalence(Value value);

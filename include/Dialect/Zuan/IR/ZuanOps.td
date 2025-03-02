@@ -186,7 +186,7 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
 def Zuan_MatmulOp : Zuan_Op<"matmul", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  Pure, InferTypeOpAdaptor,
   AllRanksMatch<["lhs", "rhs", "result"]>,
 ]> {
   let summary = "Matrix multiplication operation in Zuan dialect";
@@ -208,7 +208,7 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
 def Zuan_ReductionOp : Zuan_Op<"reduction", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
                           "result", "init", "$_self", "TileType::isCompatible">,
@@ -241,7 +241,7 @@ def Zuan_ReductionOp : Zuan_Op<"reduction", [
 def Zuan_LoadOp : Zuan_Op<"load", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  InferTypeOpAdaptor,
   AllShapesMatch<["base", "result"]>,
   AllElementTypesMatch<["base", "result"]>
 ]> {
@@ -260,8 +260,7 @@ def Zuan_LoadOp : Zuan_Op<"load", [
 def Zuan_StoreOp : Zuan_Op<"store", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>,
-  ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
+  AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Store a tile to a memref";
   let description = [{
@@ -279,7 +278,7 @@ def Zuan_StoreOp : Zuan_Op<"store", [
 def Zuan_SplatOp : Zuan_Op<"splat", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["value", "result"]>  
 ]> {
   let summary = "Extend the leading dimensions of a vector or scalar";
@@ -310,7 +309,7 @@ def Zuan_SplatOp : Zuan_Op<"splat", [
 def Zuan_OuterOp : Zuan_Op<"outer", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["lhs", "rhs", "result"]>
 ]> {
   let summary = "Outer operation";
@@ -347,8 +346,7 @@ def Zuan_OuterOp : Zuan_Op<"outer", [
 def Zuan_CastOp : Zuan_Op<"cast", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
-  AllShapesMatch<["tile", "result"]>
+  Pure, AllShapesMatch<["tile", "result"]>
 ]> {
   let summary = "Cast all elements of a tile to another type";
   let description = [{
@@ -368,7 +366,7 @@ def Zuan_CastOp : Zuan_Op<"cast", [
 def Zuan_StepOp : Zuan_Op<"step", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
+  Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["result", "start"]>
 ]> {
   let summary = "Step operation";
@@ -401,8 +399,7 @@ def Zuan_StepOp : Zuan_Op<"step", [
 def Zuan_SelectOp : Zuan_Op<"select", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  Pure, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
-  AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
+  Pure, AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
   AllTypesMatch<["lhs", "rhs", "result"]>
 ]> {
   let summary = "Select operation";
@@ -424,8 +421,7 @@ def Zuan_SelectOp : Zuan_Op<"select", [
 def Zuan_GatherOp : Zuan_Op<"gather", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  InferTypeOpAdaptor, ParentOneOf<["zuan::DynamicOp", "zuan::MaskOp"]>,
-  AllElementTypesMatch<["base", "result"]>
+  InferTypeOpAdaptor, AllElementTypesMatch<["base", "result"]>
 ]> {
   let summary = "Memory gather operation";
   let description = [{
@@ -454,8 +450,7 @@ def Zuan_GatherOp : Zuan_Op<"gather", [
 def Zuan_ScatterOp : Zuan_Op<"scatter", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  AllElementTypesMatch<["value", "base"]>,
-  ParentOneOf<["zuan::YieldOp", "zuan::MaskOp"]>
+  AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Memory scatter operation";
   let description = [{

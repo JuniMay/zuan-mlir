@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -21,6 +22,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/Support/Debug.h"
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -111,7 +113,7 @@ void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     auto memrefType = cast<MemRefType>(memref.getType());
     ShapeVector shape;
     for (unsigned i = 0, e = memrefType.getRank(); i < e; ++i) {
-      shape.push_back(DimSize(bbArg, i));
+      shape.push_back(DimSize(memref, i));
     }
     shapeInfo.markEquivalent(bbArg, shape);
   }
@@ -370,20 +372,48 @@ LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
   auto lhsShape = lhsType.getShape();
   auto rhsShape = rhsType.getShape();
 
+  auto lhsRank = lhsType.getRank();
+  auto rhsRank = rhsType.getRank();
+
+  size_t leadingSize;
+
+  llvm::dbgs() << "lhsRank: " << lhsRank << "\n";
+  llvm::dbgs() << "rhsRank: " << rhsRank << "\n";
+
+  if (lhsRank < rhsRank) {
+    assert(rhsRank >= 2 && "expected rank >= 2");
+    // (1) * k @ k * n => (1) * n
+    leadingSize = lhsRank - 1;
+  } else if (lhsRank > rhsRank) {
+    assert(lhsRank >= 2 && "expected rank >= 2");
+    // m * k @ k * (1) => m * (1)
+    leadingSize = rhsRank - 1;
+  } else {
+    assert(lhsRank >= 2 && "expected rank >= 2");
+    leadingSize = lhsRank - 2;
+  }
+
   auto lhsK = lhsShape.back();
-  auto rhsK = rhsShape[rhsShape.size() - 2];
+  auto rhsK = rhsShape[leadingSize];
+
   if (!TileType::isDimCompatible(lhsK, rhsK)) {
     return emitOptionalError(
         location,
         "expected the inner dimensions of the lhs and rhs to be compatible");
   }
 
-  ArrayRef<int64_t> lhsLeadingDims(lhsShape.begin(), lhsShape.size() - 2);
-  ArrayRef<int64_t> rhsLeadingDims(rhsShape.begin(), rhsShape.size() - 2);
+  ArrayRef<int64_t> lhsLeadingDims(lhsShape.begin(), leadingSize);
+  ArrayRef<int64_t> rhsLeadingDims(rhsShape.begin(), leadingSize);
   auto resultShape =
       TileType::selectStaticShape(lhsLeadingDims, rhsLeadingDims);
-  resultShape.push_back(lhsShape[lhsShape.size() - 2]);
-  resultShape.push_back(rhsShape.back());
+  if (lhsRank >= rhsRank) {
+    // M, if exists.
+    resultShape.push_back(lhsShape[lhsShape.size() - 2]);
+  }
+  if (rhsRank >= lhsRank) {
+    // N, if exists
+    resultShape.push_back(rhsShape.back());
+  }
 
   auto tileType = TileType::get(resultShape, lhsType.getElementType());
   inferred.push_back(tileType);
@@ -407,20 +437,40 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto lhsShape = *shapeInfo.getShape(lhs);
   auto rhsShape = *shapeInfo.getShape(rhs);
 
-  auto m = lhsShape[lhsShape.size() - 2];
+  auto lhsRank = lhs.getType().getRank();
+  auto rhsRank = rhs.getType().getRank();
+
+  size_t leadingSize;
+
+  if (lhsRank < rhsRank) {
+    assert(rhsRank >= 2 && "expected rank >= 2");
+    // (1) * k @ k * n => (1) * n
+    leadingSize = lhsRank - 1;
+  } else if (lhsRank > rhsRank) {
+    assert(lhsRank >= 2 && "expected rank >= 2");
+    // m * k @ k * (1) => m * (1)
+    leadingSize = rhsRank - 1;
+  } else {
+    assert(lhsRank >= 2 && "expected rank >= 2");
+    leadingSize = lhsRank - 2;
+  }
+
   auto lhsK = lhsShape.back();
-  auto rhsK = rhsShape[rhsShape.size() - 2];
-  auto n = rhsShape.back();
-
-  auto lhsLeadingDims = lhsShape.take_front(lhsShape.size() - 2);
-  auto rhsLeadingDims = rhsShape.take_front(rhsShape.size() - 2);
-
+  auto rhsK = rhsShape[leadingSize];
   shapeInfo.markEquivalent(lhsK, rhsK);
+  auto lhsLeadingDims = lhsShape.take_front(leadingSize);
+  auto rhsLeadingDims = rhsShape.take_front(leadingSize);
   shapeInfo.markEquivalent(lhsLeadingDims, rhsLeadingDims);
 
   ShapeVector resultShape(lhsLeadingDims.begin(), lhsLeadingDims.end());
-  resultShape.push_back(m);
-  resultShape.push_back(n);
+  if (lhsRank >= rhsRank) {
+    // M, if exists.
+    resultShape.push_back(lhsShape[lhsShape.size() - 2]);
+  }
+  if (rhsRank >= lhsRank) {
+    // N, if exists
+    resultShape.push_back(rhsShape.back());
+  }
   shapeInfo.markEquivalent(result, resultShape);
   if (auto mask = state.getMask()) {
     shapeInfo.markEquivalent(result, *mask);
@@ -438,11 +488,9 @@ Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
 
   if (unrollIdx == rank - 1) {
     // Unrolling on the rhs last dimension, no need to unroll the lhs.
-    auto lhsOptions = options;
     lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
   } else if (unrollIdx == rank - 2) {
     // Unrolling on the lhs second last dimension.
-    auto rhsOptions = options;
     rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
   } else if (unrollIdx < rank - 2) {
     // Unrolling the shared leading dims.

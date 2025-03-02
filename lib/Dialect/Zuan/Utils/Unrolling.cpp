@@ -33,7 +33,10 @@ Value getUnrolledValue(OpBuilder &builder, Value operand, UnrollOptions options,
     return state.valueMap.lookup(operand);
   }
   auto definingOp = operand.getDefiningOp();
-  assert(definingOp && "expected a defining operation");
+  if (!definingOp) {
+    // Block argument inside the dynamic op, and the parent block is not cloned.
+    return operand;
+  }
 
   auto newOp = unrollOp(builder, definingOp, options, state);
   assert(newOp->getNumResults() == 1 && "expected a single result");

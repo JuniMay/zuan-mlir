@@ -67,6 +67,7 @@ private:
 };
 
 struct UnrollState {
+  UnrollState() = default;
   /// The valueMap stores the values defined above the operation, or operations
   /// that does not need to be unrolled and is cloned as is. The unrolling
   /// process traverse the def-use from yielded scalars or memory write to their

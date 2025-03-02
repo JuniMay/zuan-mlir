@@ -15,6 +15,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/Support/Debug.h"
 #include <variant>
 
 #include "Zuan/IR/Zuan.h"
@@ -75,11 +76,10 @@ bool DimSize::operator<(const DimSize &rhs) const {
     return (*lhsValue).getAsOpaquePointer() <
            (*std::get_if<Value>(&rhs.dimsize)).getAsOpaquePointer();
   } else {
-    auto [lhsMemref, lhsDim] =
-        *std::get_if<std::pair<Value, unsigned>>(&dimsize);
+    auto [lhsMemref, lhsDim] = std::get<std::pair<Value, unsigned>>(dimsize);
     auto [rhsMemref, rhsDim] =
-        *std::get_if<std::pair<Value, unsigned>>(&rhs.dimsize);
-    if (lhsMemref.getAsOpaquePointer() != rhsMemref.getAsOpaquePointer()) {
+        std::get<std::pair<Value, unsigned>>(rhs.dimsize);
+    if (lhsMemref != rhsMemref) {
       return lhsMemref.getAsOpaquePointer() < rhsMemref.getAsOpaquePointer();
     }
     return lhsDim < rhsDim;
@@ -95,7 +95,7 @@ void DimSize::dump(llvm::raw_ostream &os) const {
     os << *constant;
     return;
   }
-  auto [memref, dim] = *std::get_if<std::pair<Value, unsigned>>(&dimsize);
+  auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
   os << "memref(" << memref << ", " << dim << ")";
 }
 
@@ -137,9 +137,10 @@ std::optional<int64_t> DimSize::getInteger() const {
   return std::nullopt;
 }
 
-std::optional<ShapeRef> ShapeInfo::getShape(Value value) const {
+std::optional<ShapeRef> ShapeInfo::getShape(Value value) {
   if (shapes.contains(value)) {
-    return shapes.lookup(value);
+    /// XXX: `lookup` leads to return from local reference.
+    return shapes[value];
   }
   return std::nullopt;
 }
@@ -197,8 +198,9 @@ void ShapeInfo::dump(llvm::raw_ostream &os) {
   os << "ShapeInfo:\n";
   for (auto [value, _] : shapes) {
     auto shape = *getShapeWithEquivalence(value);
-    os << "  " << value << " -> [";
+    os << "  " << value << " -> \n[\n";
     llvm::interleaveComma(shape, os, [&](DimSize dim) { dim.dump(os); });
+    os << "\n]\n";
   }
 }
 
@@ -209,7 +211,7 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
 
   // This should cover most operations in `arith` and `math` dialects.
   if (rootOp->hasTrait<OpTrait::Elementwise>() &&
-      rootOp->hasTrait<OpTrait::SameOperandsAndResultElementType>() &&
+      rootOp->hasTrait<OpTrait::SameOperandsAndResultType>() &&
       rootOp->hasTrait<OpTrait::OneResult>() &&
       rootOp->hasTrait<OpTrait::ZeroRegions>()) {
     if (!isa<TileType>(rootOp->getResult(0).getType())) {
@@ -290,6 +292,9 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
         inferShape(&op, state);
       }
     }
+
+    this->dump(llvm::dbgs());
+
     if (auto results = iface.getLoopResults()) {
       auto yieldValues = iface.getYieldedValues();
       for (auto [result, yield] : llvm::zip(*results, yieldValues)) {
