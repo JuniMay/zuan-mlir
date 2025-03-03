@@ -321,5 +321,76 @@ TileType getUnrolledTileType(TileType tileType, UnrollOptions options) {
   return TileType::get(newShape, elementType);
 }
 
+Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
+                        Value lhs, Value rhs) {
+  bool isInteger = false;
+  if (auto shapedType = dyn_cast<ShapedType>(lhs.getType())) {
+    isInteger = shapedType.getElementType().isInteger();
+  }
+  Value result;
+  switch (kind) {
+  case zuan::CombiningKind::ADD:
+    if (isInteger) {
+      result = b.create<arith::AddIOp>(loc, lhs, rhs);
+    } else {
+      result = b.create<arith::AddFOp>(loc, lhs, rhs);
+    }
+    break;
+  case zuan::CombiningKind::MUL:
+    if (isInteger) {
+      result = b.create<arith::MulIOp>(loc, lhs, rhs);
+    } else {
+      result = b.create<arith::MulFOp>(loc, lhs, rhs);
+    }
+    break;
+  case zuan::CombiningKind::MINIMUMF:
+    assert(!isInteger && "MINIMUMF is only supported for floating point types");
+    result = b.create<arith::MinimumFOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MAXIMUMF:
+    assert(!isInteger && "MAXIMUMF is only supported for floating point types");
+    result = b.create<arith::MaximumFOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MAXNUMF:
+    assert(!isInteger && "MAXNUMF is only supported for floating point types");
+    result = b.create<arith::MaxNumFOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MINNUMF:
+    assert(!isInteger && "MINNUMF is only supported for floating point types");
+    result = b.create<arith::MinNumFOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::AND:
+    assert(isInteger && "ANDI is only supported for integer types");
+    result = b.create<arith::AndIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::OR:
+    assert(isInteger && "ORI is only supported for integer types");
+    result = b.create<arith::OrIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::XOR:
+    assert(isInteger && "XORI is only supported for integer types");
+    result = b.create<arith::XOrIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MAXUI:
+    assert(isInteger && "MAXU is only supported for integer types");
+    result = b.create<arith::MaxUIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MINUI:
+    assert(isInteger && "MINU is only supported for integer types");
+    result = b.create<arith::MinUIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MAXSI:
+    assert(isInteger && "MAXS is only supported for integer types");
+    result = b.create<arith::MaxSIOp>(loc, lhs, rhs);
+    break;
+  case zuan::CombiningKind::MINSI:
+    assert(isInteger && "MINS is only supported for integer types");
+    result = b.create<arith::MinSIOp>(loc, lhs, rhs);
+    break;
+  }
+
+  return result;
+}
+
 } // namespace zuan
 } // namespace mlir

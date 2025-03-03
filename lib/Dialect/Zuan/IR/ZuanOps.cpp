@@ -511,7 +511,7 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto rhsShape = *shapeInfo.getShape(rhs);
 
   size_t leadingSize = getLeadingSize();
-  
+
   auto lhsRank = lhs.getType().getRank();
   auto rhsRank = rhs.getType().getRank();
 
@@ -664,7 +664,8 @@ void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     shapeInfo.markEquivalent(result, init);
   }
   if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+    // Mask is applied to the mask.
+    shapeInfo.markEquivalent(tile, *mask);
   }
 }
 
@@ -745,6 +746,7 @@ void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   }
   shapeInfo.markEquivalent(result, shape);
   if (auto mask = state.getMask()) {
+    // TODO: Maskedoff is not inferred.
     shapeInfo.markEquivalent(result, *mask);
   }
 }

@@ -18,23 +18,17 @@ namespace mlir {
 namespace zuan {
 
 class TileType;
-
-/// The policy for 1-D reduction.
-enum class Reduction1DPolicy {
-  /// Unroll the scalars and accumulate the results.
-  Parallel,
-  /// Partially accumulate chunks and reduce the final result.
-  Partial,
-};
+enum class CombiningKind : uint32_t;
 
 /// Options and parameters that controls the unrolling process.
 struct UnrollOptions {
   UnrollOptions(const UnrollOptions &) = default;
   UnrollOptions &operator=(const UnrollOptions &) = default;
 
-  UnrollOptions(OpFoldResult offset, OpFoldResult chunkSize, unsigned idx)
+  UnrollOptions(OpFoldResult offset, OpFoldResult chunkSize, unsigned idx,
+                bool reduceUnitDim)
       : offset(offset), chunkSize(chunkSize), unrollIdx(idx),
-        reduceUnitDim(true) {}
+        reduceUnitDim(reduceUnitDim) {}
 
   void overrideReduceUnitDim(bool reduce) { reduceUnitDim = reduce; }
   void overrideUnrollIdx(unsigned newDim) { unrollIdx = newDim; }
@@ -75,7 +69,7 @@ struct UnrollState {
   /// are not stored in the valueMap.
   IRMapping valueMap;
   /// The final yield block for store operations to insert.
-  Block* yieldBlock;
+  Block *yieldBlock;
 };
 
 /// Check if a memref value is defined inside a dynamic op.
@@ -100,6 +94,10 @@ SmallVector<int64_t> getUnrolledShape(ArrayRef<int64_t> shape,
                                       UnrollOptions options);
 
 TileType getUnrolledTileType(TileType tileType, UnrollOptions options);
+
+/// Create a combining operation with the given kind.
+Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
+                        Value lhs, Value rhs);
 
 } // namespace zuan
 } // namespace mlir

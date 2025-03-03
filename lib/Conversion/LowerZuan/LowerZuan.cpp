@@ -11,6 +11,7 @@
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/LLVM.h"
@@ -104,7 +105,7 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           auto accIter = iterArgs[0];
 
-          UnrollState state;
+          UnrollState state{IRMapping{}, nullptr};
           SetVector<Value> valuesDefinedAbove;
           mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(),
                                           valuesDefinedAbove);
@@ -112,8 +113,8 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
                              valuesDefinedAbove.getArrayRef());
 
           // Unrolling on the last dimension, regardless of the rank.
-          UnrollOptions options(iv, b.getIndexAttr(1), lhsShape.size() - 1);
-          options.overrideReduceUnitDim(true);
+          UnrollOptions options(iv, b.getIndexAttr(1), lhsShape.size() - 1,
+                                true);
           auto unrolledLhs = getUnrolledValue(b, lhs, options, state);
 
           if (rhsRank < lhsRank) {
@@ -169,11 +170,118 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
   }
 };
 
+struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
+  using OpRewritePattern<ReductionOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ReductionOp op,
+                                PatternRewriter &rewriter) const final {
+    SmallVector<int64_t> reductionDims{op.getDims()};
+
+    if (op.getTile().getType().getRank() == 0) {
+      return rewriter.notifyMatchFailure(op, "0-D corner case is ignored");
+    }
+    if (reductionDims.size() == 1 && reductionDims[0] == 0 &&
+        op.getTile().getType().getRank() == 1) {
+      // 1-D reduction, ignore for now.
+      return rewriter.notifyMatchFailure(op, "1-D reduction is ignored");
+    }
+
+    OpBuilder::InsertionGuard guard(rewriter);
+
+    ShapeInfo shapeInfo;
+    ShapeInferenceState shapeInferenceState;
+    auto dynamicOp = op->getParentOfType<DynamicOp>();
+    shapeInfo.inferShape(dynamicOp, shapeInferenceState);
+
+    Value mask = nullptr;
+    if (auto maskOp = dyn_cast<MaskOp>(op->getParentOp())) {
+      // TODO: Investigate if maskedoff should be used in reduction.
+      // `vector.multi_reduction` does not support the passthru value. And in VP
+      // dialect, masked off is also not supported. We already have an optional
+      // init value, so maybe the maskedoff should be ignored.
+      mask = maskOp.getMask();
+      rewriter.setInsertionPoint(maskOp);
+    }
+
+    auto loc = op.getLoc();
+    auto sourceShapeRef = *shapeInfo.getShape(op.getTile());
+    auto resultShapeRef = *shapeInfo.getShape(op.getResult());
+
+    SmallVector<OpFoldResult> resultShape =
+        llvm::map_to_vector(resultShapeRef, [&](DimSize dim) {
+          return dim.getOrCreateOpFoldResult(rewriter, loc);
+        });
+
+    auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+
+    auto elementType = op.getTile().getType().getElementType();
+    auto acc = op.getInit();
+    if (!acc) {
+      auto zero = rewriter.create<arith::ConstantOp>(
+          loc, elementType, rewriter.getZeroAttr(elementType));
+      acc = rewriter.create<zuan::SplatOp>(loc, zero, resultShape);
+    }
+
+    // sort reduction dims in descending order, so that expanding leading dims
+    // does not effect the dim idx;
+    llvm::sort(reductionDims.begin(), reductionDims.end(),
+               std::greater<int64_t>());
+
+    Value currAcc = acc;
+    Value currSource = op.getTile();
+    Value currMask = mask;
+
+    SmallVector<scf::ForOp> loops;
+    SmallVector<Value> valuesToYield;
+
+    UnrollState state{IRMapping{}, nullptr};
+    SetVector<Value> valuesDefinedAbove;
+    mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(), valuesDefinedAbove);
+    state.valueMap.map(valuesDefinedAbove.getArrayRef(),
+                       valuesDefinedAbove.getArrayRef());
+
+    for (auto dim : reductionDims) {
+      auto ub = sourceShapeRef[dim].getOrCreateValue(rewriter, loc);
+      auto loop = rewriter.create<scf::ForOp>(loc, zero, ub, one, currAcc);
+
+      rewriter.setInsertionPointToStart(loop.getBody());
+      UnrollOptions options(loop.getInductionVar(), rewriter.getIndexAttr(1),
+                            dim, true);
+      currSource = getUnrolledValue(rewriter, currSource, options, state);
+      if (currMask) {
+        currMask = getUnrolledValue(rewriter, currMask, options, state);
+      }
+      currAcc = loop.getRegionIterArg(0);
+
+      loops.push_back(loop);
+      valuesToYield.push_back(loop.getResult(0));
+    }
+
+    // Now at the innermost loop.
+    auto partialReduced =
+        createCombiningOp(rewriter, loc, op.getKind(), currAcc, currSource);
+    if (currMask) {
+      partialReduced = maskOperation(rewriter, partialReduced.getDefiningOp(),
+                                     currMask, nullptr)
+                           ->getResult(0);
+    }
+    rewriter.create<scf::YieldOp>(loc, partialReduced);
+    for (size_t i = 0; i < loops.size() - 1; ++i) {
+      rewriter.setInsertionPointToEnd(loops[i].getBody());
+      rewriter.create<scf::YieldOp>(loc, valuesToYield[i + 1]);
+    }
+    rewriter.replaceOp(op, loops.front());
+    return success();
+  }
+};
+
 } // namespace
 
 void LowerZuanPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
-  patterns.add<ZuanLowerMatmulPattern>(&getContext());
+  patterns.add<ZuanLowerMatmulPattern, ZuanLowerReductionPattern>(
+      &getContext());
 
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
