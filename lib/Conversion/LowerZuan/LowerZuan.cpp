@@ -18,6 +18,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include <cassert>
 
 namespace mlir {
 namespace zuan {
@@ -35,23 +36,93 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     ShapeInferenceState shapeInferenceState;
     shapeInfo.inferShape(op, shapeInferenceState);
 
-    // Check all the type shape <= targetRank.
-    bool unrolled = true;
-    op->walk([&](ZuanUnrollingInterface iface) {
-      auto shape = iface.getShapeToUnroll(shapeInfo);
-      if (shape->size() > targetRank) {
-        unrolled = false;
-        return WalkResult::interrupt();
-      } else {
-        return WalkResult::advance();
-      }
-    });
+    splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
 
-    if (!unrolled) {
-      return rewriter.notifyMatchFailure(op, "already unrolled");
+    auto bodyBlock = &op.getBody().front();
+    assert(bodyBlock->mightHaveTerminator() && "expected `zuan.yield`");
+    auto yieldOp = cast<YieldOp>(bodyBlock->getTerminator());
+    auto yieldRegion = &yieldOp.getRegion();
+
+    if (yieldRegion->getOps().empty()) {
+      return rewriter.notifyMatchFailure(
+          op, "empty yield region, other patterns are needed");
     }
 
-    // TODO
+    // Check all the type shape <= targetRank.
+    bool unrolled = true;
+    for (auto &op : yieldRegion->getOps()) {
+      if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
+        if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
+          if (shape->size() > targetRank) {
+            unrolled = false;
+            break;
+          }
+        }
+      }
+    }
+
+    if (unrolled) {
+      return rewriter.notifyMatchFailure(
+          op, "expected all the shapes to be <= targetRank");
+    }
+
+    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
+    assert(iface && "expected an unrolling interface");
+
+    auto loc = op->getLoc();
+
+    auto shape = iface.getShapeToUnroll(shapeInfo);
+    auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
+
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+
+    UnrollState state;
+    SetVector<Value> valuesDefinedAbove;
+    mlir::getUsedValuesDefinedAbove(op.getBody(), valuesDefinedAbove);
+    state.valueMap.map(valuesDefinedAbove.getArrayRef(),
+                       valuesDefinedAbove.getArrayRef());
+
+    auto loop = rewriter.create<scf::ForOp>(
+        loc, zero, dim, one, ValueRange{},
+        [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+          UnrollOptions options(iv, b.getIndexAttr(1), 0, true);
+          // Create new dynamic op.
+          SmallVector<Value> inits =
+              llvm::map_to_vector(op.getInits(), [&](Value init) {
+                return getUnrolledMemref(b, init, options, state);
+              });
+
+          b.create<DynamicOp>(
+              loc, inits, [&](OpBuilder &b, Location loc, ValueRange args) {
+                OpBuilder::InsertionGuard guard(b);
+
+                // Map the arguments.
+                state.valueMap.map(bodyBlock->getArguments(), args);
+
+                SmallVector<Value> newYieldOperands =
+                    llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
+                      return getUnrolledValue(b, value, options, state);
+                    });
+
+                auto newYieldOp =
+                    b.create<YieldOp>(loc, newYieldOperands, nullptr);
+                state.yieldBlock = &newYieldOp.getBody().front();
+                b.setInsertionPoint(newYieldOp);
+
+                for (auto &op : yieldRegion->getOps()) {
+                  unrollOp(b, &op, options, state);
+                }
+              });
+
+          b.create<scf::YieldOp>(loc);
+        });
+
+    loop->getParentOfType<func::FuncOp>().dump();
+    rewriter.replaceOp(op, loop);
+
+    return success();
   }
 
 private:
@@ -262,9 +333,10 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
     auto partialReduced =
         createCombiningOp(rewriter, loc, op.getKind(), currAcc, currSource);
     if (currMask) {
-      partialReduced = maskOperation(rewriter, partialReduced.getDefiningOp(),
-                                     currMask, nullptr)
-                           ->getResult(0);
+      partialReduced =
+          maskOperation(rewriter, loc, partialReduced.getDefiningOp(), currMask,
+                        currAcc)
+              ->getResult(0);
     }
     rewriter.create<scf::YieldOp>(loc, partialReduced);
     for (size_t i = 0; i < loops.size() - 1; ++i) {
@@ -272,6 +344,7 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
       rewriter.create<scf::YieldOp>(loc, valuesToYield[i + 1]);
     }
     rewriter.replaceOp(op, loops.front());
+    loops.front()->getParentOfType<func::FuncOp>().dump();
     return success();
   }
 };
@@ -282,6 +355,7 @@ void LowerZuanPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<ZuanLowerMatmulPattern, ZuanLowerReductionPattern>(
       &getContext());
+  patterns.add<ZuanUnrollLeadingDimPattern>(&getContext(), targetRank);
 
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();

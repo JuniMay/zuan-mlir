@@ -36,12 +36,12 @@
 namespace mlir {
 namespace zuan {
 
-void createMaskOpRegion(OpBuilder &builder, Operation *maskedOp);
+void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp);
 
 /// Mask a given operation with a mas. If the mask is nullptr, return the
 /// original operation. This function does not handle def-use chains, and the
 /// caller is responsible for updating the uses of the original operation.
-Operation *maskOperation(OpBuilder &builder, Operation *maskedOp, Value mask,
+Operation *maskOperation(OpBuilder &builder,Location loc,  Operation *maskedOp, Value mask,
                          Value maskedoff = nullptr);
 
 } // namespace zuan

@@ -20,7 +20,6 @@ namespace zuan {
 
 /// Size of a dimension in the shape.
 struct DimSize {
-  DimSize(Value value) : dimsize(value) {}
   DimSize(int64_t size) : dimsize(size) {}
   DimSize(Value memref, unsigned dim);
   DimSize(OpFoldResult ofr);

@@ -16,6 +16,7 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeRange.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
@@ -196,9 +197,43 @@ struct HoistMemRefOpPattern : OpRewritePattern<DynamicOp> {
   }
 };
 
+/// Elide dead block arguments and operands of this dynamic op.
+struct ElideDeadInitsPattern : OpRewritePattern<DynamicOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const override {
+    auto block = &op.getBody().front();
+    auto initArgs = block->getArguments();
+    auto inits = op.getInits();
+
+    SmallVector<Value> liveInits;
+    BitVector deadArgs(initArgs.size(), false);
+    for (auto [init, arg] : llvm::zip(inits, initArgs)) {
+      if (!arg.use_empty()) {
+        liveInits.push_back(init);
+      } else {
+        deadArgs.set(arg.getArgNumber());
+      }
+    }
+
+    if (liveInits.size() == inits.size()) {
+      return rewriter.notifyMatchFailure(op, "no dead inits");
+    }
+
+    rewriter.modifyOpInPlace(op, [&]() {
+      op.getInitsMutable().assign(liveInits);
+      block->eraseArguments(deadArgs);
+    });
+
+    return success();
+  }
+};
+
 void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern>(context);
+  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern, ElideDeadInitsPattern>(
+      context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -215,6 +250,7 @@ void YieldOp::build(OpBuilder &builder, OperationState &result) {
 void YieldOp::build(OpBuilder &builder, OperationState &result,
                     ValueRange scalars,
                     function_ref<void(OpBuilder &, Location)> bodyBuilder) {
+  OpBuilder::InsertionGuard guard(builder);
   result.addOperands(scalars);
   Region *bodyRegion = result.addRegion();
   Block *bodyBlock = builder.createBlock(bodyRegion);
@@ -250,6 +286,9 @@ LogicalResult YieldOp::verify() {
 }
 
 void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
+  if (getBody().empty()) {
+    return;
+  }
   auto bodyBlock = &getBody().front();
   for (auto &op : bodyBlock->getOperations()) {
     shapeInfo.inferShape(&op, state);
@@ -260,8 +299,9 @@ void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 // MaskOp
 //===----------------------------------------------------------------------===//
 
-void createMaskOpRegion(OpBuilder &builder, Operation *maskedOp) {
+void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp) {
   if (!maskedOp) {
+    builder.create<MaskYieldOp>(loc);
     return;
   }
   assert(maskedOp->getBlock() && "maskedOp must be inserted into a block");
@@ -271,15 +311,18 @@ void createMaskOpRegion(OpBuilder &builder, Operation *maskedOp) {
   builder.create<MaskYieldOp>(maskedOp->getLoc(), maskedOp->getResults());
 }
 
-Operation *maskOperation(OpBuilder &builder, Operation *maskedOp, Value mask,
-                         Value maskedoff) {
+Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
+                         Value mask, Value maskedoff) {
   if (!mask) {
     return maskedOp;
   }
-  auto resultTypes = maskedOp->getResultTypes();
+  TypeRange resultTypes{};
+  if (maskedOp) {
+    resultTypes = maskedOp->getResultTypes();
+  }
   return builder.create<MaskOp>(
-      maskedOp->getLoc(), resultTypes, mask,
-      [&](OpBuilder &b, Location loc) { createMaskOpRegion(b, maskedOp); },
+      loc, resultTypes, mask,
+      [&](OpBuilder &b, Location loc) { createMaskOpRegion(b, loc, maskedOp); },
       maskedoff);
 }
 
@@ -374,9 +417,27 @@ Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
   if (maskedoff) {
     maskedoff = getUnrolledValue(builder, maskedoff, options, state);
   }
-  auto maskableOp = getMaskedOp();
-  auto unrolledOp = unrollOp(builder, maskableOp, options, state);
-  return maskOperation(builder, unrolledOp, mask, maskedoff);
+  auto maskedOp = getMaskedOp();
+  if (maskedOp) {
+    maskedOp = unrollOp(builder, maskedOp, options, state);
+    return maskOperation(builder, getLoc(), maskedOp, mask, maskedoff);
+  } else {
+    // Just clone the yield op.
+    auto bodyBlock = &getBody().front();
+    auto terminator = cast<MaskYieldOp>(bodyBlock->getTerminator());
+    auto newOperands =
+        llvm::map_to_vector(terminator.getOperands(), [&](Value op) {
+          return getUnrolledValue(builder, op, options, state);
+        });
+    auto newResultTypes = llvm::map_to_vector(
+        newOperands, [&](Value opd) { return opd.getType(); });
+    return builder.create<MaskOp>(
+        getLoc(), newResultTypes, mask,
+        [&](OpBuilder &b, Location loc) {
+          b.create<MaskYieldOp>(loc, newOperands);
+        },
+        maskedoff);
+  }
 }
 
 std::optional<ShapeVector> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {

@@ -21,6 +21,7 @@
 #include "Zuan/IR/Zuan.h"
 #include "Zuan/Interfaces/ZuanInferShapeInterface.h"
 #include "Zuan/Utils/ShapeInference.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir {
 namespace zuan {
@@ -46,6 +47,18 @@ DimSize::DimSize(Value memref, unsigned dim) {
           dim, subviewSizes,
           [&](unsigned idx) { return droppedDims.test(idx); });
       if (auto value = unreducedDim.dyn_cast<Value>()) {
+        // TODO: Refactor this.
+        auto definingOp = value.getDefiningOp();
+        if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
+          auto memref = dimOp.getSource();
+          auto index = dimOp.getIndex();
+          if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
+            auto indexInteger =
+                cast<IntegerAttr>(constantOp.getValue()).getInt();
+            dimsize = std::make_pair(memref, indexInteger);
+            return;
+          }
+        }
         dimsize = value;
       } else {
         auto attr = cast<IntegerAttr>(unreducedDim.dyn_cast<Attribute>());
@@ -60,6 +73,16 @@ DimSize::DimSize(Value memref, unsigned dim) {
 
 DimSize::DimSize(OpFoldResult ofr) {
   if (auto value = ofr.dyn_cast<Value>()) {
+    auto definingOp = value.getDefiningOp();
+    if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
+      auto memref = dimOp.getSource();
+      auto index = dimOp.getIndex();
+      if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
+        auto indexInteger = cast<IntegerAttr>(constantOp.getValue()).getInt();
+        dimsize = std::make_pair(memref, indexInteger);
+        return;
+      }
+    }
     dimsize = value;
   } else {
     auto attr = cast<IntegerAttr>(ofr.dyn_cast<Attribute>());
@@ -214,6 +237,7 @@ void ShapeInfo::dump(llvm::raw_ostream &os) {
 void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
   if (auto shapedOp = dyn_cast<ZuanInferShapeInterface>(rootOp)) {
     shapedOp.inferShape(*this, state);
+    return;
   }
 
   // This should cover most operations in `arith` and `math` dialects.

@@ -10,8 +10,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
@@ -20,6 +22,7 @@
 #include "Zuan/Interfaces/ZuanUnrollingInterface.h"
 #include "Zuan/Utils/ShapeInference.h"
 #include "Zuan/Utils/Unrolling.h"
+#include "mlir/Transforms/RegionUtils.h"
 
 #define DEBUG_TYPE "zuan-unrolling"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE << "] ")
@@ -33,12 +36,13 @@ Value getUnrolledValue(OpBuilder &builder, Value operand, UnrollOptions options,
     return state.valueMap.lookup(operand);
   }
   auto definingOp = operand.getDefiningOp();
-  if (!definingOp) {
+  if (!definingOp && isa<BlockArgument>(operand)) {
     // Block argument inside the dynamic op, and the parent block is not cloned.
     return operand;
   }
-
+  assert(definingOp && "expected defining op");
   auto newOp = unrollOp(builder, definingOp, options, state);
+  LLVM_DEBUG(DBGS() << newOp->getName() <<"\n");
   assert(newOp->getNumResults() == 1 && "expected a single result");
   return newOp->getResult(0);
 }
@@ -256,7 +260,7 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
   }
 
   if (op->hasTrait<OpTrait::Elementwise>() &&
-      op->hasTrait<OpTrait::SameOperandsAndResultElementType>()) {
+      op->hasTrait<OpTrait::SameOperandsAndResultType>()) {
     SmallVector<Value> operands;
     for (auto operand : op->getOperands()) {
       operands.push_back(getUnrolledValue(builder, operand, options, state));
@@ -273,6 +277,14 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
 
   if (auto forOp = dyn_cast<scf::ForOp>(op)) {
     return unrollSCFForOp(builder, forOp, options, state);
+  }
+
+  if (auto dimOp = dyn_cast<memref::DimOp>(op)) {
+    // Should be mapped in the state.
+    auto memref = getUnrolledValue(builder, dimOp.getSource(), options, state);
+    // Clone it.
+    auto index = getUnrolledValue(builder, dimOp.getIndex(), options, state);
+    return builder.create<memref::DimOp>(op->getLoc(), memref, index);
   }
 
   if (isa<arith::CmpIOp, arith::CmpFOp>(op)) {
@@ -390,6 +402,84 @@ Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
   }
 
   return result;
+}
+
+void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
+                                unsigned unrollIdx, ShapeInfo &shapeInfo) {
+  OpBuilder::InsertionGuard guard(rewriter);
+
+  auto bodyBlock = &dynamicOp.getBody().front();
+  assert(bodyBlock->mightHaveTerminator() && "expected `zuan.yield`");
+  auto yieldOp = cast<YieldOp>(bodyBlock->getTerminator());
+
+  /// Map from dim to the operations that use the dim.
+  std::map<DimSize, SmallVector<Operation *>> dimToOps;
+  auto yieldRegion = &yieldOp.getRegion();
+
+  for (auto &op : yieldRegion->getOps()) {
+    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
+      if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
+        if (unrollIdx >= shape->size()) {
+          continue;
+        }
+        auto dim = (*shape)[unrollIdx];
+        if (dimToOps.count(dim) == 0) {
+          dimToOps[dim] = {};
+        }
+        dimToOps[dim].push_back(&op);
+      }
+    }
+  }
+
+  if (dimToOps.size() <= 1) {
+    return;
+  }
+
+  rewriter.setInsertionPoint(dynamicOp);
+
+  // Create a new dynamic op for each dim except for the first one.
+  for (auto [i, pair] : llvm::enumerate(dimToOps)) {
+    if (i == 0) {
+      continue;
+    }
+    auto dim = pair.first;
+    auto ops = pair.second;
+
+    rewriter.create<DynamicOp>(
+        dynamicOp->getLoc(), dynamicOp.getInits(),
+        [&](OpBuilder &builder, Location loc, ValueRange args) {
+          OpBuilder::InsertionGuard guard(builder);
+
+          UnrollOptions options(builder.getIndexAttr(0),
+                                dim.getOrCreateOpFoldResult(builder, loc),
+                                unrollIdx, false);
+          UnrollState state;
+          state.valueMap.map(bodyBlock->getArguments(), args);
+          SetVector<Value> valuesDefinedAbove;
+          mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(),
+                                          valuesDefinedAbove);
+          state.valueMap.map(valuesDefinedAbove.getArrayRef(),
+                             valuesDefinedAbove.getArrayRef());
+
+          auto yieldOp = builder.create<YieldOp>(loc);
+          state.yieldBlock = &yieldOp.getBody().front();
+
+          builder.setInsertionPoint(yieldOp);
+
+          for (auto op : ops) {
+            unrollOp(builder, op, options, state);
+          }
+        });
+  }
+
+  for (auto [i, pair] : llvm::enumerate(dimToOps)) {
+    if (i == 0) {
+      continue;
+    }
+    for (auto op : pair.second) {
+      rewriter.eraseOp(op);
+    }
+  }
 }
 
 } // namespace zuan

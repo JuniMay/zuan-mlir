@@ -7,10 +7,12 @@
 #ifndef ZUAN_UTILS_UNROLLING_H
 #define ZUAN_UTILS_UNROLLING_H
 
+#include "Zuan/Utils/ShapeInference.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 
@@ -18,6 +20,7 @@ namespace mlir {
 namespace zuan {
 
 class TileType;
+class DynamicOp;
 enum class CombiningKind : uint32_t;
 
 /// Options and parameters that controls the unrolling process.
@@ -98,6 +101,13 @@ TileType getUnrolledTileType(TileType tileType, UnrollOptions options);
 /// Create a combining operation with the given kind.
 Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
                         Value lhs, Value rhs);
+
+/// Split the dynamic op for unrolling. If the rank of store in yield op is
+/// larger than target stores, and the dimsize does not equivalent to the
+/// selected one, create a new dynamic op and move all the incompatible stores
+/// to the new dynamic op.
+void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
+                                unsigned unrollIdx, ShapeInfo &shapeInfo);
 
 } // namespace zuan
 } // namespace mlir
