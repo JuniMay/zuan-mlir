@@ -242,8 +242,12 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
       }
     }
 
-    if (auto mask = state.getMask()) {
-      this->markEquivalent(rootOp->getResult(0), *mask);
+    if (auto maskPair = state.getMask()) {
+      auto [mask, maskedoff] = *maskPair;
+      this->markEquivalent(rootOp->getResult(0), mask);
+      if (maskedoff) {
+        this->markEquivalent(rootOp->getResult(0), maskedoff);
+      }
     }
 
     return;
@@ -258,8 +262,12 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     }
     this->markEquivalent(rootOp->getResult(0), lhs);
     this->markEquivalent(lhs, rhs);
-    if (auto mask = state.getMask()) {
-      this->markEquivalent(rootOp->getResult(0), *mask);
+    if (auto maskPair = state.getMask()) {
+      auto [mask, maskedoff] = *maskPair;
+      this->markEquivalent(rootOp->getResult(0), mask);
+      if (maskedoff) {
+        this->markEquivalent(rootOp->getResult(0), maskedoff);
+      }
     }
     return;
   }

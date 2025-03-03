@@ -143,10 +143,10 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
     elements.
 
     If no passthru provided, using the masked-off values is undefined, the
-    result can be arbitrary. The mask region can be nested, all the masks will
-    be combined with logical AND.
+    result can be arbitrary. 
 
-    The passthru and mask are up to operations to decide their semantics.
+    The passthru and mask are up to operations to decide their semantics. The
+    mask regions cannot be nested.
 
     The mask op can also be used inside the yield op to implement masked stores.
 

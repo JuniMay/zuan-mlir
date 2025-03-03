@@ -68,24 +68,21 @@ struct ShapeInferenceState {
   ShapeInferenceState() = default;
 
   /// Get the top mask in the stack.
-  std::optional<Value> getMask() const {
-    if (maskStack.empty()) {
-      return std::nullopt;
-    }
-    return maskStack.back();
+  std::optional<std::pair<Value, Value>> getMask() const {
+    return maskPair;
   }
-  void pushMask(Value mask) { maskStack.push_back(mask); }
-  std::optional<Value> popMask() {
-    if (maskStack.empty()) {
-      return std::nullopt;
-    }
-    Value mask = maskStack.pop_back_val();
-    return mask;
+  void setMask(Value mask, Value maskedoff = nullptr) {
+    maskPair = std::make_pair(mask, maskedoff);
+  }
+  std::optional<std::pair<Value, Value>> resetMask() {
+    auto pair = maskPair;
+    maskPair = std::nullopt;
+    return pair;
   }
 
 private:
   /// The stack of masks.
-  SmallVector<Value> maskStack;
+  std::optional<std::pair<Value, Value>> maskPair;
 };
 
 struct ShapeInfo {

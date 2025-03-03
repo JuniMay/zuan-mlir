@@ -325,6 +325,9 @@ void MaskOp::build(OpBuilder &builder, OperationState &result, Value mask,
 }
 
 LogicalResult MaskOp::verify() {
+  if ((*this)->getParentOfType<MaskOp>()) {
+    return emitOpError("nested `zuan.mask` is not allowed");
+  }
   auto mask = getMask();
   // Check the returned types are the same as the maskedoff value.
   if (auto maskedoff = getMaskedoff()) {
@@ -355,17 +358,13 @@ void MaskOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     // Mask and Maskedoff (passthru) are shape-equivalent.
     shapeInfo.markEquivalent(mask, maskedoff);
   }
-  if (auto parentMask = state.getMask()) {
-    // Nested masks are shape-equivalent.
-    shapeInfo.markEquivalent(mask, *parentMask);
-  }
-  state.pushMask(mask);
+  state.setMask(mask);
   // Recursively infer the shape of the masked region.
   auto bodyBlock = &getBody().front();
   for (auto &op : bodyBlock->getOperations()) {
     shapeInfo.inferShape(&op, state);
   }
-  state.popMask();
+  state.resetMask();
 }
 
 Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -532,8 +531,15 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     resultShape.push_back(rhsShape.back());
   }
   shapeInfo.markEquivalent(result, resultShape);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  // if (auto mask = state.getMask()) {
+  //   shapeInfo.markEquivalent(result, *mask);
+  // }
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -663,9 +669,13 @@ void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   if (init) {
     shapeInfo.markEquivalent(result, init);
   }
-  if (auto mask = state.getMask()) {
-    // Mask is applied to the mask.
-    shapeInfo.markEquivalent(tile, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(tile, mask);
+    if (maskedoff) {
+      // TODO: Check if maskedoff should be used in reduction.
+      shapeInfo.markEquivalent(tile, maskedoff);
+    }
   }
 }
 
@@ -745,9 +755,12 @@ void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     shape.push_back(DimSize(base, i));
   }
   shapeInfo.markEquivalent(result, shape);
-  if (auto mask = state.getMask()) {
-    // TODO: Maskedoff is not inferred.
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -776,8 +789,13 @@ void StoreOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     shape.push_back(DimSize(base, i));
   }
   shapeInfo.markEquivalent(value, shape);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(value, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(value, mask);
+    if (maskedoff) {
+      // TODO: Check if maskedoff should be used in store.
+      shapeInfo.markEquivalent(value, maskedoff);
+    }
   }
 }
 
@@ -863,8 +881,13 @@ void SplatOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   }
   auto result = getResult();
   shapeInfo.markEquivalent(result, shape);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -980,8 +1003,12 @@ void OuterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   shapeInfo.markEquivalent(result, resultShape);
   shapeInfo.markEquivalent(lhsShape.take_front(leadingRank),
                            rhsShape.take_front(leadingRank));
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -1084,8 +1111,12 @@ void StepOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
       sizes, [&](OpFoldResult ofr) { return DimSize(ofr); });
 
   shapeInfo.markEquivalent(result, shape);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -1183,8 +1214,12 @@ void CastOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto source = getTile();
   auto result = getResult();
   shapeInfo.markEquivalent(source, result);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -1223,8 +1258,12 @@ void SelectOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   shapeInfo.markEquivalent(lhs, cond);
   shapeInfo.markEquivalent(lhs, rhs);
   shapeInfo.markEquivalent(lhs, result);
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -1289,8 +1328,12 @@ void GatherOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   for (unsigned i = 1, e = indices.size(); i < e; ++i) {
     shapeInfo.markEquivalent(indices[0], indices[i]);
   }
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(result, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(result, mask);
+    if (maskedoff) {
+      shapeInfo.markEquivalent(result, maskedoff);
+    }
   }
 }
 
@@ -1338,8 +1381,13 @@ void ScatterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   for (unsigned i = 1, e = indices.size(); i < e; ++i) {
     shapeInfo.markEquivalent(indices[0], indices[i]);
   }
-  if (auto mask = state.getMask()) {
-    shapeInfo.markEquivalent(value, *mask);
+  if (auto maskPair = state.getMask()) {
+    auto [mask, maskedoff] = *maskPair;
+    shapeInfo.markEquivalent(value, mask);
+    if (maskedoff) {
+      // TODO: Check if maskedoff should be used in scatter.
+      shapeInfo.markEquivalent(value, maskedoff);
+    }
   }
 }
 
