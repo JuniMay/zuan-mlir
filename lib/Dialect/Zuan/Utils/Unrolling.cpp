@@ -33,6 +33,7 @@ namespace zuan {
 Value getUnrolledValue(OpBuilder &builder, Value operand, UnrollOptions options,
                        UnrollState &state) {
   if (state.valueMap.contains(operand)) {
+    // This is defined above, or fallback to clone.
     return state.valueMap.lookup(operand);
   }
   auto definingOp = operand.getDefiningOp();
@@ -40,11 +41,10 @@ Value getUnrolledValue(OpBuilder &builder, Value operand, UnrollOptions options,
     // Block argument inside the dynamic op, and the parent block is not cloned.
     return operand;
   }
-  assert(definingOp && "expected defining op");
-  auto newOp = unrollOp(builder, definingOp, options, state);
-  LLVM_DEBUG(DBGS() << newOp->getName() <<"\n");
-  assert(newOp->getNumResults() == 1 && "expected a single result");
-  return newOp->getResult(0);
+  auto opResult = dyn_cast<OpResult>(operand);
+  assert(opResult && "expected an op result");
+  auto newOp = unrollOp(builder, opResult.getOwner(), options, state);
+  return newOp->getResult(opResult.getResultNumber());
 }
 
 bool isMemrefDefinedInsideDynamicOp(Value value) {
@@ -301,7 +301,17 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
     }
   }
 
-  LLVM_DEBUG(DBGS() << "Fallback to default: " << op->getName() << "\n");
+  if (op->getNumSuccessors() == 0 && op->getNumRegions() == 0) {
+    // Recursively clone its operands. Assume no regions here.
+    SmallVector<Value> operands;
+    for (auto operand : op->getOperands()) {
+      operands.push_back(getUnrolledValue(builder, operand, options, state));
+    }
+    return builder.create(op->getLoc(), op->getName().getIdentifier(), operands,
+                          op->getResultTypes(), op->getAttrs());
+  }
+
+  LLVM_DEBUG(DBGS() << "Fallback to clone: " << op->getName() << "\n");
   return builder.clone(*op, state.valueMap);
 }
 

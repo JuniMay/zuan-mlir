@@ -13,6 +13,7 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/EquivalenceClasses.h"
+#include <utility>
 #include <variant>
 
 namespace mlir {
@@ -42,6 +43,7 @@ struct DimSize {
   /// Get the integer value of the dimsize, if it is an integer. Otherwise,
   std::optional<int64_t> getInteger() const;
 
+
 private:
   /// The size can be a value, constant or corresponding to the size of a
   /// memref.
@@ -57,6 +59,8 @@ private:
       // This dim corresponds to a dim in a memref.
       std::pair<Value, unsigned>>
       dimsize;
+
+  static std::optional<std::pair<Value, unsigned>> getAsMemrefDim(Value value);
 };
 
 using ShapeVector = SmallVector<DimSize>;

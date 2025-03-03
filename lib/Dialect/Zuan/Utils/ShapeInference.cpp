@@ -26,6 +26,19 @@
 namespace mlir {
 namespace zuan {
 
+std::optional<std::pair<Value, unsigned>> DimSize::getAsMemrefDim(Value value) {
+  auto definingOp = value.getDefiningOp();
+  if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
+    auto memref = dimOp.getSource();
+    auto index = dimOp.getIndex();
+    if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
+      auto indexInteger = cast<IntegerAttr>(constantOp.getValue()).getInt();
+      return std::make_pair(memref, indexInteger);
+    }
+  }
+  return std::nullopt;
+}
+
 DimSize::DimSize(Value memref, unsigned dim) {
   auto memrefType = dyn_cast<MemRefType>(memref.getType());
   if (!memrefType) {
@@ -47,19 +60,11 @@ DimSize::DimSize(Value memref, unsigned dim) {
           dim, subviewSizes,
           [&](unsigned idx) { return droppedDims.test(idx); });
       if (auto value = unreducedDim.dyn_cast<Value>()) {
-        // TODO: Refactor this.
-        auto definingOp = value.getDefiningOp();
-        if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
-          auto memref = dimOp.getSource();
-          auto index = dimOp.getIndex();
-          if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
-            auto indexInteger =
-                cast<IntegerAttr>(constantOp.getValue()).getInt();
-            dimsize = std::make_pair(memref, indexInteger);
-            return;
-          }
+        if (auto pair = getAsMemrefDim(value)) {
+          dimsize = *pair;
+        } else {
+          dimsize = value;
         }
-        dimsize = value;
       } else {
         auto attr = cast<IntegerAttr>(unreducedDim.dyn_cast<Attribute>());
         dimsize = attr.getInt();
@@ -73,17 +78,11 @@ DimSize::DimSize(Value memref, unsigned dim) {
 
 DimSize::DimSize(OpFoldResult ofr) {
   if (auto value = ofr.dyn_cast<Value>()) {
-    auto definingOp = value.getDefiningOp();
-    if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
-      auto memref = dimOp.getSource();
-      auto index = dimOp.getIndex();
-      if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
-        auto indexInteger = cast<IntegerAttr>(constantOp.getValue()).getInt();
-        dimsize = std::make_pair(memref, indexInteger);
-        return;
-      }
+    if (auto pair = getAsMemrefDim(value)) {
+      dimsize = *pair;
+    } else {
+      dimsize = value;
     }
-    dimsize = value;
   } else {
     auto attr = cast<IntegerAttr>(ofr.dyn_cast<Attribute>());
     dimsize = attr.getInt();
