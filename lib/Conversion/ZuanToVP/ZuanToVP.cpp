@@ -244,12 +244,88 @@ private:
   bool scalable;
 };
 
+struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
+  explicit ZuanTilingPattern(MLIRContext *context, unsigned uf)
+      : OpRewritePattern<DynamicOp>(context, 1), uf(uf) {}
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const final {
+    ShapeInfo shapeInfo;
+    ShapeInferenceState shapeInferenceState;
+    shapeInfo.inferShape(op, shapeInferenceState);
+
+    splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
+    
+    // TODO: Refactor this preparation code.
+    auto yieldOp = op.getYieldOp();
+    auto yieldRegion = &yieldOp.getBody();
+    if (yieldRegion->getOps().empty()) {
+      // TODO: Split the scalar operations.
+      // Scalars are produced with 1-D reduction or dummy splat. So no need to
+      // stripmine them anymore.
+      return rewriter.notifyMatchFailure(op, "empty yield region");
+    }
+
+    if (yieldOp->getNumOperands() != 0) {
+      return rewriter.notifyMatchFailure(op, "expected no operand");
+    }
+
+    auto loc = op.getLoc();
+
+    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
+    assert(iface && "expected an unrolling interface");
+
+    auto shape = iface.getShapeToUnroll(shapeInfo);
+
+    if (shape->size() < 2) {
+      return rewriter.notifyMatchFailure(op, "< 2-D operations");
+    }
+
+    if (auto integer = shape->front().getInteger()) {
+      if (*integer == uf) {
+        return rewriter.notifyMatchFailure(op, "already tiled");
+      }
+    }
+
+    // All shapes are now the same and >= target-rank, so should be safe
+    // to access the first.
+    auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
+
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value step = rewriter.create<arith::ConstantIndexOp>(loc, uf);
+
+    UnrollState state;
+    state.initialize(op);
+
+    // Make sure no use-before-def is produced.
+    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
+
+    auto loop = rewriter.create<scf::ForOp>(
+        loc, zero, dim, step, ValueRange{},
+        [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+          UnrollOptions options(iv, b.getIndexAttr(uf), 0, false);
+          op.unroll(b, options, state);
+          b.create<scf::YieldOp>(loc);
+        });
+
+    // loop->getParentOfType<func::FuncOp>().dump();
+    rewriter.replaceOp(op, loop);
+
+    return success();
+  }
+
+private:
+  unsigned uf;
+};
+
 } // namespace
 
 void ZuanStripminingPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<ZuanStripminingReduction1DPattern, ZuanStripminingPattern>(
       &getContext(), vf, scalable);
+  patterns.add<ZuanTilingPattern>(&getContext(), uf);
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
   }
