@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
   mlir::zuan::registerConvertLinalgToZuanPass();
   mlir::zuan::registerLowerZuanPass();
   mlir::zuan::registerZuanStripminingPass();
+  mlir::zuan::registerConvertZuanToVPPass();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::vp::VPDialect>();

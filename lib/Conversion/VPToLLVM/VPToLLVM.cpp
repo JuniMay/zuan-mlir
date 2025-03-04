@@ -898,6 +898,7 @@ void ConvertVPToLLVMPass::runOnOperation() {
 
   RewritePatternSet patterns(ctx);
   populateVPToLLVMConversionPatterns(typeConverter, patterns, enableRVV);
+  vp::PredicateOp::getCanonicalizationPatterns(patterns, ctx);
 
   if (failed(applyPartialConversion(moduleOp, target, std::move(patterns)))) {
     return signalPassFailure();

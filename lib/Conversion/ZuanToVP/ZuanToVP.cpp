@@ -1,6 +1,7 @@
 #include "Conversion/ZuanToVP.h"
 #include "VP/IR/VP.h"
 #include "Zuan/IR/Zuan.h"
+#include "Zuan/Utils/ConvertToVP.h"
 #include "Zuan/Utils/Unrolling.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -255,7 +256,7 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     shapeInfo.inferShape(op, shapeInferenceState);
 
     splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
-    
+
     // TODO: Refactor this preparation code.
     auto yieldOp = op.getYieldOp();
     auto yieldRegion = &yieldOp.getBody();
@@ -319,6 +320,34 @@ private:
   unsigned uf;
 };
 
+struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
+  explicit ConvertZuanToVPPattern(MLIRContext *context, unsigned vf,
+                                  bool scalable)
+      : OpRewritePattern(context), vf(vf), scalable(scalable) {}
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const final {
+    op->dump();
+    ShapeInfo shapeInfo;
+    ShapeInferenceState shapeInferenceState;
+    shapeInfo.inferShape(op, shapeInferenceState);
+
+    VPConversionState state;
+    state.vf = vf;
+    state.scalable = scalable;
+    state.initialize(op);
+
+    convertToVP(rewriter, op, shapeInfo, state);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  unsigned vf;
+  bool scalable;
+};
+
 } // namespace
 
 void ZuanStripminingPass::runOnOperation() {
@@ -337,7 +366,22 @@ void ZuanStripminingPass::getDependentDialects(
                   arith::ArithDialect, memref::MemRefDialect>();
 }
 
+void ConvertZuanToVPPass::runOnOperation() {
+  RewritePatternSet patterns(&getContext());
+  patterns.add<ConvertZuanToVPPattern>(&getContext(), vf, scalable);
+  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+    signalPassFailure();
+  }
+}
+
+void ConvertZuanToVPPass::getDependentDialects(
+    DialectRegistry &registry) const {
+  registry.insert<zuan::ZuanDialect, vp::VPDialect, scf::SCFDialect,
+                  arith::ArithDialect, memref::MemRefDialect>();
+}
+
 void registerZuanStripminingPass() { PassRegistration<ZuanStripminingPass>(); }
+void registerConvertZuanToVPPass() { PassRegistration<ConvertZuanToVPPass>(); }
 
 } // namespace zuan
 } // namespace mlir

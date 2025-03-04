@@ -18,7 +18,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 
 def VPScalar : AnyTypeOf<[
-  F16, F32, F64, F128, BF16, I8, I16, I32, I64, I128, Index]>;
+  F16, F32, F64, F128, BF16, I1, I8, I16, I32, I64, I128, Index]>;
 
 def VPVector : ScalableVectorOfRankAndLengthAndType<
   [1], [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
