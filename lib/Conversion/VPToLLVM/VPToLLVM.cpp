@@ -584,7 +584,8 @@ public:
 
           auto [strides, offset] =
               storeOp.getMemRefType().getStridesAndOffset();
-          if (!storeOp.getMemRefType().getLayout().isIdentity()) {
+          auto rank = storeOp.getMemRefType().getRank();
+          if (strides[rank - 1] != 1) {
             // strided load
             MemRefDescriptor memrefDesc(baseStruct);
             unsigned pos = storeOp.getMemRefType().getRank() - 1;
