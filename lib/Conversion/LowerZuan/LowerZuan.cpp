@@ -16,7 +16,6 @@
 #include "mlir/IR/Visitors.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include <cassert>
 
@@ -68,10 +67,7 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
 
     UnrollState state;
-    SetVector<Value> valuesDefinedAbove;
-    mlir::getUsedValuesDefinedAbove(op.getBody(), valuesDefinedAbove);
-    state.valueMap.map(valuesDefinedAbove.getArrayRef(),
-                       valuesDefinedAbove.getArrayRef());
+    state.initialize(op);
 
     // Make sure no use-before-def is produced.
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
@@ -142,12 +138,7 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
           auto accIter = iterArgs[0];
 
           UnrollState state{IRMapping{}, nullptr};
-          SetVector<Value> valuesDefinedAbove;
-          mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(),
-                                          valuesDefinedAbove);
-          state.valueMap.map(valuesDefinedAbove.getArrayRef(),
-                             valuesDefinedAbove.getArrayRef());
-
+          state.initialize(dynamicOp);
           // Unrolling on the last dimension, regardless of the rank.
           UnrollOptions options(iv, b.getIndexAttr(1), lhsShape.size() - 1,
                                 true);
@@ -272,10 +263,7 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
     SmallVector<Value> valuesToYield;
 
     UnrollState state{IRMapping{}, nullptr};
-    SetVector<Value> valuesDefinedAbove;
-    mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(), valuesDefinedAbove);
-    state.valueMap.map(valuesDefinedAbove.getArrayRef(),
-                       valuesDefinedAbove.getArrayRef());
+    state.initialize(dynamicOp);
 
     for (auto dim : reductionDims) {
       auto ub = sourceShapeRef[dim].getOrCreateValue(rewriter, loc);

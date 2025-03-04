@@ -1,4 +1,7 @@
-// RUN: zuan-opt -verify-diagnostics %s | FileCheck %s
+// RUN: zuan-opt -convert-linalg-to-zuan \
+// RUN:          -lower-zuan='target-rank=2' \
+// RUN:          -zuan-stripmining='vf=8 scalable=true' %s \
+// RUN: | FileCheck %s
 
 // CHECK-LABEL: func.func @softmax
 func.func @softmax(%src: memref<?xf32>, %dst: memref<?xf32>) {

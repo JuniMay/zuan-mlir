@@ -250,16 +250,17 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
 
     /// Get the specified operand index that is shape-equivalent to the result.
     if (auto idx =
-            rootOp->getAttrOfType<IntegerAttr>("zuan_res_shape_eq_opd")) {
+            rootOp->getAttrOfType<IntegerAttr>("zuan_passthru_operand")) {
       auto opd = rootOp->getOperand(idx.getInt());
       this->markEquivalent(rootOp->getResult(0), opd);
+      // This will be translated to tail-undisturbed manner in VP dialect.
     } else {
       auto opd = rootOp->getOperand(0);
       this->markEquivalent(rootOp->getResult(0), opd);
-    }
-
-    /// Optionally mark operand shapes as equivalent.
-    if (!rootOp->hasAttr("zuan_opd_shape_neq")) {
+      for (auto opd : llvm::drop_begin(rootOp->getOperands(), 1)) {
+        this->markEquivalent(opd, rootOp->getOperand(0));
+      }
+      // Mark all operands shape equivalent if no passthru operand is specified.
       for (auto opd : llvm::drop_begin(rootOp->getOperands(), 1)) {
         this->markEquivalent(opd, rootOp->getOperand(0));
       }

@@ -492,7 +492,8 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
   }
 }
 
-bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank, ShapeInfo &shapeInfo) {
+bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank,
+                         ShapeInfo &shapeInfo) {
   auto yieldOp = dynamicOp.getYieldOp();
   auto yieldRegion = &yieldOp.getRegion();
 
@@ -509,6 +510,13 @@ bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank, ShapeInfo &sh
   }
 
   return unrolled;
+}
+
+void UnrollState::initialize(DynamicOp op) {
+  SetVector<Value> valuesDefinedAbove;
+  mlir::getUsedValuesDefinedAbove(op.getBody(), valuesDefinedAbove);
+  this->valueMap.map(valuesDefinedAbove.getArrayRef(),
+                     valuesDefinedAbove.getArrayRef());
 }
 
 } // namespace zuan

@@ -9,6 +9,7 @@ set(
   VPToLLVMConversion
   LinalgToZuanConversion
   LowerZuan
+  ZuanToVPConversion
 )
 
 add_llvm_executable(zuan-opt zuan-opt.cpp)

@@ -77,6 +77,8 @@ struct UnrollState {
   IRMapping valueMap;
   /// The final yield block for store operations to insert.
   Block *yieldBlock;
+
+  void initialize(DynamicOp op);
 };
 
 /// Check if a memref value is defined inside a dynamic op.

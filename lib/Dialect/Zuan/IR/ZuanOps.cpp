@@ -1016,7 +1016,7 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
     }
   }
 
-  if (unrollIdx >= dims.size()) {
+  if (unrollIdx < dims.size()) {
     options.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
   }
 
