@@ -60,6 +60,7 @@ def Zuan_YieldOp : Zuan_Op<"yield", [
 }
 
 def Zuan_DynamicOp : Zuan_Op<"dynamic", [
+  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DestinationStyleOpInterface,
@@ -96,6 +97,8 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
 
   let extraClassDeclaration = [{
     MutableOperandRange getDpsInitsMutable() { return getInitsMutable(); }
+
+    zuan::YieldOp getYieldOp();
   }];
 
   let builders = [

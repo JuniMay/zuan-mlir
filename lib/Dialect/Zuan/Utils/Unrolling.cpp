@@ -492,5 +492,24 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
   }
 }
 
+bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank, ShapeInfo &shapeInfo) {
+  auto yieldOp = dynamicOp.getYieldOp();
+  auto yieldRegion = &yieldOp.getRegion();
+
+  bool unrolled = true;
+  for (auto &op : yieldRegion->getOps()) {
+    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
+      if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
+        if (shape->size() > targetRank) {
+          unrolled = false;
+          break;
+        }
+      }
+    }
+  }
+
+  return unrolled;
+}
+
 } // namespace zuan
 } // namespace mlir

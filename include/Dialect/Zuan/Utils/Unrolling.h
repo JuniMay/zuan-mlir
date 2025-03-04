@@ -63,6 +63,10 @@ private:
   bool reduceUnitDim;
 };
 
+inline UnrollOptions getCloneOptions() {
+  return UnrollOptions(nullptr, nullptr, UnrollOptions::kNoUnrollIdx, false);
+}
+
 struct UnrollState {
   UnrollState() = default;
   /// The valueMap stores the values defined above the operation, or operations
@@ -108,6 +112,9 @@ Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
 /// to the new dynamic op.
 void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
                                 unsigned unrollIdx, ShapeInfo &shapeInfo);
+
+bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank,
+                         ShapeInfo &shapeInfo);
 
 } // namespace zuan
 } // namespace mlir

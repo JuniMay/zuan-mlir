@@ -38,30 +38,17 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
 
     splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
 
-    auto bodyBlock = &op.getBody().front();
-    assert(bodyBlock->mightHaveTerminator() && "expected `zuan.yield`");
-    auto yieldOp = cast<YieldOp>(bodyBlock->getTerminator());
+    auto yieldOp = op.getYieldOp();
     auto yieldRegion = &yieldOp.getRegion();
 
     if (yieldRegion->getOps().empty()) {
+      // The scalars will not be unrolled, so no need to create a dummy loop for
+      // them. Just handle it to other passes.
       return rewriter.notifyMatchFailure(
           op, "empty yield region, other patterns are needed");
     }
 
-    // Check all the type shape <= targetRank.
-    bool unrolled = true;
-    for (auto &op : yieldRegion->getOps()) {
-      if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
-        if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
-          if (shape->size() > targetRank) {
-            unrolled = false;
-            break;
-          }
-        }
-      }
-    }
-
-    if (unrolled) {
+    if (isDynamicOpUnrolled(op, targetRank, shapeInfo)) {
       return rewriter.notifyMatchFailure(
           op, "expected all the shapes to be <= targetRank");
     }
@@ -73,6 +60,8 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     auto loc = op->getLoc();
 
     auto shape = iface.getShapeToUnroll(shapeInfo);
+    // All shapes are now the same and >= target-rank, so should be safe
+    // to access the first.
     auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
 
     Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
@@ -84,42 +73,18 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     state.valueMap.map(valuesDefinedAbove.getArrayRef(),
                        valuesDefinedAbove.getArrayRef());
 
+    // Make sure no use-before-def is produced.
+    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
+
     auto loop = rewriter.create<scf::ForOp>(
         loc, zero, dim, one, ValueRange{},
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           UnrollOptions options(iv, b.getIndexAttr(1), 0, true);
-          // Create new dynamic op.
-          SmallVector<Value> inits =
-              llvm::map_to_vector(op.getInits(), [&](Value init) {
-                return getUnrolledMemref(b, init, options, state);
-              });
-
-          b.create<DynamicOp>(
-              loc, inits, [&](OpBuilder &b, Location loc, ValueRange args) {
-                OpBuilder::InsertionGuard guard(b);
-
-                // Map the arguments.
-                state.valueMap.map(bodyBlock->getArguments(), args);
-
-                SmallVector<Value> newYieldOperands =
-                    llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
-                      return getUnrolledValue(b, value, options, state);
-                    });
-
-                auto newYieldOp =
-                    b.create<YieldOp>(loc, newYieldOperands, nullptr);
-                state.yieldBlock = &newYieldOp.getBody().front();
-                b.setInsertionPoint(newYieldOp);
-
-                for (auto &op : yieldRegion->getOps()) {
-                  unrollOp(b, &op, options, state);
-                }
-              });
-
+          op.unroll(b, options, state);
           b.create<scf::YieldOp>(loc);
         });
 
-    loop->getParentOfType<func::FuncOp>().dump();
+    // loop->getParentOfType<func::FuncOp>().dump();
     rewriter.replaceOp(op, loop);
 
     return success();

@@ -20,6 +20,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
@@ -123,6 +124,40 @@ void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   for (auto &op : bodyBlock->getOperations()) {
     shapeInfo.inferShape(&op, state);
   }
+}
+
+Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
+                             UnrollState &state) {
+  auto bodyBlock = &getBody().front();
+  auto yieldOp = getYieldOp();
+  auto yieldRegion = &yieldOp.getRegion();
+
+  SmallVector<Value> inits = llvm::map_to_vector(getInits(), [&](Value init) {
+    return getUnrolledMemref(builder, init, options, state);
+  });
+
+  return builder.create<DynamicOp>(
+      getLoc(), inits, [&](OpBuilder &b, Location loc, ValueRange args) {
+        OpBuilder::InsertionGuard guard(b);
+
+        state.valueMap.map(bodyBlock->getArguments(), args);
+        SmallVector<Value> newYieldOperands =
+            llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
+              return getUnrolledValue(b, value, options, state);
+            });
+
+        auto newYieldOp = b.create<YieldOp>(loc, newYieldOperands, nullptr);
+        state.yieldBlock = &newYieldOp.getBody().front();
+        b.setInsertionPoint(newYieldOp);
+
+        for (auto &op : yieldRegion->getOps()) {
+          unrollOp(b, &op, options, state);
+        }
+      });
+}
+
+std::optional<ShapeVector> DynamicOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+  return std::nullopt;
 }
 
 /// Elide the dynamic op if there are no memory write effects and all the
@@ -234,6 +269,12 @@ void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
   results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern, ElideDeadInitsPattern>(
       context);
+}
+
+YieldOp DynamicOp::getYieldOp() {
+  auto block = &getBody().front();
+  assert(block->mightHaveTerminator() && "expected a terminator");
+  return cast<YieldOp>(block->getTerminator());
 }
 
 //===----------------------------------------------------------------------===//
