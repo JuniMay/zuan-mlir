@@ -1,4 +1,5 @@
-// RUN: zuan-opt -lower-zuan %s | FileCheck %s
+// RUN: zuan-opt -lower-zuan -zuan-stripmining="vf=8 scalable=true" %s \
+// RUN: | FileCheck %s
 
 // CHECK-LABEL: func.func @matmul
 func.func @matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>) {
@@ -7,10 +8,8 @@ func.func @matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %c: memref<?x?xf32>)
     %a_tile = zuan.load %a : memref<?x?xf32>
     %b_tile = zuan.load %b : memref<?x?xf32>
     // CHECK: scf.for %[[K:.+]] = %{{.+}} to %{{.+}} step %{{.+}} iter_args(%[[ACC:.+]] = %{{.+}})
-    // CHECK: %[[A_SLICE:.+]] = memref.subview %{{.+}}[0, %[[K]]] [%{{.+}}, 1] [1, 1]
-    // CHECK: %[[A:.+]] = zuan.load %[[A_SLICE]]
-    // CHECK: %[[B_SLICE:.+]] = memref.subview %{{.+}}[%[[K]], 0] [1, %{{.+}}] [1, 1]
-    // CHECK: %[[B:.+]] = zuan.load %[[B_SLICE]]
+    // CHECK: %[[A:.+]] = zuan.load
+    // CHECK: %[[B:.+]] = zuan.load
     // CHECK: %[[OUTER:.+]] = zuan.outer <mul> %[[A]], %[[B]]
     // CHECK: %[[NEWACC:.+]] = arith.addf %[[ACC]], %[[OUTER]]
     // CHECK: scf.yield %[[NEWACC]]

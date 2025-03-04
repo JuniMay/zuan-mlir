@@ -354,11 +354,15 @@ void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp) {
 
 Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
                          Value mask, Value maskedoff) {
+  OpBuilder::InsertionGuard guard(builder);
+
   if (!mask) {
     return maskedOp;
   }
   TypeRange resultTypes{};
   if (maskedOp) {
+    // XXX: If set before, the masked op's iterator will be invalidated.
+    builder.setInsertionPointAfter(maskedOp);
     resultTypes = maskedOp->getResultTypes();
   }
   return builder.create<MaskOp>(
@@ -1011,7 +1015,11 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
           newDims.push_back(options.getChunkSize());
         }
       } else {
-        newDims.push_back(dims[i]);
+        if (auto dimVal = dims[i].dyn_cast<Value>()) {
+          newDims.push_back(getUnrolledValue(builder, dimVal, options, state));
+        } else {
+          newDims.push_back(dims[i]);
+        }
       }
     }
   }

@@ -3,6 +3,8 @@
 #include "Zuan/IR/Zuan.h"
 #include "Zuan/Utils/Unrolling.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
@@ -17,6 +19,32 @@ namespace zuan {
 
 namespace {
 
+static Type getProcessingType(DynamicOp dynamicOp) {
+  // Find the max bitwidth type.
+  Type type = nullptr;
+  int64_t maxBitwidth = 0;
+  dynamicOp->walk([&](Operation *op) {
+    auto resultTypes = op->getResultTypes();
+    if (!resultTypes.empty()) {
+      for (auto resultType : resultTypes) {
+        if (auto tileType = dyn_cast<TileType>(resultType)) {
+          auto elemType = tileType.getElementType();
+          // FIXME: working around for index.
+          int64_t currBitwidth = 64;
+          if (elemType.isIntOrFloat()) {
+            currBitwidth = elemType.getIntOrFloatBitWidth();
+          }
+          if (currBitwidth > maxBitwidth) {
+            maxBitwidth = currBitwidth;
+            type = elemType;
+          }
+        }
+      }
+    }
+  });
+  return type;
+}
+
 struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
   // Benefit is set to larger than any other stripmining pattern. So unrolled
   // reduction will not be stripmined again.
@@ -29,7 +57,7 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     auto tile = op.getTile();
     auto dims = op.getDims();
 
-    if (dims.size() != 1 && dims[0] != 0 && tile.getType().getRank() != 1) {
+    if (dims.size() != 1 || dims[0] != 0 || tile.getType().getRank() != 1) {
       return rewriter.notifyMatchFailure(op, "not 1-D reduction");
     }
 
@@ -123,11 +151,105 @@ private:
   bool scalable;
 };
 
+struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
+  explicit ZuanStripminingPattern(MLIRContext *context, unsigned vf,
+                                  bool scalable)
+      : OpRewritePattern<DynamicOp>(context, 1), vf(vf), scalable(scalable) {}
+
+  LogicalResult matchAndRewrite(DynamicOp op,
+                                PatternRewriter &rewriter) const final {
+    ShapeInfo shapeInfo;
+    ShapeInferenceState shapeInferenceState;
+    shapeInfo.inferShape(op, shapeInferenceState);
+
+    splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
+
+    auto yieldOp = op.getYieldOp();
+    auto yieldRegion = &yieldOp.getBody();
+    if (yieldRegion->getOps().empty()) {
+      // Scalars are produced with 1-D reduction or dummy splat. So no need to
+      // stripmine them anymore.
+      return rewriter.notifyMatchFailure(op, "empty yield region");
+    }
+
+    if (yieldOp->getNumOperands() != 0) {
+      return rewriter.notifyMatchFailure(op, "expected no operand");
+    }
+
+    auto loc = op.getLoc();
+
+    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
+    assert(iface && "expected an unrolling interface");
+
+    auto shape = iface.getShapeToUnroll(shapeInfo);
+
+    if (shape->empty()) {
+      return rewriter.notifyMatchFailure(op, "0-D operations");
+    }
+
+    if (auto val = shape->back().getValue()) {
+      if (isa<vp::GetVLOp>(val->getDefiningOp())) {
+        return rewriter.notifyMatchFailure(op, "already stripmined");
+      }
+    }
+
+    auto unrollIdx = shape->size() - 1;
+
+    auto type = getProcessingType(op);
+
+    rewriter.setInsertionPoint(op);
+    Value dim = (*shape).back().getOrCreateValue(rewriter, loc);
+
+    UnrollState state;
+    state.initialize(op);
+
+    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
+    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+
+    SmallVector<Value> inits = {dim, zero};
+    SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
+
+    auto whileOp = rewriter.create<scf::WhileOp>(
+        loc, resultTypes, inits,
+        [&](OpBuilder &b, Location loc, ValueRange args) {
+          auto avl = args[0];
+          Value cond = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
+                                               avl, zero);
+          b.create<scf::ConditionOp>(loc, cond, args);
+        },
+        [&](OpBuilder &b, Location loc, ValueRange args) {
+          auto avl = args[0];
+          auto idx = args[1];
+
+          Value vl = rewriter.create<vp::GetVLOp>(loc, avl, vf, type, scalable);
+          UnrollOptions options(idx, vl, unrollIdx, false);
+          op.unroll(b, options, state);
+
+          Value newAvl = b.create<arith::SubIOp>(loc, avl, vl);
+          Value newIdx = b.create<arith::AddIOp>(loc, idx, vl);
+
+          b.create<scf::YieldOp>(loc, ValueRange{newAvl, newIdx});
+        });
+
+    whileOp->getParentOfType<func::FuncOp>().dump();
+
+    rewriter.eraseOp(op);
+
+    return success();
+  }
+
+private:
+  unsigned vf;
+  bool scalable;
+};
+
 } // namespace
 
 void ZuanStripminingPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
-  patterns.add<ZuanStripminingReduction1DPattern>(&getContext(), vf, scalable);
+  patterns.add<ZuanStripminingReduction1DPattern, ZuanStripminingPattern>(
+      &getContext(), vf, scalable);
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
   }
@@ -136,7 +258,7 @@ void ZuanStripminingPass::runOnOperation() {
 void ZuanStripminingPass::getDependentDialects(
     DialectRegistry &registry) const {
   registry.insert<zuan::ZuanDialect, vp::VPDialect, scf::SCFDialect,
-                  arith::ArithDialect>();
+                  arith::ArithDialect, memref::MemRefDialect>();
 }
 
 void registerZuanStripminingPass() { PassRegistration<ZuanStripminingPass>(); }

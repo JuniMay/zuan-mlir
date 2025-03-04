@@ -1,4 +1,5 @@
-// RUN: zuan-opt -lower-zuan %s | FileCheck %s
+// RUN: zuan-opt -lower-zuan -zuan-stripmining="vf=8 scalable=true" %s \
+// RUN: | FileCheck %s
 
 // CHECK-LABEL: func.func @reduction
 func.func @reduction(%a: memref<?x?x?x?xf32>, %b: memref<?x?xf32>) {
