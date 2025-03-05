@@ -490,7 +490,7 @@ public:
             if (!mask) {
               // This passthru is either an undef or just the original passthru.
               auto intrOp = rewriter.create<vp::RVVIntrVidOp>(
-                  loc, targetResType, passthruMerged, evl);
+                  loc, targetResType, passthruMerged, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
               auto policyValue = rewriter.create<LLVM::ConstantOp>(

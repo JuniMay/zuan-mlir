@@ -69,7 +69,7 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     ShapeInferenceState shapeInferenceState;
     shapeInfo.inferShape(dynamicOp, shapeInferenceState);
 
-    shapeInfo.dump(llvm::dbgs());
+    // shapeInfo.dump(llvm::dbgs());
 
     auto tileShape = *shapeInfo.getShape(tile);
     if (auto val = tileShape[0].getValue()) {
@@ -139,8 +139,8 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     }
 
     auto finalAcc = whileOp->getResult(2);
-    Value finalRed = rewriter.create<zuan::ReductionOp>(
-        loc, op.getKind(), finalAcc, dims, init);
+    Value finalRed = rewriter.create<zuan::ReductionOp>(loc, op.getKind(),
+                                                        finalAcc, dims, init);
 
     rewriter.create<YieldOp>(loc, finalRed, nullptr);
 
@@ -216,7 +216,7 @@ struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
     SmallVector<Value> inits = {dim, zero};
     SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
 
-    auto whileOp = rewriter.create<scf::WhileOp>(
+    rewriter.create<scf::WhileOp>(
         loc, resultTypes, inits,
         [&](OpBuilder &b, Location loc, ValueRange args) {
           auto avl = args[0];
@@ -238,7 +238,7 @@ struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
           b.create<scf::YieldOp>(loc, ValueRange{newAvl, newIdx});
         });
 
-    whileOp->getParentOfType<func::FuncOp>().dump();
+    // whileOp->getParentOfType<func::FuncOp>().dump();
 
     rewriter.eraseOp(op);
 
@@ -332,7 +332,7 @@ struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
 
   LogicalResult matchAndRewrite(DynamicOp op,
                                 PatternRewriter &rewriter) const final {
-    op->dump();
+    // op->dump();
     ShapeInfo shapeInfo;
     ShapeInferenceState shapeInferenceState;
     shapeInfo.inferShape(op, shapeInferenceState);
@@ -344,7 +344,7 @@ struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
 
     convertToVP(rewriter, op, shapeInfo, state);
 
-    op->getParentOfType<func::FuncOp>().dump();
+    // op->getParentOfType<func::FuncOp>().dump();
     rewriter.eraseOp(op);
     return success();
   }

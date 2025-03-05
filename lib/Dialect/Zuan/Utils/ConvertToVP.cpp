@@ -474,7 +474,7 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (dim == shape->size() && cols.has_value()) {
+    if (dim == shape->size() - 1 && cols.has_value()) {
       Operation *step = builder.create<vector::StepOp>(loc, vectorType);
       step = vp::predicateOperation(builder, step, *cols, mask, nullptr,
                                     maskedoff);

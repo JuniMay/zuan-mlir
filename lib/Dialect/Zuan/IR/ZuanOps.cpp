@@ -1290,8 +1290,13 @@ Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
       increment = builder.create<arith::AddIOp>(getLoc(), start, offsetValue);
     }
 
-    auto splatOp = builder.create<SplatOp>(getLoc(), increment, newSizes);
-    return splatOp;
+    if (options.shouldReduce()) {
+      auto splatOp = builder.create<SplatOp>(getLoc(), increment, newSizes);
+      return splatOp;
+    } else {
+      auto stepOp = builder.create<StepOp>(getLoc(), increment, dim, newSizes);
+      return stepOp;
+    }
   } else {
     if (dim > unrollIdx && options.shouldReduce()) {
       dim -= 1;
