@@ -60,9 +60,10 @@ add_subdirectory(test)
 
 include(ExternalProject)
 
+set(RISCV_GNU_TOOLCHAIN_DIR "${ZUAN_SOURCE_DIR}/third_party/riscv-gnu-toolchain")
+set(RISCV_GNU_TOOLCHAIN_BUILD_DIR "${ZUAN_BINARY_DIR}/third_party/riscv-gnu-toolchain")
+
 if (ENABLE_RISCV_GNU_TOOLCHAIN)
-  set(RISCV_GNU_TOOLCHAIN_DIR "${ZUAN_SOURCE_DIR}/third_party/riscv-gnu-toolchain")
-  set(RISCV_GNU_TOOLCHAIN_BUILD_DIR "${ZUAN_BINARY_DIR}/third_party/riscv-gnu-toolchain")
   ExternalProject_Add(
     riscv-gnu-toolchain
     SOURCE_DIR        ${RISCV_GNU_TOOLCHAIN_DIR}
@@ -72,4 +73,12 @@ if (ENABLE_RISCV_GNU_TOOLCHAIN)
     BUILD_IN_SOURCE   TRUE
     INSTALL_COMMAND   ""
   )
+endif()
+
+#-------------------------------------------------------------------------------
+# Benchmarks
+#-------------------------------------------------------------------------------
+
+if (ENABLE_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()
