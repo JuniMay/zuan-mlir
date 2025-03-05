@@ -809,20 +809,33 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
   matchAndRewrite(vp::GetVLOp op, vp::GetVLOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    auto cntxlen = adaptor.getCnt();
 
-    bool doZext = false;
-    auto cnt = cntxlen;
-    if (cnt.getType().getIntOrFloatBitWidth() > 32) {
-      cnt = rewriter.create<LLVM::TruncOp>(loc, rewriter.getI32Type(), cnt);
-      doZext = true;
+    auto typeConverter = getTypeConverter();
+
+    unsigned vlBitwidth;
+    if (enableRVV) {
+      /// RVV intrinsics only support xlen-bit VL.
+      vlBitwidth = typeConverter->getIndexType().getIntOrFloatBitWidth();
+    } else {
+      /// VP intrinsics support 32-bit VL.
+      vlBitwidth = 32;
+    }
+
+    auto cnt = adaptor.getCnt();
+    auto resultBitwidth = cnt.getType().getIntOrFloatBitWidth();
+    auto resultType = cnt.getType();
+
+    auto vlType = rewriter.getIntegerType(vlBitwidth);
+    if (resultBitwidth > vlBitwidth) {
+      cnt = rewriter.create<LLVM::TruncOp>(loc, vlType, cnt);
+    } else if (resultBitwidth < vlBitwidth) {
+      cnt = rewriter.create<LLVM::ZExtOp>(loc, vlType, cnt);
     }
 
     auto vf = adaptor.getVf();
     auto computeType = adaptor.getComputeType();
     auto scalable = adaptor.getScalable();
 
-    auto typeConverter = getTypeConverter();
     computeType = typeConverter->convertType(computeType);
 
     if (!computeType.isIntOrFloat()) {
@@ -851,30 +864,12 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
         lmul = std::log2(factor);
       }
 
-      auto indexBitwidth =
-          typeConverter->getIndexType().getIntOrFloatBitWidth();
-      auto xlenType = rewriter.getIntegerType(indexBitwidth);
-
-      bool doTrunc = false;
-      unsigned truncBitwidth = 32;
-      if (cntxlen.getType().getIntOrFloatBitWidth() < indexBitwidth) {
-        // TODO: Refactor this.
-        truncBitwidth = cntxlen.getType().getIntOrFloatBitWidth();
-        cntxlen = rewriter.create<LLVM::ZExtOp>(loc, xlenType, cntxlen);
-        doTrunc = true;
-      }
-
       Value lmulValue = rewriter.create<LLVM::ConstantOp>(
-          loc, xlenType, rewriter.getIntegerAttr(xlenType, lmul));
+          loc, vlType, rewriter.getIntegerAttr(vlType, lmul));
       Value sewValue = rewriter.create<LLVM::ConstantOp>(
-          loc, xlenType, rewriter.getIntegerAttr(xlenType, sew));
-      vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, xlenType, cntxlen,
-                                                sewValue, lmulValue);
-      if (doTrunc) {
-        vl = rewriter.create<LLVM::TruncOp>(loc, rewriter.getIntegerType(truncBitwidth), vl);
-      }
-
-      doZext = false;
+          loc, vlType, rewriter.getIntegerAttr(vlType, sew));
+      vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, vlType, cnt, sewValue,
+                                                lmulValue);
     } else {
       Value vfValue = rewriter.create<LLVM::ConstantOp>(
           loc, rewriter.getI32Type(),
@@ -889,9 +884,13 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
                   ValueRange({cnt, vfValue, scalableValue}))
               ->getResult(0);
     }
-    if (doZext) {
-      vl = rewriter.create<LLVM::ZExtOp>(loc, rewriter.getI64Type(), vl);
+
+    if (resultBitwidth > vlBitwidth) {
+      vl = rewriter.create<LLVM::ZExtOp>(loc, resultType, vl);
+    } else if (resultBitwidth < vlBitwidth) {
+      vl = rewriter.create<LLVM::TruncOp>(loc, resultType, vl);
     }
+
     rewriter.replaceOp(op, vl);
     return success();
   }
