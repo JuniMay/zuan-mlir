@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm %s | FileCheck %s
+//RUN: zuan-opt -convert-vp-to-llvm=enable-rvv=false %s | FileCheck %s
 
 // CHECK-LABEL: func.func @getvl4xf32
 func.func @getvl4xf32(%avl: index) -> index {

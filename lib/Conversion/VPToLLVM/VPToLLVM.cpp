@@ -855,12 +855,25 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
           typeConverter->getIndexType().getIntOrFloatBitWidth();
       auto xlenType = rewriter.getIntegerType(indexBitwidth);
 
+      bool doTrunc = false;
+      unsigned truncBitwidth = 32;
+      if (cntxlen.getType().getIntOrFloatBitWidth() < indexBitwidth) {
+        // TODO: Refactor this.
+        truncBitwidth = cntxlen.getType().getIntOrFloatBitWidth();
+        cntxlen = rewriter.create<LLVM::ZExtOp>(loc, xlenType, cntxlen);
+        doTrunc = true;
+      }
+
       Value lmulValue = rewriter.create<LLVM::ConstantOp>(
           loc, xlenType, rewriter.getIntegerAttr(xlenType, lmul));
       Value sewValue = rewriter.create<LLVM::ConstantOp>(
           loc, xlenType, rewriter.getIntegerAttr(xlenType, sew));
       vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, xlenType, cntxlen,
                                                 sewValue, lmulValue);
+      if (doTrunc) {
+        vl = rewriter.create<LLVM::TruncOp>(loc, rewriter.getIntegerType(truncBitwidth), vl);
+      }
+
       doZext = false;
     } else {
       Value vfValue = rewriter.create<LLVM::ConstantOp>(

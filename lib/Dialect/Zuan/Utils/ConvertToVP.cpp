@@ -323,7 +323,8 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
   LLVM_DEBUG(DBGS() << "Handling arith op: " << *op << "\n");
 
   if (!isa<TileType>(op->getResult(0).getType())) {
-    LLVM_DEBUG(DBGS() << "Result is not a vector type.\n");
+    LLVM_DEBUG(DBGS() << "Result is not a tile type, cloning op\n");
+    builder.clone(*op, state.valueMap);
     return;
   }
 
@@ -385,7 +386,8 @@ static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
   LLVM_DEBUG(DBGS() << "Handling cmp op: " << *op << "\n");
 
   if (!isa<TileType>(op->getResult(0).getType())) {
-    LLVM_DEBUG(DBGS() << "Result is not a vector type.\n");
+    LLVM_DEBUG(DBGS() << "Result is not a tile type, cloning op\n");
+    builder.clone(*op, state.valueMap);
     return;
   }
 
@@ -443,7 +445,7 @@ static void handleReductionOp(OpBuilder &builder, ReductionOp reductionOp,
   auto kind = static_cast<vector::CombiningKind>(reductionOp.getKind());
   Value init = reductionOp.getInit();
   if (init) {
-    init = state.valueMap.lookup(init);
+    init = state.tileMap[init][0];
   }
 
   auto reduction = builder.create<vector::ReductionOp>(

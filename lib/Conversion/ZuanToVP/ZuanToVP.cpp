@@ -133,9 +133,14 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
           b.create<scf::YieldOp>(loc, ValueRange{newAvl, newIdx, newAcc});
         });
 
+    Value init = op.getInit();
+    if (init) {
+      init = getUnrolledValue(rewriter, init, getCloneOptions(), state);
+    }
+
     auto finalAcc = whileOp->getResult(2);
     Value finalRed = rewriter.create<zuan::ReductionOp>(
-        loc, op.getKind(), finalAcc, dims, op.getInit());
+        loc, op.getKind(), finalAcc, dims, init);
 
     rewriter.create<YieldOp>(loc, finalRed, nullptr);
 
@@ -339,6 +344,7 @@ struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
 
     convertToVP(rewriter, op, shapeInfo, state);
 
+    op->getParentOfType<func::FuncOp>().dump();
     rewriter.eraseOp(op);
     return success();
   }
