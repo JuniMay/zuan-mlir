@@ -379,6 +379,54 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
   state.tileMap[op->getResult(0)] = resultValues;
 }
 
+template <typename CmpOp>
+static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
+                        VPConversionState &state) {
+  LLVM_DEBUG(DBGS() << "Handling cmp op: " << *op << "\n");
+
+  if (!isa<TileType>(op->getResult(0).getType())) {
+    LLVM_DEBUG(DBGS() << "Result is not a vector type.\n");
+    return;
+  }
+
+  Location loc = op->getLoc();
+  auto shape = shapeInfo.getShape(op->getOperand(0));
+  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+
+  auto lhsValues = state.tileMap[op->getOperand(0)];
+  auto rhsValues = state.tileMap[op->getOperand(1)];
+
+  SmallVector<Value> resultValues;
+
+  for (int64_t i = 0; i < rows; ++i) {
+    Value lhs = lhsValues[i];
+    Value rhs = rhsValues[i];
+
+    auto maskPair = getMaskPair(state, i);
+    auto mask = maskPair.first;
+    auto maskedoff = maskPair.second;
+
+    if (cols.has_value()) {
+      auto cmpOp = builder.create<CmpOp>(loc, op.getPredicate(), lhs, rhs);
+      Operation *predOp = vp::predicateOperation(builder, cmpOp, *cols, mask,
+                                                 nullptr, maskedoff);
+      resultValues.push_back(predOp->getResult(0));
+    } else {
+      auto val = createSCFIfOp(
+          builder, loc, mask, maskedoff,
+          [&](OpBuilder &b, Location loc) {
+            Value res = b.create<CmpOp>(loc, op.getPredicate(), lhs, rhs);
+            return res;
+          },
+          [&](OpBuilder &b, Location loc) {
+            return buildZero(b, loc, builder.getI1Type());
+          });
+      resultValues.push_back(val);
+    }
+  }
+  state.tileMap[op->getResult(0)] = resultValues;
+}
+
 static void handleReductionOp(OpBuilder &builder, ReductionOp reductionOp,
                               ShapeInfo &shapeInfo, VPConversionState &state) {
   auto loc = reductionOp->getLoc();
@@ -954,6 +1002,8 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
           [&](auto arithOp) {
             handleArithOp<decltype(arithOp)>(rewriter, op, shapeInfo, state);
           })
+      .Case<arith::CmpIOp, arith::CmpFOp>(
+          [&](auto cmpOp) { handleCmpOp(rewriter, cmpOp, shapeInfo, state); })
       .Case([&](ReductionOp reductionOp) {
         handleReductionOp(rewriter, reductionOp, shapeInfo, state);
       })

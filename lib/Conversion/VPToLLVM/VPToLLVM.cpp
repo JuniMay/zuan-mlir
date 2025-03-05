@@ -330,12 +330,13 @@ public:
     auto predicatedOp = &op.getBody().front().front();
 
     auto loc = op->getLoc();
-    auto evl = adaptor.getEvl();
+    auto evlxlen = adaptor.getEvl();
     auto mask = adaptor.getMask();
     auto passthru = adaptor.getPassthru();
     auto maskedoff = adaptor.getMaskedoff();
 
-    evl = rewriter.create<LLVM::TruncOp>(loc, rewriter.getI32Type(), evl);
+    auto evl =
+        rewriter.create<LLVM::TruncOp>(loc, rewriter.getI32Type(), evlxlen);
 
     auto typeConverter = getTypeConverter();
     bool doMerge = true;
@@ -557,9 +558,17 @@ public:
                 loc, vectorType, dataPtrCasted, stride, mask, evl);
             loweredOp = intrOp.getOperation();
           } else {
-            auto intrOp = rewriter.create<LLVM::VPLoadOp>(
-                loc, vectorType, dataPtrCasted, mask, evl);
-            loweredOp = intrOp.getOperation();
+            if (vectorType.getElementType().isInteger(1) && enableRVV) {
+              // XXX: Ignore mask here
+              // XXX: RISC-V intrinsic only support xlen vl
+              auto intrOp = rewriter.create<vp::RVVIntrVlmOp>(
+                  loc, vectorType, dataPtrCasted, evlxlen);
+              loweredOp = intrOp.getOperation();
+            } else {
+              auto intrOp = rewriter.create<LLVM::VPLoadOp>(
+                  loc, vectorType, dataPtrCasted, mask, evl);
+              loweredOp = intrOp.getOperation();
+            }
           }
         })
         .Case([&](vp::StoreOp storeOp) {
@@ -594,9 +603,18 @@ public:
                 loc, value, dataPtrCasted, stride, mask, evl);
             loweredOp = intrOp.getOperation();
           } else {
-            auto intrOp = rewriter.create<LLVM::VPStoreOp>(
-                loc, value, dataPtrCasted, mask, evl);
-            loweredOp = intrOp.getOperation();
+            if (storeOp.getVectorType().getElementType().isInteger(1) &&
+                enableRVV) {
+              // XXX: Ignore mask here
+              // XXX: RISC-V intrinsic only support xlen vl
+              auto intrOp = rewriter.create<vp::RVVIntrVsmOp>(
+                  loc, value, dataPtrCasted, evlxlen);
+              loweredOp = intrOp.getOperation();
+            } else {
+              auto intrOp = rewriter.create<LLVM::VPStoreOp>(
+                  loc, value, dataPtrCasted, mask, evl);
+              loweredOp = intrOp.getOperation();
+            }
           }
         })
         .Case([&](arith::SelectOp selectOp) {
@@ -791,9 +809,10 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
   matchAndRewrite(vp::GetVLOp op, vp::GetVLOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    auto cnt = adaptor.getCnt();
+    auto cntxlen = adaptor.getCnt();
 
     bool doZext = false;
+    auto cnt = cntxlen;
     if (cnt.getType().getIntOrFloatBitWidth() > 32) {
       cnt = rewriter.create<LLVM::TruncOp>(loc, rewriter.getI32Type(), cnt);
       doZext = true;
@@ -832,12 +851,17 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
         lmul = std::log2(factor);
       }
 
+      auto indexBitwidth =
+          typeConverter->getIndexType().getIntOrFloatBitWidth();
+      auto xlenType = rewriter.getIntegerType(indexBitwidth);
+
       Value lmulValue = rewriter.create<LLVM::ConstantOp>(
-          loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(lmul));
+          loc, xlenType, rewriter.getIntegerAttr(xlenType, lmul));
       Value sewValue = rewriter.create<LLVM::ConstantOp>(
-          loc, rewriter.getI32Type(), rewriter.getI32IntegerAttr(sew));
-      vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, rewriter.getI32Type(), cnt,
+          loc, xlenType, rewriter.getIntegerAttr(xlenType, sew));
+      vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, xlenType, cntxlen,
                                                 sewValue, lmulValue);
+      doZext = false;
     } else {
       Value vfValue = rewriter.create<LLVM::ConstantOp>(
           loc, rewriter.getI32Type(),
@@ -881,7 +905,8 @@ void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
   target.addIllegalOp<PredicateOp, GetVLOp, LoadOp, StoreOp, GatherOp,
                       ScatterOp>();
   target.addLegalOp<RVVIntrSetVliOp, RVVIntrSetVliMaxOp, RVVIntrVidOp,
-                    RVVIntrVidMaskedOp, VPIntrFCmpOp, VPIntrICmpOp>();
+                    RVVIntrVidMaskedOp, VPIntrFCmpOp, VPIntrICmpOp,
+                    RVVIntrVlmOp, RVVIntrVsmOp>();
 }
 
 void ConvertVPToLLVMPass::runOnOperation() {

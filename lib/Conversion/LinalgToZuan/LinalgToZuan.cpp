@@ -50,37 +50,28 @@ static AffineMap reindexIndexingMap(AffineMap map) {
   return res;
 }
 
-static Value getOrSplat(OpBuilder &builder, IRMapping &valueMap, Value value,
-                        llvm::ArrayRef<OpFoldResult> commonShape) {
-  auto lookup = valueMap.lookup(value);
+static Value getOrSplat(OpBuilder &builder, Value value,
+                        zuan::LinalgConversionState &state) {
+  auto lookup = state.valueMap.lookup(value);
   if (!isa<zuan::TileType>(lookup.getType())) {
     // We do not overwrite the value map here, because we are not sure if this
     // value will be used for other purposes, e.g., as an index in a
     // non-broadcasted op, if such op exists. The most conservative approach is
     // adopted here, which is to create a splat op each time we need a
     // broadcasted value and rely on CSE to clean up.
-    return builder.create<zuan::SplatOp>(value.getLoc(), lookup, commonShape);
+    return builder.create<zuan::SplatOp>(value.getLoc(), lookup,
+                                         state.ofrShape);
   }
   return lookup;
 }
 
 static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
-                                        ArrayRef<OpFoldResult> commonShape,
-                                        Block *dynamicBlock, Block *yieldBlock,
-                                        IRMapping &valueMap,
-                                        linalg::LinalgOp linalgOp) {
+                                        zuan::LinalgConversionState &state) {
   auto loc = op->getLoc();
-  SmallVector<int64_t> staticShape =
-      llvm::map_to_vector(commonShape, [](OpFoldResult ofr) {
-        if (auto attr = ofr.dyn_cast<Attribute>()) {
-          return cast<IntegerAttr>(attr).getInt();
-        } else {
-          return ShapedType::kDynamic;
-        }
-      });
+
   SmallVector<Type> resultTypes;
   for (auto resultType : op->getResultTypes()) {
-    resultTypes.push_back(zuan::TileType::get(staticShape, resultType));
+    resultTypes.push_back(zuan::TileType::get(state.staticShape, resultType));
   }
 
   if (isa<arith::ConstantOp>(op)) {
@@ -92,34 +83,243 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
   if (auto linalgYieldOp = dyn_cast<linalg::YieldOp>(op)) {
     for (auto [i, yieldedOperand] :
          llvm::enumerate(linalgYieldOp.getOperands())) {
-      auto mappedOpd =
-          getOrSplat(builder, valueMap, yieldedOperand, commonShape);
+      LLVM_DEBUG(DBGS() << "Yielded operand: " << yieldedOperand << "\n");
+      auto mappedOpd = getOrSplat(builder, yieldedOperand, state);
       OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointToEnd(yieldBlock);
-      Value linalgInitMemref = linalgOp.getDpsInitOperand(i)->get();
-      Value dynamicInitMemref = valueMap.lookup(linalgInitMemref);
+      builder.setInsertionPointToEnd(state.yieldBlock);
+      Value linalgInitMemref = state.linalgOp.getDpsInitOperand(i)->get();
+      Value dynamicInitMemref = state.valueMap.lookup(linalgInitMemref);
       builder.create<zuan::StoreOp>(loc, mappedOpd, dynamicInitMemref);
     }
     return success();
   }
 
+  //----------------------------------------------------------------------
+  // Check Cast Operations.
+  //----------------------------------------------------------------------
+
+  if (isa<CastOpInterface>(op)) {
+    zuan::CastKind castKind;
+    TypeSwitch<Operation *, void>(op)
+        .Case([&](arith::IndexCastOp) { castKind = zuan::CastKind::INDEXCAST; })
+        .Case([&](arith::IndexCastUIOp) {
+          castKind = zuan::CastKind::INDEXCASTUI;
+        })
+        .Case([&](arith::TruncIOp) { castKind = zuan::CastKind::TRUNCI; })
+        .Case([&](arith::TruncFOp) { castKind = zuan::CastKind::TRUNCF; })
+        .Case([&](arith::ExtSIOp) { castKind = zuan::CastKind::EXTSI; })
+        .Case([&](arith::ExtUIOp) { castKind = zuan::CastKind::EXTUI; })
+        .Case([&](arith::FPToSIOp) { castKind = zuan::CastKind::FPTOSI; })
+        .Case([&](arith::FPToUIOp) { castKind = zuan::CastKind::FPTOUI; })
+        .Case([&](arith::SIToFPOp) { castKind = zuan::CastKind::SITOFP; })
+        .Case([&](arith::UIToFPOp) { castKind = zuan::CastKind::UITOFP; })
+        .Case([&](arith::BitcastOp) { castKind = zuan::CastKind::BITCAST; })
+        .Case([&](arith::ExtFOp) { castKind = zuan::CastKind::EXTF; })
+        .Default([&](Operation *) {
+          llvm_unreachable("unsupported cast operation");
+        });
+
+    auto source = state.valueMap.lookup(op->getOperand(0));
+    auto resultElementType = op->getResult(0).getType();
+    auto resultType = zuan::TileType::get(state.staticShape, resultElementType);
+
+    Operation *cast =
+        builder.create<zuan::CastOp>(loc, resultType, castKind, source);
+    if (auto mask = state.getMask()) {
+      cast = zuan::maskOperation(builder, loc, cast, *mask);
+    }
+    state.valueMap.map(op->getResult(0), cast->getResult(0));
+    return success();
+  }
+
+  //----------------------------------------------------------------------
+  // linalg.index operation
+  //----------------------------------------------------------------------
+
+  if (auto indexOp = dyn_cast<linalg::IndexOp>(op)) {
+    // Index op corresponds to a step op on the given index, with start value 0.
+    auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    int64_t dim = indexOp.getDim();
+    Operation *steps =
+        builder.create<zuan::StepOp>(loc, zero, dim, state.ofrShape);
+    if (auto mask = state.getMask()) {
+      steps = zuan::maskOperation(builder, loc, steps, *mask);
+    }
+    state.valueMap.map(op->getResult(0), steps->getResult(0));
+    return success();
+  }
+
+  //----------------------------------------------------------------------
+  // Compare operations.
+  //----------------------------------------------------------------------
+
+  if (auto cmpfOp = dyn_cast<arith::CmpFOp>(op)) {
+    auto lhs = getOrSplat(builder, op->getOperand(0), state);
+    auto rhs = getOrSplat(builder, op->getOperand(1), state);
+    Operation *newOp =
+        builder.create<arith::CmpFOp>(loc, cmpfOp.getPredicate(), lhs, rhs);
+    if (auto mask = state.getMask()) {
+      newOp = zuan::maskOperation(builder, loc, newOp, *mask);
+    }
+    state.valueMap.map(op->getResult(0), newOp->getResult(0));
+    return success();
+  }
+
+  if (auto cmpiOp = dyn_cast<arith::CmpIOp>(op)) {
+    auto lhs = getOrSplat(builder, op->getOperand(0), state);
+    auto rhs = getOrSplat(builder, op->getOperand(1), state);
+    Operation *newOp =
+        builder.create<arith::CmpIOp>(loc, cmpiOp.getPredicate(), lhs, rhs);
+    if (auto mask = state.getMask()) {
+      newOp = zuan::maskOperation(builder, loc, newOp, *mask);
+    }
+    state.valueMap.map(op->getResult(0), newOp->getResult(0));
+    return success();
+  }
+
+  //----------------------------------------------------------------------
+  // Select operation.
+  //----------------------------------------------------------------------
+
+  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
+    auto cond = getOrSplat(builder, op->getOperand(0), state);
+    auto lhs = getOrSplat(builder, op->getOperand(1), state);
+    auto rhs = getOrSplat(builder, op->getOperand(2), state);
+    Operation *newOp = builder.create<zuan::SelectOp>(loc, cond, lhs, rhs);
+    if (auto mask = state.getMask()) {
+      newOp = zuan::maskOperation(builder, loc, newOp, *mask);
+    }
+    state.valueMap.map(op->getResult(0), newOp->getResult(0));
+    return success();
+  }
+
+  //----------------------------------------------------------------------
+  // Load and store operations.
+  //----------------------------------------------------------------------
+
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    auto base = state.valueMap.lookup(loadOp.getMemRef());
+    auto indices = loadOp.getIndices();
+    SmallVector<Value> newIndices;
+    for (auto index : indices) {
+      newIndices.push_back(getOrSplat(builder, index, state));
+    }
+    Operation *newOp = builder.create<zuan::GatherOp>(loc, base, newIndices);
+    if (auto mask = state.getMask()) {
+      newOp = zuan::maskOperation(builder, loc, newOp, *mask);
+    }
+    state.valueMap.map(op->getResult(0), newOp->getResult(0));
+    return success();
+  }
+
+  if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+    auto value = getOrSplat(builder, storeOp.getValue(), state);
+    auto memref = state.valueMap.lookup(storeOp.getMemRef());
+    auto indices = storeOp.getIndices();
+    SmallVector<Value> newIndices;
+    for (auto index : indices) {
+      newIndices.push_back(getOrSplat(builder, index, state));
+    }
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(state.yieldBlock);
+    Operation *newOp =
+        builder.create<zuan::ScatterOp>(loc, value, memref, newIndices);
+    if (auto mask = state.getMask()) {
+      zuan::maskOperation(builder, loc, newOp, *mask);
+    }
+    return success();
+  }
+
+  //----------------------------------------------------------------------
+  // If operation.
+  //----------------------------------------------------------------------
+
+  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+    // Recursively convert the regions, and merge the yielded values.
+    auto cond = getOrSplat(builder, ifOp.getCondition(), state);
+    // Negate the condition for the else branch.
+    Value trueElem =
+        builder.create<arith::ConstantIntOp>(loc, 1, builder.getIntegerType(1));
+    Value trueValue =
+        builder.create<zuan::SplatOp>(loc, trueElem, state.ofrShape);
+    Value negCond = builder.create<arith::XOrIOp>(loc, cond, trueValue);
+
+    if (auto mask = state.getMask()) {
+      // Elementwise and the mask.
+      cond = builder.create<arith::AndIOp>(loc, cond, *mask);
+      negCond = builder.create<arith::AndIOp>(loc, negCond, *mask);
+    }
+
+    state.pushMask(cond);
+    for (auto &op : ifOp.getThenRegion().getOps()) {
+      if (isa<scf::YieldOp>(op)) {
+        continue;
+      }
+      if (failed(convertOneOpToZuan(builder, &op, state))) {
+        return failure();
+      }
+    }
+    state.popMask();
+
+    if (ifOp.getNumRegions() == 2) {
+      state.pushMask(negCond);
+      for (auto &op : ifOp.getElseRegion().getOps()) {
+        if (isa<scf::YieldOp>(op)) {
+          continue;
+        }
+        if (failed(convertOneOpToZuan(builder, &op, state))) {
+          return failure();
+        }
+      }
+      state.popMask();
+    }
+
+    auto thenYield = ifOp.thenYield();
+    auto elseYield = ifOp.elseYield();
+
+    if (ifOp->getResults().empty()) {
+      return success();
+    }
+
+    for (auto [then, else_, result] :
+         llvm::zip(thenYield.getOperands(), elseYield.getOperands(),
+                   ifOp->getResults())) {
+      auto thenTile = getOrSplat(builder, then, state);
+      auto elseTile = getOrSplat(builder, else_, state);
+      Operation *op =
+          builder.create<zuan::SelectOp>(loc, cond, thenTile, elseTile);
+      if (auto mask = state.getMask()) {
+        op = zuan::maskOperation(builder, loc, op, *mask);
+      }
+      state.valueMap.map(result, op->getResult(0));
+    }
+
+    return success();
+  }
+
+  // Otherwise, only elementwise operations are supported.
   if (!OpTrait::hasElementwiseMappableTraits(op)) {
     return failure();
   }
 
+  //----------------------------------------------------------------------
+  // Check Reductions.
+  //----------------------------------------------------------------------
+
   SmallVector<std::pair<Value, Value>> reductionOperands;
   for (Value opd : op->getOperands()) {
     auto blockArg = dyn_cast<BlockArgument>(opd);
-    if (!blockArg || blockArg.getOwner() != linalgOp.getBlock() ||
-        blockArg.getArgNumber() < linalgOp.getNumDpsInputs()) {
+    if (!blockArg || blockArg.getOwner() != state.linalgOp.getBlock() ||
+        blockArg.getArgNumber() < state.linalgOp.getNumDpsInputs()) {
       // The operand is not a reduction operand if it is not a block argument
       // or it is not the argument corresponding to dps inits.
       continue;
     }
     SmallVector<Operation *> reductionOps;
-    Value reduceOpd = matchReduction(
-        linalgOp.getRegionOutputArgs(),
-        blockArg.getArgNumber() - linalgOp.getNumDpsInputs(), reductionOps);
+    Value reduceOpd = matchReduction(state.linalgOp.getRegionOutputArgs(),
+                                     blockArg.getArgNumber() -
+                                         state.linalgOp.getNumDpsInputs(),
+                                     reductionOps);
     if (!reduceOpd) {
       continue;
     }
@@ -129,11 +329,11 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
   if (!reductionOperands.empty()) {
     assert(reductionOperands.size() == 1);
     auto [reduceOpd, initialOpd] = reductionOperands.front();
-    auto reduceTile = getOrSplat(builder, valueMap, reduceOpd, commonShape);
-    auto initialTile = getOrSplat(builder, valueMap, initialOpd, commonShape);
+    auto reduceTile = getOrSplat(builder, reduceOpd, state);
+    auto initialTile = getOrSplat(builder, initialOpd, state);
     SmallVector<int64_t> dimsToReduce;
     for (auto [i, iterType] :
-         llvm::enumerate(linalgOp.getIteratorTypesArray())) {
+         llvm::enumerate(state.linalgOp.getIteratorTypesArray())) {
       if (linalg::isReductionIterator(iterType)) {
         dimsToReduce.push_back(i);
       }
@@ -145,20 +345,27 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto combiningKind = static_cast<zuan::CombiningKind>(*vectorCombiningKind);
     auto multiReduction = builder.create<zuan::ReductionOp>(
         loc, combiningKind, reduceTile, dimsToReduce, initialTile);
-    valueMap.map(op->getResult(0), multiReduction.getResult());
+    state.valueMap.map(op->getResult(0), multiReduction.getResult());
     return success();
   }
 
+  //----------------------------------------------------------------------
+  // Fallback to elementwise operations.
+  //----------------------------------------------------------------------
+
   SmallVector<Value> tileOperands;
   for (Value opd : op->getOperands()) {
-    Value tileOpd = getOrSplat(builder, valueMap, opd, commonShape);
+    Value tileOpd = getOrSplat(builder, opd, state);
     tileOperands.push_back(tileOpd);
   }
   // All the operands should share the common shape, so it is ok to build the
   // elementwise operations.
   auto newOp = builder.create(loc, op->getName().getIdentifier(), tileOperands,
                               resultTypes, op->getAttrs());
-  valueMap.map(op->getResults(), newOp->getResults());
+  if (auto mask = state.getMask()) {
+    newOp = zuan::maskOperation(builder, loc, newOp, *mask);
+  }
+  state.valueMap.map(op->getResults(), newOp->getResults());
   return success();
 }
 
@@ -391,6 +598,10 @@ struct LinalgGenericToZuanPattern : RewritePattern {
     auto dynamicBlock = &dynamicOp.getBody().front();
     auto yieldBlock = &yieldOp.getBody().front();
 
+    zuan::LinalgConversionState state(commonShape, dynamicBlock, yieldBlock,
+                                      linalgOp);
+    state.valueMap = valueMap;
+
     //----------------------------------------------------------------------
     // 4. Convert the operations.
     //----------------------------------------------------------------------
@@ -399,8 +610,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
     rewriter.setInsertionPoint(yieldOp);
     for (auto &op : linalgOp.getBlock()->getOperations()) {
       LLVM_DEBUG(DBGS() << "Converting: " << op.getName() << "\n");
-      if (failed(convertOneOpToZuan(rewriter, &op, commonShape, dynamicBlock,
-                                    yieldBlock, valueMap, linalgOp))) {
+      if (failed(convertOneOpToZuan(rewriter, &op, state))) {
         return failure();
       }
     }
@@ -415,6 +625,21 @@ struct LinalgGenericToZuanPattern : RewritePattern {
 namespace mlir {
 namespace zuan {
 
+LinalgConversionState::LinalgConversionState(SmallVector<OpFoldResult> ofrShape,
+                                             Block *dynamicBlock,
+                                             Block *yieldBlock,
+                                             linalg::LinalgOp linalgOp)
+    : ofrShape(ofrShape), dynamicBlock(dynamicBlock), yieldBlock(yieldBlock),
+      linalgOp(linalgOp) {
+  this->staticShape = llvm::map_to_vector(ofrShape, [](OpFoldResult ofr) {
+    if (auto attr = ofr.dyn_cast<Attribute>()) {
+      return cast<IntegerAttr>(attr).getInt();
+    } else {
+      return ShapedType::kDynamic;
+    }
+  });
+}
+
 void populateLinalgToZuanConversionPatterns(MLIRContext *context,
                                             RewritePatternSet &patterns) {
   patterns.insert<LinalgGenericToZuanPattern>(context);
@@ -423,7 +648,9 @@ void populateLinalgToZuanConversionPatterns(MLIRContext *context,
 void ConvertLinalgToZuanPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   populateLinalgToZuanConversionPatterns(&getContext(), patterns);
-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+
+  if (failed(
+          applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
   }
 }

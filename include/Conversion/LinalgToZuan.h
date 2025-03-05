@@ -7,13 +7,48 @@
 #ifndef CONVERSION_LINALGTOZUAN_H
 #define CONVERSION_LINALGTOZUAN_H
 
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/TypeID.h"
 namespace mlir {
 namespace zuan {
+
+struct LinalgConversionState {
+  IRMapping valueMap;
+
+  /// Common shapes.
+  SmallVector<OpFoldResult> ofrShape;
+  SmallVector<int64_t> staticShape;
+
+  Block *dynamicBlock;
+  Block *yieldBlock;
+
+  linalg::LinalgOp linalgOp;
+
+  /// The converted values of scf if condition.
+  SmallVector<Value> masks;
+
+  LinalgConversionState() = default;
+
+  LinalgConversionState(SmallVector<OpFoldResult> ofrShape, Block *dynamicBlock,
+                        Block *yieldBlock, linalg::LinalgOp linalgOp);
+
+  void pushMask(Value mask) { masks.push_back(mask); }
+  void popMask() { masks.pop_back(); }
+
+  std::optional<Value> getMask() {
+    if (masks.empty()) {
+      return std::nullopt;
+    }
+    return masks.back();
+  }
+};
 
 void populateLinalgToZuanConversionPatterns(MLIRContext *context,
                                             RewritePatternSet &patterns);
@@ -26,7 +61,7 @@ struct ConvertLinalgToZuanPass
   StringRef getDescription() const final {
     return "Convert Linalg dialect to Zuan dialect";
   }
-  
+
   void runOnOperation() override;
   void getDependentDialects(DialectRegistry &registry) const override;
 };

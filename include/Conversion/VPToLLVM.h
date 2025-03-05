@@ -48,7 +48,7 @@ struct ConvertVPToLLVMPass
   Option<bool> enableRVV{
       *this, "enable-rvv",
       llvm::cl::desc("Enable conversion to RVV-specific intrinsics"),
-      llvm::cl::init(false)};
+      llvm::cl::init(true)};
 };
 
 void registerConvertVPToLLVMPass();

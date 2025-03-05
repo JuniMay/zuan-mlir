@@ -20,14 +20,14 @@ include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 def VPScalar : AnyTypeOf<[
   F16, F32, F64, F128, BF16, I1, I8, I16, I32, I64, I128, Index]>;
 
-def VPVector : ScalableVectorOfRankAndLengthAndType<
-  [1], [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
+def VPVector : VectorOfLengthAndType<
+  [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
 
-def VPIndexVector : ScalableVectorOfRankAndLengthAndType<
-  [1], [64, 32, 16, 8, 4, 2, 1], [Index]>;
+def VPIndexVector : VectorOfLengthAndType<
+  [64, 32, 16, 8, 4, 2, 1], [Index]>;
 
-def VPMask : ScalableVectorOfRankAndLengthAndType<
-  [1], [64, 32, 16, 8, 4, 2, 1], [I1]>;
+def VPMask : VectorOfLengthAndType<
+  [64, 32, 16, 8, 4, 2, 1], [I1]>;
 
 def VP_PredicateOp : VP_Op<"predicate", [
   SingleBlockImplicitTerminator<"vector::YieldOp">,
@@ -221,6 +221,14 @@ def VP_RVVIntrVidOp :
 def VP_RVVIntrVidMaskedOp:
   VP_RVVIntrOp<"vid_mask", [0], [2], [], 1>,
   Arguments<(ins VPVector, VPMask, AnyInteger, AnyInteger)>;
+
+def VP_RVVIntrVlmOp:
+  VP_RVVIntrOp<"vlm", [0], [1], [], 1>,
+  Arguments<(ins LLVM_AnyPointer, AnyInteger)>;
+
+def VP_RVVIntrVsmOp:
+  VP_RVVIntrOp<"vsm", [], [0, 2], [], 0>,
+  Arguments<(ins VPMask, LLVM_AnyPointer, AnyInteger)>;
 
 //===----------------------------------------------------------------------===//
 // Additional vp intrinsics
