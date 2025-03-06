@@ -1,5 +1,7 @@
-add_executable(zuan-matmul-benchmark launcher.cpp)
+add_executable(zuan-matmul-benchmark launcher.cpp naive.cpp)
 target_link_libraries(zuan-matmul-benchmark PRIVATE GoogleBenchmark)
+
+set_source_files_properties(naive.cpp PROPERTIES COMPILE_FLAGS "-O3")
 
 separate_arguments(CLANG_FLAGS_LIST UNIX_COMMAND "${CMAKE_C_FLAGS}")
 
@@ -31,8 +33,8 @@ add_custom_command(
     -canonicalize 
     -cse -o ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage3.mlir
   COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-translate ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir -zuan-to-llvmir -o ${ll_file}
-  COMMAND ${ZUAN_SOURCE_DIR}/llvm-project/build/bin/clang -march=rv64gcv_zvfh -O3 ${CLANG_FLAGS_LIST} -c -save-temps ${ll_file} -o ${obj_file}
-  DEPENDS ${mlir_file}
+  COMMAND ${ZUAN_SOURCE_DIR}/llvm-project/build/bin/clang -march=rv64gcv_zvfh -O3 -g ${CLANG_FLAGS_LIST} -c -save-temps ${ll_file} -o ${obj_file}
+  DEPENDS ${mlir_file} zuan-opt
 )
 
 add_library(zuan-matmul-kernel STATIC ${obj_file})

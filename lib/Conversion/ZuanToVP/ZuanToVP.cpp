@@ -289,7 +289,7 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     }
 
     if (auto integer = shape->front().getInteger()) {
-      if (*integer == uf) {
+      if (*integer <= uf) {
         return rewriter.notifyMatchFailure(op, "already tiled");
       }
     }
@@ -299,6 +299,7 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
 
     Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
     Value step = rewriter.create<arith::ConstantIndexOp>(loc, uf);
 
     UnrollState state;
@@ -307,16 +308,36 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     // Make sure no use-before-def is produced.
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
 
+    Value size = rewriter.create<arith::ConstantIndexOp>(loc, uf);
+    Value div = rewriter.create<arith::DivUIOp>(loc, dim, size);
+    Value ub = rewriter.create<arith::MulIOp>(loc, div, size);
+
+    [[maybe_unused]]
     auto loop = rewriter.create<scf::ForOp>(
-        loc, zero, dim, step, ValueRange{},
+        loc, zero, ub, step, ValueRange{},
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           UnrollOptions options(iv, b.getIndexAttr(uf), 0, false);
           op.unroll(b, options, state);
           b.create<scf::YieldOp>(loc);
         });
 
+    if (uf != 1) {
+      UnrollState tailState;
+      tailState.initialize(op);
+
+      [[maybe_unused]]
+      auto taileLoop = rewriter.create<scf::ForOp>(
+          loc, ub, dim, one, ValueRange{},
+          [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+            UnrollOptions options(iv, b.getIndexAttr(1), 0, false);
+            op.unroll(b, options, tailState);
+            b.create<scf::YieldOp>(loc);
+          });
+    }
+
     // loop->getParentOfType<func::FuncOp>().dump();
-    rewriter.replaceOp(op, loop);
+    rewriter.eraseOp(op);
+    ;
 
     return success();
   }

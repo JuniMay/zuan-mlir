@@ -36,4 +36,7 @@ add_dependencies(GoogleBenchmark project_googlebenchmark)
 find_package(Threads)
 target_link_libraries(GoogleBenchmark INTERFACE Threads::Threads)
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
 add_subdirectory(zuan)
+add_subdirectory(common)
