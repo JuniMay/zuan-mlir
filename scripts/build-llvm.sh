@@ -10,3 +10,5 @@ cmake -G Ninja ../llvm \
     -DCMAKE_CXX_COMPILER=clang++ \
     -DCMAKE_BUILD_TYPE=RELEASE \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+ninja
