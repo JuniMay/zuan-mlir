@@ -297,7 +297,7 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
       rewriter.create<scf::YieldOp>(loc, valuesToYield[i + 1]);
     }
     rewriter.replaceOp(op, loops.front());
-    loops.front()->getParentOfType<func::FuncOp>().dump();
+    // loops.front()->getParentOfType<func::FuncOp>().dump();
     return success();
   }
 };

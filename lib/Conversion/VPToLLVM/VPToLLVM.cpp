@@ -474,11 +474,11 @@ public:
                 buildAllTrueMask(rewriter, loc, splatOp.getResult().getType());
           }
 
-          auto vp_splat = rewriter.create<LLVM::CallIntrinsicOp>(
+          auto vpSplat = rewriter.create<LLVM::CallIntrinsicOp>(
               loc, targetResType,
               rewriter.getStringAttr("llvm.experimental.vp.splat"),
               ValueRange{src, mask, evl});
-          loweredOp = vp_splat.getOperation();
+          loweredOp = vpSplat.getOperation();
         })
         .Case([&](vector::StepOp stepOp) {
           auto targetResType =
@@ -551,12 +551,23 @@ public:
           auto [strides, offset] = loadOp.getMemRefType().getStridesAndOffset();
           auto rank = loadOp.getMemRefType().getRank();
           if (strides[rank - 1] != 1) {
-            // strided load
-            MemRefDescriptor memrefDesc(baseStruct);
-            Value stride = memrefDesc.stride(rewriter, loc, rank - 1);
-            auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
-                loc, vectorType, dataPtrCasted, stride, mask, evl);
-            loweredOp = intrOp.getOperation();
+            if (strides[rank - 1] == 0) {
+              // 0-stride load, make it scalar load & splat
+              Value load = rewriter.create<LLVM::LoadOp>(
+                  loc, vectorType.getElementType(), dataPtrCasted);
+              auto splatOp = rewriter.create<LLVM::CallIntrinsicOp>(
+                  loc, vectorType,
+                  rewriter.getStringAttr("llvm.experimental.vp.splat"),
+                  ValueRange{load, mask, evl});
+              loweredOp = splatOp.getOperation();
+            } else {
+              // strided load
+              MemRefDescriptor memrefDesc(baseStruct);
+              Value stride = memrefDesc.stride(rewriter, loc, rank - 1);
+              auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
+                  loc, vectorType, dataPtrCasted, stride, mask, evl);
+              loweredOp = intrOp.getOperation();
+            }
           } else {
             if (vectorType.getElementType().isInteger(1) && enableRVV) {
               // XXX: Ignore mask here
