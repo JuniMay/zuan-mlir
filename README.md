@@ -29,6 +29,10 @@ Optional: to build the RISC-V GNU Toolchain, first apply the workaround patch:
 
 Then check the README in `third_party/riscv-gnu-toolchain` to install dependencies.
 
+Note that the GNU Toolchain is by default enabled in the script, and it also
+enables an LLVM build to support OpenMP header and libraries, so it will take
+longer to build.
+
 3. Compile LLVM & MLIR
 
 ```bash

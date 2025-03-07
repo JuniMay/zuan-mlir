@@ -68,7 +68,8 @@ if (ENABLE_RISCV_GNU_TOOLCHAIN)
     riscv-gnu-toolchain
     SOURCE_DIR        ${RISCV_GNU_TOOLCHAIN_DIR}
     PREFIX            ${RISCV_GNU_TOOLCHAIN_BUILD_DIR}
-    CONFIGURE_COMMAND ${RISCV_GNU_TOOLCHAIN_DIR}/configure --prefix=${RISCV_GNU_TOOLCHAIN_BUILD_DIR}
+    # LLVM is also enabled here to support OpenMP.
+    CONFIGURE_COMMAND ${RISCV_GNU_TOOLCHAIN_DIR}/configure --enable-llvm --prefix=${RISCV_GNU_TOOLCHAIN_BUILD_DIR}
     BUILD_COMMAND     make clean && make -j8 linux build-sim SIM=qemu
     BUILD_IN_SOURCE   TRUE
     INSTALL_COMMAND   ""

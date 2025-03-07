@@ -1,4 +1,5 @@
 
+#include "common/verification.h"
 #include <cassert>
 #include <cstdlib>
 #include <iomanip>
@@ -51,6 +52,8 @@ template <typename T, size_t N> struct MemRef {
 
   T *getData() { return data; }
 
+  const T *getData() const { return data; }
+
   /// Given the linearized index, return the reference to the element.
   T &operator[](int64_t idx) { return data[offset + idx]; }
 
@@ -64,31 +67,9 @@ template <typename T, size_t N> struct MemRef {
 
   void verify(const MemRef<T, N> &other, const std::string &name,
               T epsilon = 0.0001) const {
-    const std::string PASS = "\033[32mPASS\033[0m";
-    const std::string FAIL = "\033[31mFAIL\033[0m";
-
-    std::cout << name << " ";
-    if (!data || !other.data) {
-      std::cout << FAIL << " (Null pointer detected)" << std::endl;
-      return;
-    }
-
     auto totalSize = getTotalSize();
     assert(totalSize == other.getTotalSize() && "size mismatch");
-    bool isPass = true;
-    for (int i = 0; i < totalSize; ++i) {
-      if (std::abs(data[i] - other.data[i]) > epsilon) {
-        std::cout << FAIL << std::endl;
-        std::cout << "Index " << i << ":\tA=" << std::setprecision(10)
-                  << data[i] << " B=" << std::setprecision(10) << other.data[i]
-                  << std::endl;
-        isPass = false;
-        break;
-      }
-    }
-    if (isPass) {
-      std::cout << PASS << std::endl;
-    }
+    ::verify(getData(), other.getData(), totalSize, name, epsilon);
   }
 
   int64_t getSize(size_t idx) const { return sizes[idx]; }
@@ -101,3 +82,4 @@ private:
   int64_t sizes[N];
   int64_t strides[N];
 };
+ 
