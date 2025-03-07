@@ -1,6 +1,2 @@
-add_subdirectory(attention)
-add_subdirectory(gemv)
-add_subdirectory(layernorm)
 add_subdirectory(matmul)
-add_subdirectory(softmax)
 add_subdirectory(vector_add)
