@@ -564,8 +564,13 @@ public:
               // strided load
               MemRefDescriptor memrefDesc(baseStruct);
               Value stride = memrefDesc.stride(rewriter, loc, rank - 1);
+              // Need to multiply the stride with the byte size of the element.
+              auto bytewidth = vectorType.getElementType().getIntOrFloatBitWidth() / 8;
+              Value scale = rewriter.create<LLVM::ConstantOp>(
+                  loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
+              Value strideScaled = rewriter.create<LLVM::MulOp>(loc, stride, scale);
               auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
-                  loc, vectorType, dataPtrCasted, stride, mask, evl);
+                  loc, vectorType, dataPtrCasted, strideScaled, mask, evl);
               loweredOp = intrOp.getOperation();
             }
           } else {
@@ -610,8 +615,13 @@ public:
             MemRefDescriptor memrefDesc(baseStruct);
             unsigned pos = storeOp.getMemRefType().getRank() - 1;
             Value stride = memrefDesc.stride(rewriter, loc, pos);
+            // Need to multiply the stride with the byte size of the element.
+            auto bytewidth = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth() / 8;
+            Value scale = rewriter.create<LLVM::ConstantOp>(
+                loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
+            Value strideScaled = rewriter.create<LLVM::MulOp>(loc, stride, scale);
             auto intrOp = rewriter.create<LLVM::VPStridedStoreOp>(
-                loc, value, dataPtrCasted, stride, mask, evl);
+                loc, value, dataPtrCasted, strideScaled, mask, evl);
             loweredOp = intrOp.getOperation();
           } else {
             if (storeOp.getVectorType().getElementType().isInteger(1) &&

@@ -21,7 +21,7 @@ static auto initializeData(size_t m, size_t n, size_t k) {
   std::uniform_real_distribution<float> dis(0.0, 1.0);
 
   MemRef<float, 2> input1({m, k}, 0);
-  MemRef<float, 2> input2({k, n}, 0);
+  MemRef<float, 2> input2({n, k}, 0);
 
   for (size_t i = 0; i < m; i++) {
     for (size_t j = 0; j < k; j++) {
@@ -29,9 +29,9 @@ static auto initializeData(size_t m, size_t n, size_t k) {
     }
   }
 
-  for (size_t i = 0; i < k; i++) {
-    for (size_t j = 0; j < n; j++) {
-      input2[i * n + j] = dis(gen);
+  for (size_t i = 0; i < n; i++) {
+    for (size_t j = 0; j < k; j++) {
+      input2[i * k + j] = dis(gen);
     }
   }
 
@@ -70,7 +70,7 @@ static void verifyMatmul() {
   runKernel(_mlir_ciface_kernel_zuan, &input1, &input2, &zuan_buffer);
   runKernel(_mlir_ciface_kernel_autovec, &input1, &input2, &autovec_buffer);
 
-  zuan_buffer.verify(autovec_buffer, "Matmul", 0.0001);
+  zuan_buffer.verify(autovec_buffer, "Matmul-Transpose-B", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
