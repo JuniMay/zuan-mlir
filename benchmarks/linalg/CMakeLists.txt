@@ -95,7 +95,8 @@ function(add_linalg_benchmark benchmark_name)
 endfunction()
 
 
+add_subdirectory(dot-fp16)
 add_subdirectory(matmul)
 add_subdirectory(matmul-transpose-b)
 add_subdirectory(matmul-transpose-a)
-
+add_subdirectory(relu)
