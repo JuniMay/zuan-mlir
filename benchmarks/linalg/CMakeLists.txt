@@ -56,7 +56,7 @@ function(add_linalg_benchmark benchmark_name)
       ${ZUAN_TRANSLATE} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang 
-        -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}
+        -march=rv64gcv_zvfh -O3 -ffast-math -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}
     DEPENDS ${mlir_file} zuan-opt zuan-translate
   )
 
@@ -85,7 +85,7 @@ function(add_linalg_benchmark benchmark_name)
         -mlir-print-ir-after-all 2> ${autovec_debug_file} |
       ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
     COMMAND
-      ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
+      ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
     DEPENDS ${mlir_file} zuan-opt 
   )
 
