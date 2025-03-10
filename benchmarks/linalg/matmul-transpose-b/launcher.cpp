@@ -6,10 +6,18 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<float, 2> *, MemRef<float, 2> *,
-                                 MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan(MemRef<float, 2> *, MemRef<float, 2> *,
-                              MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_8(MemRef<float, 2> *, MemRef<float, 2> *,
+                                   MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<float, 2> *, MemRef<float, 2> *,
+                                    MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 2> *,
+                                    MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 2> *,
+                                    MemRef<float, 2> *);
+void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
+                                  MemRef<float, 2> *);
+void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 2> *, MemRef<float, 2> *,
+                                   MemRef<float, 2> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 2> *, MemRef<float, 2> *,
@@ -64,41 +72,70 @@ static void verifyMatmul() {
   const size_t K = 123;
 
   auto [input1, input2] = initializeData(M, N, K);
-  MemRef<float, 2> autovec_buffer({M, N}, 0);
-  MemRef<float, 2> zuan_buffer({M, N}, 0);
+  MemRef<float, 2> autovec({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, &autovec);
 
-  runKernel(_mlir_ciface_kernel_zuan, &input1, &input2, &zuan_buffer);
-  runKernel(_mlir_ciface_kernel_autovec, &input1, &input2, &autovec_buffer);
+  MemRef<float, 2> zuan_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
 
-  zuan_buffer.verify(autovec_buffer, "Matmul-Transpose-B", 0.0001);
+  MemRef<float, 2> zuan_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
+
+  autovec.verify(zuan_16_2, "Matmul", 0.0001);
+  autovec.verify(zuan_8_4, "Matmul", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
     std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << autovec_buffer[i] << " Zuan=" << std::setprecision(10)
-              << zuan_buffer[i] << std::endl;
+              << autovec[i] << " Zuan-8-4=" << std::setprecision(10)
+              << zuan_8_4[i] << " Zuan-16-2=" << std::setprecision(10)
+              << zuan_16_2[i] << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
-    ->Args({64, 64, 64})
-    ->Args({128, 128, 128})
-    ->Args({256, 256, 256})
-    ->Args({512, 512, 512})
-    ->Args({1024, 1024, 1024})
-    ->Args({511, 237, 123})
-    ->Args({1023, 509, 2173});
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->Args({64, 64, 64})
-    ->Args({128, 128, 128})
-    ->Args({256, 256, 256})
-    ->Args({512, 512, 512})
-    ->Args({1024, 1024, 1024})
-    ->Args({511, 237, 123})
-    ->Args({1023, 509, 2173});
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
 
 int main(int argc, char **argv) {
   ::benchmark::Initialize(&argc, argv);

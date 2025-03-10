@@ -6,10 +6,10 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int,
-                                 int, MemRef<int64_t, 2> *);
-void _mlir_ciface_kernel_zuan(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int,
-                              int, MemRef<int64_t, 2> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
+                                    int, int, MemRef<int64_t, 2> *);
+void _mlir_ciface_kernel_zuan_8_2(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int,
+                                  int, MemRef<int64_t, 2> *);
 }
 
 using KernelFunc = void (*)(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int, int,
@@ -72,8 +72,9 @@ static void verifyMatmul() {
   MemRef<int64_t, 2> output0({M, N}, 0);
   MemRef<int64_t, 2> output1({M, N}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec, &input1, &input2, zp0, zp1, &output0);
-  runKernel(_mlir_ciface_kernel_zuan, &input1, &input2, zp0, zp1, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, zp0, zp1,
+            &output0);
+  runKernel(_mlir_ciface_kernel_zuan_8_2, &input1, &input2, zp0, zp1, &output1);
 
   output0.verify(output1, "quantized-matmul", 0);
 
@@ -84,7 +85,7 @@ static void verifyMatmul() {
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 32, 1, 2})
     ->Args({128, 128, 32, 1, 2})
@@ -94,7 +95,7 @@ BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
     ->Args({511, 237, 123, 1, 2})
     ->Args({1023, 509, 2173, 1, 2});
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 32, 1, 2})
     ->Args({128, 128, 32, 1, 2})

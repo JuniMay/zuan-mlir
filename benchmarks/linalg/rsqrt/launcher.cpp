@@ -6,8 +6,8 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -63,8 +63,8 @@ static void verifyRsqrt() {
   MemRef<float, 4> output0({B, H, W, C}, 0);
   MemRef<float, 4> output1({B, H, W, C}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec, &input, &output0);
-  runKernel(_mlir_ciface_kernel_zuan, &input, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input, &output0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &input, &output1);
 
   // Zuan Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
   // even if fast-math is enabled.
@@ -77,14 +77,14 @@ static void verifyRsqrt() {
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 56, 64})
     ->Args({64, 96, 96, 128})
     ->Args({1, 3, 171, 103})
     ->Args({179, 253, 19, 129});
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 56, 64})
     ->Args({64, 96, 96, 128})

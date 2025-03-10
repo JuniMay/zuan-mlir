@@ -5,8 +5,8 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<float, 1> *, MemRef<float, 0> *);
-void _mlir_ciface_kernel_zuan(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 1> *, MemRef<float, 0> *);
@@ -49,14 +49,14 @@ static void verifyReduce() {
   MemRef<float, 0> output0({}, 0);
   MemRef<float, 0> output1({}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec, &vec, &output0);
-  runKernel(_mlir_ciface_kernel_zuan, &vec, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, &vec, &output0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &output1);
 
   std::cout << "Output0: " << output0[0] << "\n";
   std::cout << "Output1: " << output1[0] << "\n";
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->Arg(1 << 10)
     ->Arg(1 << 12)
@@ -66,7 +66,7 @@ BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
     ->Arg(1 << 20)
     ->Arg(1397319);
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->Arg(1 << 10)
     ->Arg(1 << 12)

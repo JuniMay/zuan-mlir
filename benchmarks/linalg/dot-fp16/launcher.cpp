@@ -6,10 +6,18 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
-                                 MemRef<float, 0> *);
-void _mlir_ciface_kernel_zuan(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
-                              MemRef<float, 0> *);
+
+void _mlir_ciface_kernel_autovec_8(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
+                                   MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<_Float16, 1> *,
+                                    MemRef<_Float16, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<_Float16, 1> *,
+                                    MemRef<_Float16, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<_Float16, 1> *,
+                                    MemRef<_Float16, 1> *, MemRef<float, 0> *);
+
+void _mlir_ciface_kernel_zuan_16_2(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
+                                   MemRef<float, 0> *);
 }
 
 using KernelFunc = void (*)(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
@@ -52,22 +60,24 @@ static void runBenchmark(benchmark::State &state, KernelFunc kernel) {
 static void verifyDotFp16() {
   const size_t N = 1397;
   auto [vec_a, vec_b] = initializeData(N);
-  MemRef<float, 0> output0({}, 0);
-  MemRef<float, 0> output1({}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec, &vec_a, &vec_b, &output0);
-  runKernel(_mlir_ciface_kernel_zuan, &vec_a, &vec_b, &output1);
+  MemRef<float, 0> output0({}, 0);
+  runKernel(_mlir_ciface_kernel_autovec_16, &vec_a, &vec_b, &output0);
+
+  MemRef<float, 0> output_16_2({}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec_a, &vec_b, &output_16_2);
 
   // The clang auto-vectorization generates ordered reduce, while in zuan it
   // uses unordered reduce. The difference in the order of reduction can lead to
   // different results.
-  output0.verify(output1, "Dot-fp16", 10);
+  output0.verify(output_16_2, "Dot-fp16-Zuan-16-2", 10);
 
   std::cout << "Autovec = " << std::setprecision(10) << output0[0]
-            << "\tZuan = " << std::setprecision(10) << output1[0] << std::endl;
+            << "\tzuan_16_2 = " << std::setprecision(10) << output_16_2[0]
+            << std::endl;
 }
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
     ->Arg(256)
     ->Arg(512)
@@ -76,7 +86,34 @@ BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
     ->Arg(65536)
     ->Arg(1397);
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->Arg(256)
+    ->Arg(512)
+    ->Arg(1024)
+    ->Arg(2048)
+    ->Arg(65536)
+    ->Arg(1397);
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->Arg(256)
+    ->Arg(512)
+    ->Arg(1024)
+    ->Arg(2048)
+    ->Arg(65536)
+    ->Arg(1397);
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->Arg(256)
+    ->Arg(512)
+    ->Arg(1024)
+    ->Arg(2048)
+    ->Arg(65536)
+    ->Arg(1397);
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->Arg(256)
     ->Arg(512)

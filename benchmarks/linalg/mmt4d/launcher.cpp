@@ -6,10 +6,18 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<float, 4> *, MemRef<float, 4> *,
-                                 MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan(MemRef<float, 4> *, MemRef<float, 4> *,
-                              MemRef<float, 4> *);
+void _mlir_ciface_kernel_autovec_8(MemRef<float, 4> *, MemRef<float, 4> *,
+                                   MemRef<float, 4> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *,
+                                    MemRef<float, 4> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *,
+                                    MemRef<float, 4> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<float, 4> *, MemRef<float, 4> *,
+                                    MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *,
+                                  MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *,
+                                   MemRef<float, 4> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 4> *, MemRef<float, 4> *,
@@ -80,41 +88,86 @@ static void verifyMmt4D() {
   const size_t K0 = 13;
 
   auto [input1, input2] = initializeData(M, N, K, M0, N0, K0);
-  MemRef<float, 4> output0({M, N, M0, N0}, 0);
-  MemRef<float, 4> output1({M, N, M0, N0}, 0);
+  MemRef<float, 4> autovec({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, &autovec);
 
-  runKernel(_mlir_ciface_kernel_zuan, &input1, &input2, &output1);
-  runKernel(_mlir_ciface_kernel_autovec, &input1, &input2, &output0);
+  MemRef<float, 4> zuan_8_4({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
+  MemRef<float, 4> zuan_16_2({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  output0.verify(output1, "mmt4d", 0.0001);
+  autovec.verify(zuan_16_2, "mmt4d", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
     std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << output0[i] << " Zuan=" << std::setprecision(10) << output1[i]
-              << std::endl;
+              << autovec[i] << " Zuan-16-2=" << std::setprecision(10)
+              << zuan_16_2[i] << "Zuan-8-4=" << std::setprecision(10)
+              << zuan_8_4[i] << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
-    ->Args({3, 3, 3, 32, 32, 32})
-    ->Args({4, 4, 4, 64, 64, 64})
-    ->Args({8, 8, 8, 64, 64, 64})
-    ->Args({5, 5, 5, 128, 128, 128})
-    ->Args({6, 6, 6, 128, 128, 128})
-    ->Args({7, 7, 7, 128, 128, 128})
-    ->Args({2, 2, 2, 511, 237, 123});
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->Args({3, 3, 3, 32, 32, 32})
-    ->Args({4, 4, 4, 64, 64, 64})
-    ->Args({8, 8, 8, 64, 64, 64})
-    ->Args({5, 5, 5, 128, 128, 128})
-    ->Args({6, 6, 6, 128, 128, 128})
-    ->Args({7, 7, 7, 128, 128, 128})
-    ->Args({2, 2, 2, 511, 237, 123});
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {3, 4, 5, 6, 7, 8},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+        {16, 32, 51, 64, 128},
+    });
 
 int main(int argc, char **argv) {
   std::cout << "------------------------------------------------" << std::endl;

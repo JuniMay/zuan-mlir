@@ -5,8 +5,8 @@
 #include <iostream>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(double, double, int, MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_16(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_zuan_8_2(double, double, int, MemRef<float, 2> *);
 }
 
 using KernelFunc = void (*)(double, double, int, MemRef<float, 2> *);
@@ -39,8 +39,8 @@ static void verifyFillRng2D() {
   MemRef<float, 2> output0({M, N}, 0);
   MemRef<float, 2> output1({M, N}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec, min, max, seed, &output0);
-  runKernel(_mlir_ciface_kernel_zuan, min, max, seed, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, min, max, seed, &output0);
+  runKernel(_mlir_ciface_kernel_zuan_8_2, min, max, seed, &output1);
 
   output0.verify(output1, "Fill-Rng-2D", 0);
 
@@ -51,7 +51,7 @@ static void verifyFillRng2D() {
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMicrosecond)
     ->Args({64, 56})
     ->Args({128, 128})
@@ -60,7 +60,7 @@ BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
     ->Args({1024, 1024})
     ->Args({123, 457});
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMicrosecond)
     ->Args({64, 56})
     ->Args({128, 128})

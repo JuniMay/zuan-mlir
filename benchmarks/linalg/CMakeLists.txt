@@ -4,35 +4,29 @@
 
 set(LLVM_BINARY_DIR ${ZUAN_SOURCE_DIR}/llvm-project/build/bin)
 
-# This function defines `linalg_${benchmark_name}_kernels` library target.
-function(add_linalg_benchmark benchmark_name)
-  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name})
-  
+# `linalg_${benchmark_name}_zuan_${vf}_${uf}`
+function(add_linalg_zuan_kernel benchmark_name vf uf)
   set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.mlir)
-
-  set(zuan_mlir ${generated_file_prefix}_zuan.mlir)
-  set(zuan_llvm ${generated_file_prefix}_zuan.ll)
-  set(zuan_debug_file ${generated_file_prefix}_zuan_debug.mlir)
-  set(zuan_obj ${generated_file_prefix}_zuan.o)
-
-  set(autovec_mlir ${generated_file_prefix}_autovec.mlir)
-  set(autovec_llvm ${generated_file_prefix}_autovec.ll)
-  set(autovec_debug_file ${generated_file_prefix}_autovec_debug.mlir)
-  set(autovec_obj ${generated_file_prefix}_autovec.o)
+  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_zuan_${vf}_${uf})
+  
+  set(zuan_mlir ${generated_file_prefix}.mlir)
+  set(zuan_llvm ${generated_file_prefix}.ll)
+  set(zuan_debug_file ${generated_file_prefix}_debug.mlir)
+  set(zuan_obj ${generated_file_prefix}.o)
 
   add_custom_command(
     OUTPUT ${zuan_mlir} ${zuan_llvm} ${zuan_obj}
     COMMAND
       cat ${mlir_file} |
-      sed "'s/kernel(/kernel_zuan(/'" |
+      sed "'s/kernel(/kernel_zuan_${vf}_${uf}(/'" |
       ${ZUAN_OPT}
         -linalg-generalize-named-ops
         -convert-linalg-to-zuan
         -lower-zuan="target-rank=2"
-        -zuan-stripmining="vf=8;uf=2;scalable=true"
+        -zuan-stripmining="vf=${vf};uf=${uf};scalable=true"
         -canonicalize
         -cse
-        -convert-zuan-to-vp="vf=8;scalable=true"
+        -convert-zuan-to-vp="vf=${vf};scalable=true"
         -convert-vp-to-llvm
         -canonicalize
         -cse
@@ -61,14 +55,28 @@ function(add_linalg_benchmark benchmark_name)
     DEPENDS ${mlir_file} zuan-opt zuan-translate
   )
 
+  add_library(linalg_${benchmark_name}_zuan_${vf}_${uf} STATIC ${zuan_obj})
+  set_target_properties(linalg_${benchmark_name}_zuan_${vf}_${uf} PROPERTIES LINKER_LANGUAGE CXX)
+endfunction()
+
+# `linalg_${benchmark_name}_autovec_${virtvecsize}`
+function(add_linalg_autovec_kernel benchmark_name virtvecsize)
+  set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.mlir)
+  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_autovec_${virtvecsize})
+  
+  set(autovec_mlir ${generated_file_prefix}.mlir)
+  set(autovec_llvm ${generated_file_prefix}.ll)
+  set(autovec_debug_file ${generated_file_prefix}_debug.mlir)
+  set(autovec_obj ${generated_file_prefix}.o)
+
   add_custom_command(
     OUTPUT ${autovec_mlir} ${autovec_llvm} ${autovec_obj}
     COMMAND
       cat ${mlir_file} |
-      sed "'s/kernel(/kernel_autovec(/'" |
+      sed "'s/kernel(/kernel_autovec_${virtvecsize}(/'" |
       ${LLVM_BINARY_DIR}/mlir-opt
         -convert-linalg-to-affine-loops
-        -affine-super-vectorize="virtual-vector-size=16;vectorize-reductions"
+        -affine-super-vectorize="virtual-vector-size=${virtvecsize};vectorize-reductions"
         -convert-vector-to-scf="full-unroll"
         -convert-vector-to-llvm
         -lower-affine
@@ -87,14 +95,12 @@ function(add_linalg_benchmark benchmark_name)
       ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
-    DEPENDS ${mlir_file} zuan-opt 
+    DEPENDS ${mlir_file} zuan-opt
   )
 
-  add_library(linalg_${benchmark_name}_kernels STATIC ${zuan_obj} ${autovec_obj})
-  set_target_properties(linalg_${benchmark_name}_kernels PROPERTIES LINKER_LANGUAGE CXX)
-
+  add_library(linalg_${benchmark_name}_autovec_${virtvecsize} STATIC ${autovec_obj})
+  set_target_properties(linalg_${benchmark_name}_autovec_${virtvecsize} PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
-
 
 add_subdirectory(dot-fp16)
 add_subdirectory(fill-rng-2d)

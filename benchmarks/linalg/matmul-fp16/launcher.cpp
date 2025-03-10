@@ -6,10 +6,27 @@
 #include <random>
 
 extern "C" {
-void _mlir_ciface_kernel_autovec(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
-                                 MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
-                              MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_autovec_8(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                   MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_autovec_16(MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *,
+                                    MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_zuan_8_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                  MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_zuan_8_8(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                  MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_zuan_16_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                   MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_zuan_16_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                   MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_zuan_32_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+                                   MemRef<_Float16, 2> *);
 }
 
 using KernelFunc = void (*)(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
@@ -39,7 +56,8 @@ static auto initializeData(size_t m, size_t n, size_t k) {
 }
 
 static void runKernel(KernelFunc kernel, MemRef<_Float16, 2> *input1,
-                      MemRef<_Float16, 2> *input2, MemRef<_Float16, 2> *output) {
+                      MemRef<_Float16, 2> *input2,
+                      MemRef<_Float16, 2> *output) {
   kernel(input1, input2, output);
 }
 
@@ -64,42 +82,107 @@ static void verifyMatmul() {
   const size_t K = 123;
 
   auto [input1, input2] = initializeData(M, N, K);
-  MemRef<_Float16, 2> output0({M, N}, 0);
-  MemRef<_Float16, 2> output1({M, N}, 0);
+  MemRef<_Float16, 2> autovec({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, &autovec);
 
-  runKernel(_mlir_ciface_kernel_zuan, &input1, &input2, &output1);
-  runKernel(_mlir_ciface_kernel_autovec, &input1, &input2, &output0);
+  MemRef<_Float16, 2> zuan_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
+
+  MemRef<_Float16, 2> zuan_8_8({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_8, &input1, &input2, &zuan_8_8);
+
+  MemRef<_Float16, 2> zuan_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
+
+  MemRef<_Float16, 2> zuan_16_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_4, &input1, &input2, &zuan_16_4);
+
+  MemRef<_Float16, 2> zuan_32_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_32_2, &input1, &input2, &zuan_32_2);
 
   // output1.verify(output0, "Matmul", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
+    // std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
+    //           << (float)autovec[i] << " Zuan=" << std::setprecision(10)
+    //           << (float)zuan_16_2[i] << std::endl;
+
     std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << (float)output0[i] << " Zuan=" << std::setprecision(10)
-              << (float)output1[i] << std::endl;
+              << (float)autovec[i] << " Zuan-8-4=" << std::setprecision(10)
+              << (float)zuan_8_4[i] << " Zuan-8-8=" << std::setprecision(10)
+              << (float)zuan_8_8[i] << " Zuan-16-2=" << std::setprecision(10)
+              << (float)zuan_16_2[i] << " Zuan-16-4=" << std::setprecision(10)
+              << (float)zuan_16_4[i] << " Zuan-32-2=" << std::setprecision(10)
+              << (float)zuan_32_2[i] << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
-    ->Args({64, 64, 64})
-    ->Args({128, 128, 128})
-    ->Args({256, 256, 256})
-    ->Args({512, 512, 512})
-    ->Args({1024, 1024, 1024})
-    ->Args({511, 237, 123})
-    ->Args({1023, 509, 2173});
-
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
     ->Unit(benchmark::kMillisecond)
-    ->Args({64, 64, 64})
-    ->Args({128, 128, 128})
-    ->Args({256, 256, 256})
-    ->Args({512, 512, 512})
-    ->Args({1024, 1024, 1024})
-    ->Args({511, 237, 123})
-    ->Args({1023, 509, 2173});
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_32_2, _mlir_ciface_kernel_zuan_32_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
 
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+        {16, 32, 64, 96, 123, 128, 172, 237, 256, 384, 511, 512, 768, 1024},
+    });
+    
 int main(int argc, char **argv) {
   ::benchmark::Initialize(&argc, argv);
   ::benchmark::RunSpecifiedBenchmarks();
