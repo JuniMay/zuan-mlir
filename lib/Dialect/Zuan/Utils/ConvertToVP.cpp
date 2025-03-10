@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
@@ -315,6 +316,47 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
     }
   }
   state.tileMap[result] = values;
+}
+
+template <typename ElementwiseOp>
+static void handleElementwise(OpBuilder &builder, Operation *op,
+                              ShapeInfo &shapeInfo, VPConversionState &state) {
+  auto loc = op->getLoc();
+  auto shape = shapeInfo.getShape(op->getResult(0));
+  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+
+  SmallVector<Value> resultValues;
+  for (int64_t i = 0; i < rows; ++i) {
+    SmallVector<Value> operands;
+
+    for (auto operand : op->getOperands()) {
+      operands.push_back(state.tileMap[operand][i]);
+    }
+
+    auto maskPair = getMaskPair(state, i);
+    auto mask = maskPair.first;
+    auto maskedoff = maskPair.second;
+
+    if (cols.has_value()) {
+      auto elementwiseOp = builder.create<ElementwiseOp>(loc, operands);
+      auto predOp = vp::predicateOperation(builder, elementwiseOp, *cols, mask,
+                                           nullptr, maskedoff);
+      resultValues.push_back(predOp->getResult(0));
+    } else {
+      auto val = createSCFIfOp(
+          builder, loc, mask, maskedoff,
+          [&](OpBuilder &b, Location loc) {
+            Value res = b.create<ElementwiseOp>(loc, operands);
+            return res;
+          },
+          [&](OpBuilder &b, Location loc) {
+            return buildZero(b, loc, op->getResult(0).getType());
+          });
+      resultValues.push_back(val);
+    }
+  }
+
+  state.tileMap[op->getResult(0)] = resultValues;
 }
 
 template <typename ArithOp>
@@ -1077,6 +1119,9 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         }
         rewriter.create<scf::ConditionOp>(op->getLoc(), op->getResultTypes(),
                                           newOperands);
+      })
+      .Case<math::RsqrtOp, math::ExpOp>([&](auto unaryOp) {
+        handleElementwise<decltype(unaryOp)>(rewriter, op, shapeInfo, state);
       })
       .Default([&](Operation *op) {
         LLVM_DEBUG(DBGS() << "Fallback to clone: " << op->getName() << "\n");

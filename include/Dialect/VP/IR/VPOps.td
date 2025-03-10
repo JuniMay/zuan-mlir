@@ -230,6 +230,14 @@ def VP_RVVIntrVsmOp:
   VP_RVVIntrOp<"vsm", [], [0, 2], [], 0>,
   Arguments<(ins VPMask, LLVM_AnyPointer, AnyInteger)>;
 
+def VP_RVVIntrFRsqrt7Op:
+  VP_RVVIntrOp<"vfrsqrt7", [0], [2], [], 1>,
+  Arguments<(ins VPVector, VPVector, AnyInteger)>;
+
+def VP_RVVIntrFRsqrt7MaskedOp:
+  VP_RVVIntrOp<"vfrsqrt7_mask", [0], [3], [], 1>,
+  Arguments<(ins VPVector, VPVector, VPMask, AnyInteger, AnyInteger)>;
+
 //===----------------------------------------------------------------------===//
 // Additional vp intrinsics
 //===----------------------------------------------------------------------===//

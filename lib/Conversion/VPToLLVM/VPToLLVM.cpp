@@ -14,8 +14,8 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/Dialect/X86Vector/Transforms.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -497,7 +497,8 @@ public:
                   loc, rewriter.getI32Type(),
                   rewriter.getI32IntegerAttr(policy));
               auto intrOp = rewriter.create<vp::RVVIntrVidMaskedOp>(
-                  loc, targetResType, passthruMerged, mask, evl, policyValue);
+                  loc, targetResType, passthruMerged, mask, evlxlen,
+                  policyValue);
               loweredOp = intrOp.getOperation();
             }
             doMerge = false; // Already merged in the intrinsic.
@@ -565,10 +566,12 @@ public:
               MemRefDescriptor memrefDesc(baseStruct);
               Value stride = memrefDesc.stride(rewriter, loc, rank - 1);
               // Need to multiply the stride with the byte size of the element.
-              auto bytewidth = vectorType.getElementType().getIntOrFloatBitWidth() / 8;
+              auto bytewidth =
+                  vectorType.getElementType().getIntOrFloatBitWidth() / 8;
               Value scale = rewriter.create<LLVM::ConstantOp>(
                   loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
-              Value strideScaled = rewriter.create<LLVM::MulOp>(loc, stride, scale);
+              Value strideScaled =
+                  rewriter.create<LLVM::MulOp>(loc, stride, scale);
               auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
                   loc, vectorType, dataPtrCasted, strideScaled, mask, evl);
               loweredOp = intrOp.getOperation();
@@ -616,10 +619,14 @@ public:
             unsigned pos = storeOp.getMemRefType().getRank() - 1;
             Value stride = memrefDesc.stride(rewriter, loc, pos);
             // Need to multiply the stride with the byte size of the element.
-            auto bytewidth = storeOp.getMemRefType().getElementType().getIntOrFloatBitWidth() / 8;
+            auto bytewidth = storeOp.getMemRefType()
+                                 .getElementType()
+                                 .getIntOrFloatBitWidth() /
+                             8;
             Value scale = rewriter.create<LLVM::ConstantOp>(
                 loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
-            Value strideScaled = rewriter.create<LLVM::MulOp>(loc, stride, scale);
+            Value strideScaled =
+                rewriter.create<LLVM::MulOp>(loc, stride, scale);
             auto intrOp = rewriter.create<LLVM::VPStridedStoreOp>(
                 loc, value, dataPtrCasted, strideScaled, mask, evl);
             loweredOp = intrOp.getOperation();
@@ -788,6 +795,32 @@ public:
           intrOp->setAttr("predicate", llvmPred);
           loweredOp = intrOp.getOperation();
         })
+        .Case([&](math::RsqrtOp rsqrtOp) {
+          auto src = rsqrtOp.getOperand();
+          src = materializeOperand(rewriter, typeConverter, src);
+          auto targetResType =
+              typeConverter->convertType(rsqrtOp.getResult().getType());
+          if (enableRVV) {
+            auto [passthruMerged, policy] = buildRVVPassthru(
+                rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
+            if (!mask) {
+              auto intrOp = rewriter.create<vp::RVVIntrFRsqrt7Op>(
+                  loc, targetResType, passthruMerged, src, evlxlen);
+              loweredOp = intrOp.getOperation();
+            } else {
+              auto policyValue = rewriter.create<LLVM::ConstantOp>(
+                  loc, rewriter.getI32Type(),
+                  rewriter.getI32IntegerAttr(policy));
+              auto intrOp = rewriter.create<vp::RVVIntrFRsqrt7MaskedOp>(
+                  loc, targetResType, passthruMerged, src, mask, evlxlen,
+                  policyValue);
+              loweredOp = intrOp.getOperation();
+            }
+            doMerge = false; // Already merged in the intrinsic.
+          } else {
+            assert(false && "rsqrt is not yet supported in non-RVV mode");
+          }
+        })
         .Default([&](Operation *) {
           loweredOp = rewriter.notifyMatchFailure(op, "unsupported operation");
         });
@@ -937,9 +970,10 @@ void populateVPToLLVMConversionPatterns(LLVMTypeConverter &converter,
 void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
   target.addIllegalOp<PredicateOp, GetVLOp, LoadOp, StoreOp, GatherOp,
                       ScatterOp>();
+  target.addLegalOp<VPIntrFCmpOp, VPIntrICmpOp>();
   target.addLegalOp<RVVIntrSetVliOp, RVVIntrSetVliMaxOp, RVVIntrVidOp,
-                    RVVIntrVidMaskedOp, VPIntrFCmpOp, VPIntrICmpOp,
-                    RVVIntrVlmOp, RVVIntrVsmOp>();
+                    RVVIntrVidMaskedOp, RVVIntrVlmOp, RVVIntrVsmOp,
+                    RVVIntrFRsqrt7Op, RVVIntrFRsqrt7MaskedOp>();
 }
 
 void ConvertVPToLLVMPass::runOnOperation() {
