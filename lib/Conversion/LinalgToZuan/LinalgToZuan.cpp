@@ -119,7 +119,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
           llvm_unreachable("unsupported cast operation");
         });
 
-    auto source = state.valueMap.lookup(op->getOperand(0));
+    auto source = getOrSplat(builder, op->getOperand(0), state);
     auto resultElementType = op->getResult(0).getType();
     auto resultType = zuan::TileType::get(state.staticShape, resultElementType);
 
@@ -649,8 +649,7 @@ void ConvertLinalgToZuanPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   populateLinalgToZuanConversionPatterns(&getContext(), patterns);
 
-  if (failed(
-          applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
   }
 }

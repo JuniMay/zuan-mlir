@@ -1,0 +1,4 @@
+func.func @kernel(%lhs: memref<?x?x?x?xf32>, %rhs: memref<?x?x?x?xf32>, %result: memref<?x?x?x?xf32>) {
+  linalg.mmt4d ins(%lhs, %rhs : memref<?x?x?x?xf32>, memref<?x?x?x?xf32>) outs(%result: memref<?x?x?x?xf32>)
+  return
+}

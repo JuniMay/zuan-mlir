@@ -26,12 +26,13 @@ function(add_linalg_benchmark benchmark_name)
       cat ${mlir_file} |
       sed "'s/kernel(/kernel_zuan(/'" |
       ${ZUAN_OPT}
+        -linalg-generalize-named-ops
         -convert-linalg-to-zuan
         -lower-zuan="target-rank=2"
-        -zuan-stripmining="vf=16;uf=2;scalable=true"
+        -zuan-stripmining="vf=8;uf=2;scalable=true"
         -canonicalize
         -cse
-        -convert-zuan-to-vp="vf=16;scalable=true"
+        -convert-zuan-to-vp="vf=8;scalable=true"
         -convert-vp-to-llvm
         -canonicalize
         -cse
@@ -96,7 +97,10 @@ endfunction()
 
 
 add_subdirectory(dot-fp16)
+add_subdirectory(fill-rng-2d)
 add_subdirectory(matmul)
 add_subdirectory(matmul-transpose-b)
 add_subdirectory(matmul-transpose-a)
+add_subdirectory(mmt4d)
+add_subdirectory(quantized-matmul)
 add_subdirectory(relu)

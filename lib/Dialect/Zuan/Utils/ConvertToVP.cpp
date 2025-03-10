@@ -576,8 +576,8 @@ static void handleCastOp(OpBuilder &b, CastOp castOp, ShapeInfo &shapeInfo,
     auto maskedoff = maskPair.second;
 
     if (cols.has_value()) {
-      outType = getVectorType(outType, state);
-      auto casted = createCastOp(b, loc, kind, outType, sourceRow);
+      auto outVectorType = getVectorType(outType, state);
+      auto casted = createCastOp(b, loc, kind, outVectorType, sourceRow);
       auto predOp = vp::predicateOperation(b, casted.getDefiningOp(), *cols,
                                            mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
