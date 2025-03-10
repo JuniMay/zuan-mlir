@@ -85,7 +85,7 @@ static void verifyMatmul() {
 }
 
 BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
-    ->Unit(benchmark::kMicrosecond)
+    ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 32, 1, 2})
     ->Args({128, 128, 32, 1, 2})
     ->Args({256, 256, 32, 1, 2})
@@ -95,7 +95,7 @@ BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan)
     ->Args({1023, 509, 2173, 1, 2});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec)
-    ->Unit(benchmark::kMicrosecond)
+    ->Unit(benchmark::kMillisecond)
     ->Args({64, 56, 32, 1, 2})
     ->Args({128, 128, 32, 1, 2})
     ->Args({256, 256, 32, 1, 2})
