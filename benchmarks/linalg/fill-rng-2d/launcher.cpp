@@ -5,7 +5,12 @@
 #include <iostream>
 
 extern "C" {
+void _mlir_ciface_kernel_autovec_8(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_16(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_32(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_autovec_64(double, double, int, MemRef<float, 2> *);
+
+void _mlir_ciface_kernel_zuan_8_1(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_8_2(double, double, int, MemRef<float, 2> *);
 }
 
@@ -36,44 +41,59 @@ static void verifyFillRng2D() {
   double max = 1.0;
   int seed = 19260817;
 
-  MemRef<float, 2> output0({M, N}, 0);
-  MemRef<float, 2> output1({M, N}, 0);
+  MemRef<float, 2> autovec({M, N}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec_16, min, max, seed, &output0);
-  runKernel(_mlir_ciface_kernel_zuan_8_2, min, max, seed, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, min, max, seed, &autovec);
+  MemRef<float, 2> zuan_8_1({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_1, min, max, seed, &zuan_8_1);
 
-  output0.verify(output1, "Fill-Rng-2D", 0);
+  MemRef<float, 2> zuan_8_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_2, min, max, seed, &zuan_8_2);
+
+  autovec.verify(zuan_8_1, "Fill-Rng-2D-Zuan-8-1", 0);
+  autovec.verify(zuan_8_2, "Fill-Rng-2D-Zuan-8-2", 0);
 
   for (size_t i = 0; i < 10; i++) {
-    std::cout << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << output0[i] << "\tZuan = " << std::setprecision(10)
-              << output1[i] << std::endl;
+    std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
+              << autovec[i] << "\tZuan-8-2 = " << std::setprecision(10)
+              << zuan_8_2[i] << "\tZuan-8-1 = " << std::setprecision(10)
+              << zuan_8_1[i] << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_8_2)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMicrosecond)
-    ->Args({64, 56})
-    ->Args({128, 128})
-    ->Args({256, 256})
-    ->Args({512, 512})
-    ->Args({1024, 1024})
-    ->Args({123, 457});
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_kernel_zuan_8_1)
     ->Unit(benchmark::kMicrosecond)
-    ->Args({64, 56})
-    ->Args({128, 128})
-    ->Args({256, 256})
-    ->Args({512, 512})
-    ->Args({1024, 1024})
-    ->Args({123, 457});
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
+                   {16, 32, 64, 128, 192, 256, 384, 512}});
 
 int main(int argc, char **argv) {
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   verifyFillRng2D();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   return 0;
 }

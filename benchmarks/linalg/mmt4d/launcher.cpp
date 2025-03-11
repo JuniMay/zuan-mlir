@@ -100,7 +100,7 @@ static void verifyMmt4D() {
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
+    std::cerr << "Index " << i << ":\tAutovec=" << std::setprecision(10)
               << autovec[i] << " Zuan-16-2=" << std::setprecision(10)
               << zuan_16_2[i] << "Zuan-8-4=" << std::setprecision(10)
               << zuan_8_4[i] << std::endl;
@@ -110,69 +110,69 @@ static void verifyMmt4D() {
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {3, 4, 5, 6, 7, 8},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
-        {16, 32, 51, 64, 128},
+        {4, 8, 12},
+        {4, 8, 12},
+        {4, 8, 12},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
+        {16, 32, 64, 128},
     });
 
 int main(int argc, char **argv) {
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   verifyMmt4D();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
 
   ::benchmark::Initialize(&argc, argv);
   ::benchmark::RunSpecifiedBenchmarks();

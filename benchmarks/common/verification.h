@@ -11,24 +11,24 @@ inline void verify(const T* lhs, const T *rhs, size_t N, const std::string &name
   const std::string PASS = "\033[32mPASS\033[0m";
   const std::string FAIL = "\033[31mFAIL\033[0m";
 
-  std::cout << name << " ";
+  std::cerr << name << " ";
   if (!lhs || !rhs) {
-    std::cout << FAIL << " (Null pointer detected)" << std::endl;
+    std::cerr << FAIL << " (Null pointer detected)" << std::endl;
     return;
   }
 
   bool isPass = true;
   for (size_t i = 0; i < N; ++i) {
     if (std::abs(lhs[i] - rhs[i]) > epsilon) {
-      std::cout << FAIL << std::endl;
-      std::cout << "Index " << i << ":\tA=" << std::setprecision(10) << lhs[i]
+      std::cerr << FAIL << std::endl;
+      std::cerr << "Index " << i << ":\tA=" << std::setprecision(10) << lhs[i]
                 << " B=" << std::setprecision(10) << rhs[i] << std::endl;
       isPass = false;
       break;
     }
   }
   if (isPass) {
-    std::cout << PASS << std::endl;
+    std::cerr << PASS << std::endl;
   }
 }
 

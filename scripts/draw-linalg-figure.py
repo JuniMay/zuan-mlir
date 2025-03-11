@@ -146,7 +146,7 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
     )
 
     # Plot CPU time
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(20, 15))
     plot_and_annotate(
         ax, perf_df, "cpu_time", "CPU Time", "CPU Time", use_log_scale, category_colors
     )
@@ -154,7 +154,7 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
     plt.close(fig)
 
     # Plot throughput
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(20, 15))
     plot_and_annotate(
         ax,
         perf_df,

@@ -5,7 +5,10 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_autovec_8(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
 }
 
@@ -46,40 +49,42 @@ static void runBenchmark(benchmark::State &state, KernelFunc kernel) {
 static void verifyReduce() {
   const size_t N = 1397;
   MemRef<float, 1> vec = initializeData(N);
-  MemRef<float, 0> output0({}, 0);
-  MemRef<float, 0> output1({}, 0);
+  MemRef<float, 0> autovec({}, 0);
+  MemRef<float, 0> zuan_16_2({}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec_16, &vec, &output0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, &vec, &autovec);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &zuan_16_2);
 
-  std::cout << "Output0: " << output0[0] << "\n";
-  std::cout << "Output1: " << output1[0] << "\n";
+  std::cerr << "Autovec:   " << autovec[0] << "\n";
+  std::cerr << "Zuan-16-2: " << zuan_16_2[0] << "\n";
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
-    ->Arg(1 << 10)
-    ->Arg(1 << 12)
-    ->Arg(1 << 14)
-    ->Arg(1 << 16)
-    ->Arg(1 << 18)
-    ->Arg(1 << 20)
-    ->Arg(1397319);
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->Arg(1 << 10)
-    ->Arg(1 << 12)
-    ->Arg(1 << 14)
-    ->Arg(1 << 16)
-    ->Arg(1 << 18)
-    ->Arg(1 << 20)
-    ->Arg(1397319);
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
 
 int main(int argc, char **argv) {
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   verifyReduce();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
   return 0;

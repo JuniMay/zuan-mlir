@@ -5,8 +5,17 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_autovec_8(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 1> *);
+
+void _mlir_ciface_kernel_zuan_8_2(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_zuan_8_8(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_zuan_16_1(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_zuan_16_4(MemRef<float, 2> *, MemRef<float, 1> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 2> *, MemRef<float, 1> *);
@@ -49,45 +58,92 @@ static void verifyReduce() {
   const size_t M = 1573;
   const size_t N = 1397;
   MemRef<float, 2> tile = initializeData(M, N);
-  MemRef<float, 1> output0({N}, 0);
-  MemRef<float, 1> output1({N}, 0);
+  MemRef<float, 1> autovec({N}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec_16, &tile, &output0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &tile, &output1);
+  runKernel(_mlir_ciface_kernel_autovec_16, &tile, &autovec);
 
-  output0.verify(output1, "Reduce-2D", 0.0001);
+  MemRef<float, 1> zuan_8_2({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_2, &tile, &zuan_8_2);
+  MemRef<float, 1> zuan_8_4({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_4, &tile, &zuan_8_4);
+  MemRef<float, 1> zuan_8_8({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_8, &tile, &zuan_8_8);
+  MemRef<float, 1> zuan_16_1({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_1, &tile, &zuan_16_1);
+  MemRef<float, 1> zuan_16_2({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_2, &tile, &zuan_16_2);
+  MemRef<float, 1> zuan_16_4({N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_4, &tile, &zuan_16_4);
+
+  // autovec.verify(zuan_16_2, "Reduce-2D", 0.0001);
+  autovec.verify(zuan_8_2, "Reduce-2D-Zuan-8-2", 0.0001);
+  autovec.verify(zuan_8_4, "Reduce-2D-Zuan-8-4", 0.0001);
+  autovec.verify(zuan_8_8, "Reduce-2D-Zuan-8-8", 0.0001);
+  autovec.verify(zuan_16_1, "Reduce-2D-Zuan-16-1", 0.0001);
+  autovec.verify(zuan_16_2, "Reduce-2D-Zuan-16-2", 0.0001);
+  autovec.verify(zuan_16_4, "Reduce-2D-Zuan-16-4", 0.0001);
 
   for (size_t i = 0; i < 10; i++) {
-    std::cout << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << output0[i] << " Zuan=" << std::setprecision(10) << output1[i]
-              << std::endl;
+    std::cerr << "Index " << i << ":\tAutovec=" << std::setprecision(10)
+              << autovec[i] << " Zuan-8-2=" << std::setprecision(10)
+              << zuan_8_2[i] << " Zuan-8-4=" << std::setprecision(10)
+              << zuan_8_4[i] << " Zuan-8-8=" << std::setprecision(10)
+              << zuan_8_8[i] << " Zuan-16-1=" << std::setprecision(10)
+              << zuan_16_1[i] << " Zuan-16-2=" << std::setprecision(10)
+              << zuan_16_2[i] << " Zuan-16-4=" << std::setprecision(10)
+              << zuan_16_4[i] << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMillisecond)
-    ->Args({1 << 10, 1 << 10})
-    ->Args({1 << 12, 1 << 12})
-    ->Args({1 << 14, 1 << 14})
-    ->Args({1 << 16, 1 << 16})
-    ->Args({1 << 18, 1 << 18})
-    ->Args({1 << 20, 1 << 20})
-    ->Args({1397319, 1397319});
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
 
-BENCHMARK_CAPTURE(runBenchmark, autovec, _mlir_ciface_kernel_autovec_16)
+BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->Args({1 << 10, 1 << 10})
-    ->Args({1 << 12, 1 << 12})
-    ->Args({1 << 14, 1 << 14})
-    ->Args({1 << 16, 1 << 16})
-    ->Args({1 << 18, 1 << 18})
-    ->Args({1 << 20, 1 << 20})
-    ->Args({1397319, 1397319});
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
+
+BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
+                   {1 << 16, 1 << 18, 1 << 22}});
 
 int main(int argc, char **argv) {
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   verifyReduce();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
   return 0;
