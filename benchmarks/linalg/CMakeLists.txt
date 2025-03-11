@@ -103,6 +103,7 @@ function(add_linalg_autovec_kernel benchmark_name virtvecsize)
 endfunction()
 
 add_subdirectory(dot-fp16)
+add_subdirectory(exp)
 add_subdirectory(fill-rng-2d)
 add_subdirectory(matmul)
 add_subdirectory(matmul-fp16)

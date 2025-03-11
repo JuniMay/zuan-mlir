@@ -1,0 +1,4 @@
+func.func @kernel(%a: memref<?x?x?x?xf32>, %b: memref<?x?x?x?xf32>) {
+  linalg.exp ins(%a: memref<?x?x?x?xf32>) outs(%b: memref<?x?x?x?xf32>)
+  return
+}

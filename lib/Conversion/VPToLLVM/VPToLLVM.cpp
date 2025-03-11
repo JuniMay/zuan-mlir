@@ -818,8 +818,17 @@ public:
             }
             doMerge = false; // Already merged in the intrinsic.
           } else {
+            // TODO: use sqrt instruction
             assert(false && "rsqrt is not yet supported in non-RVV mode");
           }
+        })
+        .Case([&](math::ExpOp expOp) {
+          // TODO: There are no usable math libraries for dynamic vector,
+          // fallback to the scalar version.
+          auto src = expOp.getOperand();
+          src = materializeOperand(rewriter, typeConverter, src);
+          auto newOp = rewriter.create<math::ExpOp>(loc, src);
+          loweredOp = newOp.getOperation();
         })
         .Default([&](Operation *) {
           loweredOp = rewriter.notifyMatchFailure(op, "unsupported operation");
@@ -974,6 +983,8 @@ void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
   target.addLegalOp<RVVIntrSetVliOp, RVVIntrSetVliMaxOp, RVVIntrVidOp,
                     RVVIntrVidMaskedOp, RVVIntrVlmOp, RVVIntrVsmOp,
                     RVVIntrFRsqrt7Op, RVVIntrFRsqrt7MaskedOp>();
+  // Later convert to llvm/libm
+  target.addLegalOp<math::ExpOp>();
 }
 
 void ConvertVPToLLVMPass::runOnOperation() {

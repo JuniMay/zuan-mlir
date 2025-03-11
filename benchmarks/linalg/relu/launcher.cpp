@@ -114,70 +114,70 @@ static void verifyRelu() {
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_relu_kernel_zuan_8_1)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_relu_kernel_zuan_8_2)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_relu_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_relu_kernel_zuan_16_1)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_relu_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_relu_kernel_zuan_16_4)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_relu_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_relu_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_relu_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_relu_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256},
-                   {16, 32, 64, 128, 256}});
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 
 int main(int argc, char **argv) {
   benchmark::Initialize(&argc, argv);

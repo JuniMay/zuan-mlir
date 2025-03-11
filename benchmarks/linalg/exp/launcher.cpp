@@ -11,6 +11,10 @@ void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 4> *, MemRef<float, 4> *);
 
+void _mlir_ciface_kernel_zuan_8_1(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_8_2(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_zuan_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
 }
@@ -58,35 +62,80 @@ static void runBenchmark(benchmark::State &state, KernelFunc kernel) {
   }
 }
 
-static void verifyRsqrt() {
-  const size_t B = 123;
-  const size_t H = 21;
-  const size_t W = 173;
-  const size_t C = 69;
+static void verifyExp() {
+  const size_t B = 64;
+  const size_t H = 56;
+  const size_t W = 56;
+  const size_t C = 64;
 
   MemRef<float, 4> input = initializeData(B, H, W, C);
-  MemRef<float, 4> autivec({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &input, &autivec);
+
+  MemRef<float, 4> autovec({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_autovec_16, &input, &autovec);
+
+  MemRef<float, 4> zuan_8_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_1, &input, &zuan_8_1);
+
+  MemRef<float, 4> zuan_8_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_2, &input, &zuan_8_2);
+
+  MemRef<float, 4> zuan_8_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_8_4, &input, &zuan_8_4);
+
+  MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_16_1, &input, &zuan_16_1);
 
   MemRef<float, 4> zuan_16_2({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input, &zuan_16_2);
-
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  // Zuan Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
-  // even if fast-math is enabled.
-  autivec.verify(zuan_16_2, "Rsqrt-16-2", 100); // TODO: verify 7-bit estimate
-  autivec.verify(zuan_16_4, "Rsqrt-16-4", 100); // TODO: verify 7-bit estimate
+  autovec.verify(zuan_8_1, "exp-Zuan-8-1", 0);
+  autovec.verify(zuan_8_2, "exp-Zuan-8-2", 0);
+  autovec.verify(zuan_8_4, "exp-Zuan-8-4", 0);
+  autovec.verify(zuan_16_1, "exp-Zuan-16-1", 0);
+  autovec.verify(zuan_16_2, "exp-Zuan-16-2", 0);
+  autovec.verify(zuan_16_4, "exp-Zuan-16-4", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autivec[i] << "\tZuan-16-2 = " << std::setprecision(10)
+              << autovec[i] << "\tZuan-8-1 = " << std::setprecision(10)
+              << zuan_8_1[i] << "\tZuan-8-2 = " << std::setprecision(10)
+              << zuan_8_2[i] << "\tZuan-8-4 = " << std::setprecision(10)
+              << zuan_8_4[i] << "\tZuan-16-1 = " << std::setprecision(10)
+              << zuan_16_1[i] << "\tZuan-16-2 = " << std::setprecision(10)
               << zuan_16_2[i] << "\tZuan-16-4 = " << std::setprecision(10)
               << zuan_16_4[i] << std::endl;
   }
 }
 
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_kernel_zuan_8_1)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128},
+                   {16, 32, 64, 128}});
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32, 64, 128},
@@ -112,12 +161,14 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
                    {16, 32, 64, 128},
                    {16, 32, 64, 128},
                    {16, 32, 64, 128}});
+
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32, 64, 128},
                    {16, 32, 64, 128},
                    {16, 32, 64, 128},
                    {16, 32, 64, 128}});
+
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32, 64, 128},
@@ -126,10 +177,10 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
                    {16, 32, 64, 128}});
 
 int main(int argc, char **argv) {
-  std::cerr << "------------------------------------------------" << std::endl;
-  verifyRsqrt();
-  std::cerr << "------------------------------------------------" << std::endl;
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
+  std::cerr << "------------------------------------------------" << std::endl;
+  verifyExp();
+  std::cerr << "------------------------------------------------" << std::endl;
   return 0;
 }
