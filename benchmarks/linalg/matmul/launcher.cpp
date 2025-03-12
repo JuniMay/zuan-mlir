@@ -141,9 +141,9 @@ int main(int argc, char **argv) {
   ::benchmark::Initialize(&argc, argv);
   ::benchmark::RunSpecifiedBenchmarks();
 
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
   verifyMatmul();
-  std::cout << "------------------------------------------------" << std::endl;
+  std::cerr << "------------------------------------------------" << std::endl;
 
   return 0;
 }

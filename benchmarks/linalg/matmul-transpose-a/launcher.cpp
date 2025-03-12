@@ -81,8 +81,8 @@ static void verifyMatmul() {
   MemRef<float, 2> zuan_16_2({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  autovec.verify(zuan_16_2, "Matmul", 0.0001);
-  autovec.verify(zuan_8_4, "Matmul", 0.0001);
+  autovec.verify(zuan_16_2, "Matmul-Zuan-16-2", 0.0001);
+  autovec.verify(zuan_8_4, "Matmul-Zuan-8-4", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {

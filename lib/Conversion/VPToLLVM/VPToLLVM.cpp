@@ -511,6 +511,38 @@ public:
             loweredOp = intrOp.getOperation();
           }
         })
+        .Case([&](vp::StepOp stepOp) {
+          // Same as the vector.step operation.
+          auto targetResType =
+              typeConverter->convertType(stepOp.getResult().getType());
+          if (enableRVV) {
+            // riscv.vid intrinsic
+            auto [passthruMerged, policy] = buildRVVPassthru(
+                rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
+            if (!mask) {
+              // This passthru is either an undef or just the original passthru.
+              auto intrOp = rewriter.create<vp::RVVIntrVidOp>(
+                  loc, targetResType, passthruMerged, evlxlen);
+              loweredOp = intrOp.getOperation();
+            } else {
+              auto policyValue = rewriter.create<LLVM::ConstantOp>(
+                  loc, rewriter.getI32Type(),
+                  rewriter.getI32IntegerAttr(policy));
+              auto intrOp = rewriter.create<vp::RVVIntrVidMaskedOp>(
+                  loc, targetResType, passthruMerged, mask, evlxlen,
+                  policyValue);
+              loweredOp = intrOp.getOperation();
+            }
+            doMerge = false; // Already merged in the intrinsic.
+          } else {
+            // We cannot lower the exact operation. `stepvector` is used to
+            // mimic the behavior. The mask and passthru will be merged later
+            // with the result.
+            auto intrOp =
+                rewriter.create<LLVM::StepVectorOp>(loc, targetResType);
+            loweredOp = intrOp.getOperation();
+          }
+        })
         .Case([&](vector::FMAOp fmaOp) {
           Value lhs = fmaOp.getLhs();
           Value rhs = fmaOp.getRhs();

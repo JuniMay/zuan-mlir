@@ -268,7 +268,7 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
 
   auto result = splatOp.getResult();
   auto shape = shapeInfo.getShape(result);
-  auto source = splatOp.getValue();
+  auto source = state.valueMap.lookup(splatOp.getValue());
   auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
 
   SmallVector<Value> values;
@@ -517,7 +517,7 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
     auto maskedoff = maskPair.second;
 
     if (dim == shape->size() - 1 && cols.has_value()) {
-      Operation *step = builder.create<vector::StepOp>(loc, vectorType);
+      Operation *step = builder.create<vp::StepOp>(loc, vectorType);
       step = vp::predicateOperation(builder, step, *cols, mask, nullptr,
                                     maskedoff);
       auto startSplat = builder.create<vector::SplatOp>(loc, vectorType, start);
@@ -554,7 +554,7 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
   state.tileMap[stepOp.getResult()] = values;
 }
 
-static Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
+Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
                           Type outType, Value source) {
   Value casted;
   switch (kind) {

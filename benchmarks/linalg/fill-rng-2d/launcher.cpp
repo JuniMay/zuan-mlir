@@ -10,6 +10,9 @@ void _mlir_ciface_kernel_autovec_16(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_32(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_64(double, double, int, MemRef<float, 2> *);
 
+void _mlir_ciface_kernel_zuan_4_1(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_zuan_4_2(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_zuan_4_4(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_8_1(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_8_2(double, double, int, MemRef<float, 2> *);
 }
@@ -49,51 +52,67 @@ static void verifyFillRng2D() {
 
   MemRef<float, 2> zuan_8_2({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_2, min, max, seed, &zuan_8_2);
+  MemRef<float, 2> zuan_4_1({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_4_1, min, max, seed, &zuan_4_1);
+  MemRef<float, 2> zuan_4_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_4_2, min, max, seed, &zuan_4_2);
+  MemRef<float, 2> zuan_4_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_zuan_4_4, min, max, seed, &zuan_4_4);
 
   autovec.verify(zuan_8_1, "Fill-Rng-2D-Zuan-8-1", 0);
   autovec.verify(zuan_8_2, "Fill-Rng-2D-Zuan-8-2", 0);
+  autovec.verify(zuan_4_1, "Fill-Rng-2D-Zuan-4-1", 0);
+  autovec.verify(zuan_4_2, "Fill-Rng-2D-Zuan-4-2", 0);
+  autovec.verify(zuan_4_4, "Fill-Rng-2D-Zuan-4-4", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
               << autovec[i] << "\tZuan-8-2 = " << std::setprecision(10)
               << zuan_8_2[i] << "\tZuan-8-1 = " << std::setprecision(10)
-              << zuan_8_1[i] << std::endl;
+              << zuan_8_1[i] << "\tZuan-4-1 = " << std::setprecision(10)
+              << zuan_4_1[i] << "\tZuan-4-2 = " << std::setprecision(10)
+              << zuan_4_2[i] << "\tZuan-4-4 = " << std::setprecision(10)
+              << zuan_4_4[i] << std::endl;
   }
 }
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_kernel_zuan_8_1)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_4_1, _mlir_ciface_kernel_zuan_4_1)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_4_2, _mlir_ciface_kernel_zuan_4_2)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+BENCHMARK_CAPTURE(runBenchmark, zuan_4_4, _mlir_ciface_kernel_zuan_4_4)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
     ->Unit(benchmark::kMicrosecond)
-    ->ArgsProduct({{16, 32, 64, 128, 192, 256, 384, 512},
-                   {16, 32, 64, 128, 192, 256, 384, 512}});
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 
 int main(int argc, char **argv) {
-  benchmark::Initialize(&argc, argv);
-  benchmark::RunSpecifiedBenchmarks();
   std::cerr << "------------------------------------------------" << std::endl;
   verifyFillRng2D();
   std::cerr << "------------------------------------------------" << std::endl;
+  benchmark::Initialize(&argc, argv);
+  benchmark::RunSpecifiedBenchmarks();
   return 0;
 }

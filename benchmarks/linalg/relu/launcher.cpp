@@ -14,9 +14,13 @@ void _mlir_ciface_relu_kernel_autovec_32(MemRef<float, 4> *,
 void _mlir_ciface_relu_kernel_autovec_64(MemRef<float, 4> *,
                                          MemRef<float, 4> *);
 
-void _mlir_ciface_relu_kernel_zuan_8_1(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_relu_kernel_zuan_8_2(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_relu_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_4_1(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_4_2(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_4_4(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_4_8(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_8_1(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_8_2(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_zuan_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -76,14 +80,14 @@ static void verifyRelu() {
   MemRef<float, 4> autovec({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_autovec_16, &input, &autovec);
 
-  MemRef<float, 4> zuan_8_1({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_8_1, &input, &zuan_8_1);
+  // MemRef<float, 4> zuan_8_1({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_8_1, &input, &zuan_8_1);
 
-  MemRef<float, 4> zuan_8_2({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_8_2, &input, &zuan_8_2);
+  // MemRef<float, 4> zuan_8_2({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_8_2, &input, &zuan_8_2);
 
-  MemRef<float, 4> zuan_8_4({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_8_4, &input, &zuan_8_4);
+  // MemRef<float, 4> zuan_8_4({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_8_4, &input, &zuan_8_4);
 
   MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_zuan_16_1, &input, &zuan_16_1);
@@ -93,97 +97,101 @@ static void verifyRelu() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  autovec.verify(zuan_8_1, "Relu-Zuan-8-1", 0);
-  autovec.verify(zuan_8_2, "Relu-Zuan-8-2", 0);
-  autovec.verify(zuan_8_4, "Relu-Zuan-8-4", 0);
+  // MemRef<float, 4> zuan_4_1({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_4_1, &input, &zuan_4_1);
+
+  // MemRef<float, 4> zuan_4_2({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_4_2, &input, &zuan_4_2);
+
+  // MemRef<float, 4> zuan_4_4({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_4_4, &input, &zuan_4_4);
+
+  // MemRef<float, 4> zuan_4_8({B, H, W, C}, 0);
+  // runKernel(_mlir_ciface_relu_kernel_zuan_4_8, &input, &zuan_4_8);
+
+  // autovec.verify(zuan_8_1, "Relu-Zuan-8-1", 0);
+  // autovec.verify(zuan_8_2, "Relu-Zuan-8-2", 0);
+  // autovec.verify(zuan_8_4, "Relu-Zuan-8-4", 0);
   autovec.verify(zuan_16_1, "Relu-Zuan-16-1", 0);
   autovec.verify(zuan_16_2, "Relu-Zuan-16-2", 0);
   autovec.verify(zuan_16_4, "Relu-Zuan-16-4", 0);
+  // autovec.verify(zuan_4_1, "Relu-Zuan-4-1", 0);
+  // autovec.verify(zuan_4_2, "Relu-Zuan-4-2", 0);
+  // autovec.verify(zuan_4_4, "Relu-Zuan-4-4", 0);
+  // autovec.verify(zuan_4_8, "Relu-Zuan-4-8", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autovec[i] << "\tZuan-8-1 = " << std::setprecision(10)
-              << zuan_8_1[i] << "\tZuan-8-2 = " << std::setprecision(10)
-              << zuan_8_2[i] << "\tZuan-8-4 = " << std::setprecision(10)
-              << zuan_8_4[i] << "\tZuan-16-1 = " << std::setprecision(10)
-              << zuan_16_1[i] << "\tZuan-16-2 = " << std::setprecision(10)
-              << zuan_16_2[i] << "\tZuan-16-4 = " << std::setprecision(10)
-              << zuan_16_4[i] << std::endl;
+              << autovec[i] 
+              // << "\tZuan-8-1 = " << std::setprecision(10) << zuan_8_1[i] 
+              // << "\tZuan-8-2 = " << std::setprecision(10) << zuan_8_2[i] 
+              // << "\tZuan-8-4 = " << std::setprecision(10) << zuan_8_4[i] 
+              << "\tZuan-16-1 = " << std::setprecision(10) << zuan_16_1[i] 
+              << "\tZuan-16-2 = " << std::setprecision(10) << zuan_16_2[i] 
+              << "\tZuan-16-4 = " << std::setprecision(10) << zuan_16_4[i] 
+              // << "\tZuan-4-1 = " << std::setprecision(10) << zuan_4_1[i] 
+              // << "\tZuan-4-2 = " << std::setprecision(10) << zuan_4_2[i] 
+              // << "\tZuan-4-4 = " << std::setprecision(10) << zuan_4_4[i] 
+              // << "\tZuan-4-8 = " << std::setprecision(10) << zuan_4_8[i] 
+              << std::endl;
   }
 }
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_relu_kernel_zuan_8_1)
-    ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_4_1, _mlir_ciface_relu_kernel_zuan_4_1)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_4_2, _mlir_ciface_relu_kernel_zuan_4_2)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_4_4, _mlir_ciface_relu_kernel_zuan_4_4)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_4_8, _mlir_ciface_relu_kernel_zuan_4_8)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_relu_kernel_zuan_8_2)
-    ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_relu_kernel_zuan_8_1)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_relu_kernel_zuan_8_4)
-    ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+// BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_relu_kernel_zuan_8_2)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+
+// BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_relu_kernel_zuan_8_4)
+//     ->Unit(benchmark::kMillisecond)
+//     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_relu_kernel_zuan_16_1)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_relu_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_relu_kernel_zuan_16_4)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_relu_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_relu_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_relu_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_relu_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
-    ->ArgsProduct({{16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128},
-                   {16, 32, 64, 128}});
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 
 int main(int argc, char **argv) {
-  benchmark::Initialize(&argc, argv);
-  benchmark::RunSpecifiedBenchmarks();
   std::cerr << "------------------------------------------------" << std::endl;
   verifyRelu();
   std::cerr << "------------------------------------------------" << std::endl;
+  benchmark::Initialize(&argc, argv);
+  benchmark::RunSpecifiedBenchmarks();
   return 0;
 }

@@ -24,6 +24,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -convert-linalg-to-zuan
         -lower-zuan="target-rank=2"
         -zuan-stripmining="vf=${vf};uf=${uf};scalable=true"
+        -zuan-strength-reduction
         -canonicalize
         -cse
         -convert-zuan-to-vp="vf=${vf};scalable=true"

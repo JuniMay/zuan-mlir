@@ -23,6 +23,9 @@ def VPScalar : AnyTypeOf<[
 def VPVector : VectorOfLengthAndType<
   [64, 32, 16, 8, 4, 2, 1], [VPScalar]>;
 
+def VPIntVector : VectorOfLengthAndType<
+  [64, 32, 16, 8, 4, 2, 1], [I1, I8, I16, I32, I64, I128]>;
+
 def VPIndexVector : VectorOfLengthAndType<
   [64, 32, 16, 8, 4, 2, 1], [Index]>;
 
@@ -186,6 +189,19 @@ def VP_ScatterOp : VP_Op<"scatter", []> {
 
   let assemblyFormat = [{
     $value `,` $base `[` $indices `:` type($indices) `]` attr-dict `:` type($value) `,` type($base)
+  }];
+}
+
+def VP_StepOp : VP_Op<"step", [Pure]> {
+  let summary = "VP step operation";
+  let description = [{
+    `vp.step` is an alternative to `vector.step` which only supports index type.
+  }];
+
+  let results = (outs VPIntVector:$result);
+
+  let assemblyFormat = [{
+    attr-dict `:` type($result)
   }];
 }
 

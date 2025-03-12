@@ -38,6 +38,9 @@ private:
   std::optional<std::pair<Value, Value>> maskPair;
 };
 
+Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
+  Type outType, Value source);
+
 void convertToVP(RewriterBase &rewriter, Operation* op, ShapeInfo &shapeInfo,
                  VPConversionState &state);
 

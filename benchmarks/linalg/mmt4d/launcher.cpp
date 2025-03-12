@@ -96,7 +96,8 @@ static void verifyMmt4D() {
   MemRef<float, 4> zuan_16_2({M, N, M0, N0}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  autovec.verify(zuan_16_2, "mmt4d", 0.0001);
+  autovec.verify(zuan_16_2, "mmt4d-16-2", 0.0001);
+  autovec.verify(zuan_8_4, "mmt4d-8-4", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
@@ -110,9 +111,9 @@ static void verifyMmt4D() {
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
@@ -120,9 +121,9 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
@@ -131,9 +132,9 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
@@ -141,9 +142,9 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
@@ -151,9 +152,9 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
@@ -161,9 +162,9 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {4, 8, 12},
-        {4, 8, 12},
-        {4, 8, 12},
+        {4, 8},
+        {4, 8},
+        {4, 8},
         {16, 32, 64, 128},
         {16, 32, 64, 128},
         {16, 32, 64, 128},

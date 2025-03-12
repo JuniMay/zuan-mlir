@@ -251,8 +251,11 @@ private:
 };
 
 struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
+  // The benefit of tiling is set larger. So the the tiling will be at the outer
+  // loop, and stripmining will be at the inner loop, this should lead to better
+  // cache locality.
   explicit ZuanTilingPattern(MLIRContext *context, unsigned uf)
-      : OpRewritePattern<DynamicOp>(context, 1), uf(uf) {}
+      : OpRewritePattern<DynamicOp>(context, 2), uf(uf) {}
 
   LogicalResult matchAndRewrite(DynamicOp op,
                                 PatternRewriter &rewriter) const final {

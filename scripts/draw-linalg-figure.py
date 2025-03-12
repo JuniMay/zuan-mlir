@@ -14,7 +14,7 @@ def compute_product_size(size_str: str) -> int:
     except ValueError:
         return 0  # Fallback for non-numeric values
 
-def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_colors):
+def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_colors, annotate):
     """Plot data and annotate points with improved spacing and academic styling."""
     sns.lineplot(
         x="data_size",
@@ -55,28 +55,29 @@ def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_c
                 offset = 10 * (i - (n - 1) / 2)
                 df.loc[idx, "annotation_offset"] = offset
 
-    # Annotate points with category-specific colors and conditional formatting
-    for idx, row in df.iterrows():
-        offset = row["annotation_offset"]
-        if use_log_scale:
-            annotation = f"{row[y_column]:.3e}"  # Scientific notation for log scale
-        else:
-            annotation = f"{row[y_column]:.3f}"  # Fixed-point for linear scale
-        ax.annotate(
-            annotation,
-            (row["data_size"], row[y_column]),
-            textcoords="offset points",
-            xytext=(0, offset),
-            ha="center",
-            fontsize=8,
-            color=category_colors[row["category"]],
-        )
+    if annotate:
+        # Annotate points with category-specific colors and conditional formatting
+        for idx, row in df.iterrows():
+            offset = row["annotation_offset"]
+            if use_log_scale:
+                annotation = f"{row[y_column]:.3e}"  # Scientific notation for log scale
+            else:
+                annotation = f"{row[y_column]:.3f}"  # Fixed-point for linear scale
+            ax.annotate(
+                annotation,
+                (row["data_size"], row[y_column]),
+                textcoords="offset points",
+                xytext=(0, offset),
+                ha="center",
+                fontsize=8,
+                color=category_colors[row["category"]],
+            )
 
     plt.xticks(rotation=45, ha="right")
     ax.legend(fontsize=9)
     plt.tight_layout()
 
-def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
+def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True, annotate=True):
     """Generate and save performance comparison figures."""
     df = pd.read_csv(csvpath)
     performance_data = []
@@ -148,7 +149,7 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
     # Plot CPU time
     fig, ax = plt.subplots(figsize=(20, 15))
     plot_and_annotate(
-        ax, perf_df, "cpu_time", "CPU Time", "CPU Time", use_log_scale, category_colors
+        ax, perf_df, "cpu_time", "CPU Time", "CPU Time", use_log_scale, category_colors, annotate
     )
     plt.savefig(perf_filename)
     plt.close(fig)
@@ -163,6 +164,7 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
         "Items per Second",
         use_log_scale,
         category_colors,
+        annotate
     )
     plt.savefig(throughput_filename)
     plt.close(fig)
@@ -170,6 +172,8 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csvdir", type=str, required=True)
+    parser.add_argument("--logscale", action="store_true")
+    parser.add_argument("--annotate", action="store_true")
     args = parser.parse_args()
 
     output_dir = os.path.join(args.csvdir, "figures")
@@ -177,7 +181,7 @@ def main():
 
     for csv in os.listdir(args.csvdir):
         if csv.endswith(".csv"):
-            draw_figure(os.path.join(args.csvdir, csv), output_dir, csv.split(".")[0])
+            draw_figure(os.path.join(args.csvdir, csv), output_dir, csv.split(".")[0], args.logscale, args.annotate)
 
 if __name__ == "__main__":
     main()

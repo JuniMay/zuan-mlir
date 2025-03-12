@@ -10,6 +10,7 @@
 #include "Conversion/ZuanToVP.h"
 #include "VP/IR/VP.h"
 #include "Zuan/IR/Zuan.h"
+#include "Zuan/Transforms/StrengthReduction.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
@@ -19,6 +20,7 @@ int main(int argc, char **argv) {
   mlir::zuan::registerLowerZuanPass();
   mlir::zuan::registerZuanStripminingPass();
   mlir::zuan::registerConvertZuanToVPPass();
+  mlir::zuan::registerZuanStrengthReductionPass();
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::vp::VPDialect>();
