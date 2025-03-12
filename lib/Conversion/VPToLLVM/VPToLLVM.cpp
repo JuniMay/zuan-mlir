@@ -483,8 +483,9 @@ public:
         .Case([&](vector::StepOp stepOp) {
           auto targetResType =
               typeConverter->convertType(stepOp.getResult().getType());
-          if (enableRVV) {
-            // riscv.vid intrinsic
+          if (enableRVV && (passthru || mask)) {
+            // Only use RVV intrinsic if the passthru is provided or this is a
+            // maked operation. Otherwise, the vid can be hoisted and cse-ed.
             auto [passthruMerged, policy] = buildRVVPassthru(
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {
@@ -515,8 +516,9 @@ public:
           // Same as the vector.step operation.
           auto targetResType =
               typeConverter->convertType(stepOp.getResult().getType());
-          if (enableRVV) {
-            // riscv.vid intrinsic
+          if (enableRVV && (passthru || mask)) {
+            // Only use RVV intrinsic if the passthru is provided or this is a
+            // maked operation. Otherwise, the vid can be hoisted and cse-ed.
             auto [passthruMerged, policy] = buildRVVPassthru(
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {

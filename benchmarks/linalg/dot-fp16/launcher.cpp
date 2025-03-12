@@ -103,10 +103,10 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Range(1 << 10, 1 << 22);
 
 int main(int argc, char **argv) {
-  benchmark::Initialize(&argc, argv);
-  benchmark::RunSpecifiedBenchmarks();
   std::cerr << "------------------------------------------------" << std::endl;
   verifyDotFp16();
   std::cerr << "------------------------------------------------" << std::endl;
+  benchmark::Initialize(&argc, argv);
+  benchmark::RunSpecifiedBenchmarks();
   return 0;
 }

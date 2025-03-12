@@ -177,10 +177,10 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
                    {16, 32, 64, 128}});
 
 int main(int argc, char **argv) {
-  benchmark::Initialize(&argc, argv);
-  benchmark::RunSpecifiedBenchmarks();
   std::cerr << "------------------------------------------------" << std::endl;
   verifyExp();
   std::cerr << "------------------------------------------------" << std::endl;
+  benchmark::Initialize(&argc, argv);
+  benchmark::RunSpecifiedBenchmarks();
   return 0;
 }

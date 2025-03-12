@@ -118,75 +118,74 @@ static void verifyMatmul() {
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_32_2, _mlir_ciface_kernel_zuan_32_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_16, _mlir_ciface_kernel_autovec_16)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
-        {64, 128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
     });
     
 int main(int argc, char **argv) {
-  ::benchmark::Initialize(&argc, argv);
-  ::benchmark::RunSpecifiedBenchmarks();
-
   std::cerr << "------------------------------------------------" << std::endl;
   verifyMatmul();
   std::cerr << "------------------------------------------------" << std::endl;
 
+  ::benchmark::Initialize(&argc, argv);
+  ::benchmark::RunSpecifiedBenchmarks();
   return 0;
 }

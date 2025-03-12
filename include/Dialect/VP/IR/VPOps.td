@@ -223,19 +223,19 @@ class VP_RVVIntrOp<string mnemonic,
                   /*int numResults=*/numResults>;
 
 def VP_RVVIntrSetVliOp :
-  VP_RVVIntrOp<"vsetvli", [0], [], [], 1>,
+  VP_RVVIntrOp<"vsetvli", [0], [], [Pure], 1>,
   Arguments<(ins AnyInteger, AnyInteger, AnyInteger)>;
 
 def VP_RVVIntrSetVliMaxOp :
-  VP_RVVIntrOp<"vsetvlimax", [0], [], [], 1>,
+  VP_RVVIntrOp<"vsetvlimax", [0], [], [Pure], 1>,
   Arguments<(ins AnyInteger, AnyInteger)>;
 
 def VP_RVVIntrVidOp :
-  VP_RVVIntrOp<"vid", [0], [1], [], 1>,
+  VP_RVVIntrOp<"vid", [0], [1], [Pure], 1>,
   Arguments<(ins VPVector, AnyInteger)>;
 
 def VP_RVVIntrVidMaskedOp:
-  VP_RVVIntrOp<"vid_mask", [0], [2], [], 1>,
+  VP_RVVIntrOp<"vid_mask", [0], [2], [Pure], 1>,
   Arguments<(ins VPVector, VPMask, AnyInteger, AnyInteger)>;
 
 def VP_RVVIntrVlmOp:
@@ -247,11 +247,11 @@ def VP_RVVIntrVsmOp:
   Arguments<(ins VPMask, LLVM_AnyPointer, AnyInteger)>;
 
 def VP_RVVIntrFRsqrt7Op:
-  VP_RVVIntrOp<"vfrsqrt7", [0], [2], [], 1>,
+  VP_RVVIntrOp<"vfrsqrt7", [0], [2], [Pure], 1>,
   Arguments<(ins VPVector, VPVector, AnyInteger)>;
 
 def VP_RVVIntrFRsqrt7MaskedOp:
-  VP_RVVIntrOp<"vfrsqrt7_mask", [0], [3], [], 1>,
+  VP_RVVIntrOp<"vfrsqrt7_mask", [0], [3], [Pure], 1>,
   Arguments<(ins VPVector, VPVector, VPMask, AnyInteger, AnyInteger)>;
 
 //===----------------------------------------------------------------------===//
