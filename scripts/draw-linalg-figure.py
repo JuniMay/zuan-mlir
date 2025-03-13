@@ -7,6 +7,7 @@ import argparse
 
 plt.rcParams["font.family"] = "sans-serif"
 
+
 def compute_product_size(size_str: str) -> int:
     """Compute the product of numerical values in a size string."""
     try:
@@ -14,16 +15,22 @@ def compute_product_size(size_str: str) -> int:
     except ValueError:
         return 0  # Fallback for non-numeric values
 
-def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_colors, annotate):
-    """Plot data and annotate points with improved spacing and academic styling."""
+
+def plot_and_annotate(
+    ax, df, y_column, ylabel, title, use_log_scale, category_colors, annotate
+):
+    """Plot data and annotate points with improved spacing and academic styling using marker and dash differentiation."""
     sns.lineplot(
         x="data_size",
         y=y_column,
         hue="category",
+        style="category",
+        markers=True,
+        dashes=True,
         data=df,
-        marker="o",
         ax=ax,
         palette=category_colors,
+        markersize=10,
     )
 
     if use_log_scale:
@@ -39,10 +46,6 @@ def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_c
 
     sns.set_style("ticks")
     sns.despine(ax=ax)
-
-    y_min, y_max = ax.get_ylim()
-    margin = 0.1 * (y_max - y_min)
-    ax.set_ylim(y_min - margin, y_max + margin)
 
     # Adjust annotation offsets for multiple categories
     for data_size, group in df.groupby("data_size"):
@@ -77,7 +80,10 @@ def plot_and_annotate(ax, df, y_column, ylabel, title, use_log_scale, category_c
     ax.legend(fontsize=9)
     plt.tight_layout()
 
-def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True, annotate=True):
+
+def draw_figure(
+    csvpath: str, output_dir: str, prefix: str, use_log_scale=True, annotate=True
+):
     """Generate and save performance comparison figures."""
     df = pd.read_csv(csvpath)
     performance_data = []
@@ -112,25 +118,21 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True, 
     perf_df = perf_df.sort_values(by="size_product")
     perf_df["annotation_offset"] = 0
 
-    # Assign colors: Zuan-related in blue shades, others in different colors
+    # sample the data sizes in a strided way.
+    all_data_sizes = perf_df["data_size"].unique()
+    MAX_DATA_SIZE_CNT = 30
+    if len(all_data_sizes) > MAX_DATA_SIZE_CNT:
+        sampled_data_sizes = all_data_sizes[:: len(all_data_sizes) // MAX_DATA_SIZE_CNT]
+        perf_df = perf_df[perf_df["data_size"].isin(sampled_data_sizes)]
+
+    # Assign colors: zuan 的类别使用黑色, 其他使用浅灰色
     unique_categories = perf_df["category"].unique()
-    zuan_categories = [cat for cat in unique_categories if "zuan" in cat.lower()]
-    other_categories = [cat for cat in unique_categories if cat not in zuan_categories]
-
-    if zuan_categories:
-        zuan_colors = sns.color_palette("Blues", n_colors=len(zuan_categories))
-    else:
-        zuan_colors = []
-
-    if other_categories:
-        other_colors = sns.color_palette("husl", n_colors=len(other_categories))
-    else:
-        other_colors = []
-
-    category_colors = {cat: color for cat, color in zip(zuan_categories, zuan_colors)}
-    category_colors.update(
-        {cat: color for cat, color in zip(other_categories, other_colors)}
-    )
+    category_colors = {}
+    for cat in unique_categories:
+        if "zuan" in cat.lower():
+            category_colors[cat] = "black"
+        else:
+            category_colors[cat] = "lightgray"
 
     # Set up output directories and filenames
     os.makedirs(output_dir, exist_ok=True)
@@ -147,15 +149,22 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True, 
     )
 
     # Plot CPU time
-    fig, ax = plt.subplots(figsize=(20, 15))
+    fig, ax = plt.subplots(figsize=(20, 10))
     plot_and_annotate(
-        ax, perf_df, "cpu_time", "CPU Time", "CPU Time", use_log_scale, category_colors, annotate
+        ax,
+        perf_df,
+        "cpu_time",
+        "CPU Time",
+        "CPU Time",
+        use_log_scale,
+        category_colors,
+        annotate,
     )
     plt.savefig(perf_filename)
     plt.close(fig)
 
     # Plot throughput
-    fig, ax = plt.subplots(figsize=(20, 15))
+    fig, ax = plt.subplots(figsize=(20, 10))
     plot_and_annotate(
         ax,
         perf_df,
@@ -164,10 +173,11 @@ def draw_figure(csvpath: str, output_dir: str, prefix: str, use_log_scale=True, 
         "Items per Second",
         use_log_scale,
         category_colors,
-        annotate
+        annotate,
     )
     plt.savefig(throughput_filename)
     plt.close(fig)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -181,7 +191,14 @@ def main():
 
     for csv in os.listdir(args.csvdir):
         if csv.endswith(".csv"):
-            draw_figure(os.path.join(args.csvdir, csv), output_dir, csv.split(".")[0], args.logscale, args.annotate)
+            draw_figure(
+                os.path.join(args.csvdir, csv),
+                output_dir,
+                csv.split(".")[0],
+                args.logscale,
+                args.annotate,
+            )
+
 
 if __name__ == "__main__":
     main()

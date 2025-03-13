@@ -6,8 +6,16 @@ set(LLVM_BINARY_DIR ${ZUAN_SOURCE_DIR}/llvm-project/build/bin)
 
 # `linalg_${benchmark_name}_zuan_${vf}_${uf}`
 function(add_linalg_zuan_kernel benchmark_name vf uf)
+  if(${ARGC} GREATER 3 AND ARGV3 STREQUAL "TRUE")
+    set(estimate_math_flag ";enable-math-estimation=true")
+    set(estimate_math_suffix "_est")
+  else()
+    set(estimate_math_flag ";enable-math-estimation=false")
+    set(estimate_math_suffix "")
+  endif()
+
   set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.mlir)
-  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_zuan_${vf}_${uf})
+  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_zuan_${vf}_${uf}${estimate_math_suffix})
   
   set(zuan_mlir ${generated_file_prefix}.mlir)
   set(zuan_llvm ${generated_file_prefix}.ll)
@@ -18,7 +26,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
     OUTPUT ${zuan_mlir} ${zuan_llvm} ${zuan_obj}
     COMMAND
       cat ${mlir_file} |
-      sed "'s/kernel(/kernel_zuan_${vf}_${uf}(/'" |
+      sed "'s/kernel(/kernel_zuan_${vf}_${uf}${estimate_math_suffix}(/'" |
       ${ZUAN_OPT}
         -linalg-generalize-named-ops
         -convert-linalg-to-zuan
@@ -28,7 +36,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -canonicalize
         -cse
         -convert-zuan-to-vp="vf=${vf};scalable=true"
-        -convert-vp-to-llvm
+        -convert-vp-to-llvm="${estimate_math_flag}"
         -canonicalize
         -cse
         -expand-strided-metadata 
@@ -56,8 +64,8 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
     DEPENDS ${mlir_file} zuan-opt zuan-translate
   )
 
-  add_library(linalg_${benchmark_name}_zuan_${vf}_${uf} STATIC ${zuan_obj})
-  set_target_properties(linalg_${benchmark_name}_zuan_${vf}_${uf} PROPERTIES LINKER_LANGUAGE CXX)
+  add_library(linalg_${benchmark_name}_zuan_${vf}_${uf}${estimate_math_suffix} STATIC ${zuan_obj})
+  set_target_properties(linalg_${benchmark_name}_zuan_${vf}_${uf}${estimate_math_suffix} PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 
 # `linalg_${benchmark_name}_autovec_${virtvecsize}`

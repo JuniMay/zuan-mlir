@@ -22,7 +22,8 @@ namespace vp {
 
 void populateVPToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                         RewritePatternSet &patterns,
-                                        bool enableRVV);
+                                        bool enableRVV,
+                                        bool enableMathEstimation);
 void configureVPToLLVMConversionLegality(LLVMConversionTarget &target);
 
 struct ConvertVPToLLVMPass
@@ -49,6 +50,11 @@ struct ConvertVPToLLVMPass
       *this, "enable-rvv",
       llvm::cl::desc("Enable conversion to RVV-specific intrinsics"),
       llvm::cl::init(true)};
+
+  Option<bool> enableMathEstimation{
+      *this, "enable-math-estimation",
+      llvm::cl::desc("Use target-specific estimated math instrunctions"),
+      llvm::cl::init(false)};
 };
 
 void registerConvertVPToLLVMPass();

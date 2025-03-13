@@ -16,6 +16,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -318,11 +319,13 @@ static Value buildPtrVec(Location loc, MemRefType type,
 struct PredicateOpLowering : ConvertOpToLLVMPattern<vp::PredicateOp> {
 private:
   bool enableRVV;
+  bool enableMathEstimation;
 
 public:
-  PredicateOpLowering(LLVMTypeConverter &typeConverter, bool enableRVV)
+  PredicateOpLowering(LLVMTypeConverter &typeConverter, bool enableRVV,
+                      bool enableMathEstimation)
       : ConvertOpToLLVMPattern<vp::PredicateOp>(typeConverter),
-        enableRVV(enableRVV) {}
+        enableRVV(enableRVV), enableMathEstimation(enableMathEstimation) {}
 
   LogicalResult
   matchAndRewrite(vp::PredicateOp op, vp::PredicateOp::Adaptor adaptor,
@@ -834,7 +837,8 @@ public:
           src = materializeOperand(rewriter, typeConverter, src);
           auto targetResType =
               typeConverter->convertType(rsqrtOp.getResult().getType());
-          if (enableRVV) {
+          auto targetVecType = cast<VectorType>(targetResType);
+          if (enableRVV && enableMathEstimation) {
             auto [passthruMerged, policy] = buildRVVPassthru(
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {
@@ -852,8 +856,24 @@ public:
             }
             doMerge = false; // Already merged in the intrinsic.
           } else {
-            // TODO: use sqrt instruction
-            assert(false && "rsqrt is not yet supported in non-RVV mode");
+            if (!mask) {
+              mask = buildAllTrueMask(rewriter, loc, targetVecType);
+            }
+            auto sqrtIntrName = "llvm.vp.sqrt";
+            auto sqrtOp = rewriter.create<LLVM::CallIntrinsicOp>(
+                loc, targetResType, rewriter.getStringAttr(sqrtIntrName),
+                ValueRange{src, mask, evl});
+            auto elementType = targetVecType.getElementType();
+            auto one = rewriter.create<LLVM::ConstantOp>(
+                loc, elementType, rewriter.getFloatAttr(elementType, 1.0));
+            auto splatIntrName =
+                rewriter.getStringAttr("llvm.experimental.vp.splat");
+            auto oneSplat = rewriter.create<LLVM::CallIntrinsicOp>(
+                loc, targetResType, splatIntrName, ValueRange{one, mask, evl});
+            auto divOp = rewriter.create<LLVM::VPFDivOp>(
+                loc, targetResType, oneSplat.getResult(0), sqrtOp->getResult(0),
+                mask, evl);
+            loweredOp = divOp.getOperation();
           }
         })
         .Case([&](math::ExpOp expOp) {
@@ -1003,11 +1023,13 @@ namespace vp {
 
 void populateVPToLLVMConversionPatterns(LLVMTypeConverter &converter,
                                         RewritePatternSet &patterns,
-                                        bool enableRVV) {
+                                        bool enableRVV,
+                                        bool enableMathEstimation) {
   patterns
       .add<ForwardOperands<func::CallOp>, ForwardOperands<func::CallIndirectOp>,
            ForwardOperands<func::ReturnOp>>(converter, &converter.getContext());
-  patterns.add<PredicateOpLowering, GetVLOpLowering>(converter, enableRVV);
+  patterns.add<PredicateOpLowering>(converter, enableRVV, enableMathEstimation);
+  patterns.add<GetVLOpLowering>(converter, enableRVV);
 }
 
 void configureVPToLLVMConversionLegality(LLVMConversionTarget &target) {
@@ -1035,7 +1057,8 @@ void ConvertVPToLLVMPass::runOnOperation() {
   configureVPToLLVMConversionLegality(target);
 
   RewritePatternSet patterns(ctx);
-  populateVPToLLVMConversionPatterns(typeConverter, patterns, enableRVV);
+  populateVPToLLVMConversionPatterns(typeConverter, patterns, enableRVV,
+                                     enableMathEstimation);
   vp::PredicateOp::getCanonicalizationPatterns(patterns, ctx);
 
   if (failed(applyPartialConversion(moduleOp, target, std::move(patterns)))) {
