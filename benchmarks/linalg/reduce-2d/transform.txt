@@ -1,7 +1,9 @@
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%module: !transform.any_op {transform.readonly}) {
     %0 = transform.structured.match ops{["linalg.reduce"]} in %module : (!transform.any_op) -> !transform.any_op
-    transform.structured.vectorize %0 vector_sizes [UF, [VF]] : !transform.any_op
+    %tiled, %loops:2 = transform.structured.tile_using_for %0 tile_sizes [UF, [VF]]
+      : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.structured.vectorize %tiled vector_sizes [UF, [VF]] : !transform.any_op
 
     %func = transform.structured.match ops{["func.func"]} in %module
       : (!transform.any_op) -> !transform.any_op
@@ -9,7 +11,6 @@ module attributes {transform.with_named_sequence} {
     transform.apply_patterns to %func {
       transform.apply_patterns.vector.lower_masked_transfers
       transform.apply_patterns.vector.transfer_permutation_patterns
-      transform.apply_patterns.vector.reduction_to_contract
     } : !transform.any_op
 
     transform.apply_patterns to %func {

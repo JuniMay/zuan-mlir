@@ -103,31 +103,48 @@ static void verifyMatmul() {
 
   MemRef<_Float16, 2> zuan_8_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
-
   MemRef<_Float16, 2> zuan_8_8({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_8, &input1, &input2, &zuan_8_8);
-
   MemRef<_Float16, 2> zuan_16_2({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
-
   MemRef<_Float16, 2> zuan_16_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input1, &input2, &zuan_16_4);
-
   MemRef<_Float16, 2> zuan_32_2({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_32_2, &input1, &input2, &zuan_32_2);
+
+  MemRef<_Float16, 2> transform_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_4, &input1, &input2,
+            &transform_8_4);
+  MemRef<_Float16, 2> transform_8_8({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_8, &input1, &input2,
+            &transform_8_8);
+  MemRef<_Float16, 2> transform_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_2, &input1, &input2,
+            &transform_16_2);
+  MemRef<_Float16, 2> transform_16_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_4, &input1, &input2,
+            &transform_16_4);
+  MemRef<_Float16, 2> transform_32_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_32_2, &input1, &input2,
+            &transform_32_2);
 
   // fp16 is not well supported in the verify function.
   // output1.verify(output0, "Matmul", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << (float)autovec[i] << " Zuan-8-4=" << std::setprecision(10)
-              << (float)zuan_8_4[i] << " Zuan-8-8=" << std::setprecision(10)
-              << (float)zuan_8_8[i] << " Zuan-16-2=" << std::setprecision(10)
-              << (float)zuan_16_2[i] << " Zuan-16-4=" << std::setprecision(10)
-              << (float)zuan_16_4[i] << " Zuan-32-2=" << std::setprecision(10)
-              << (float)zuan_32_2[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec=" << (float)autovec[i]
+              << "\tzuan-8-4=" << (float)zuan_8_4[i]
+              << "\tzuan-8-8=" << (float)zuan_8_8[i]
+              << "\tzuan-16-2=" << (float)zuan_16_2[i]
+              << "\tzuan-16-4=" << (float)zuan_16_4[i]
+              << "\tzuan-32-2=" << (float)zuan_32_2[i]
+              << "\ttransform-8-4=" << (float)transform_8_4[i]
+              << "\ttransform-8-8=" << (float)transform_8_8[i]
+              << "\ttransform-16-2=" << (float)transform_16_2[i]
+              << "\ttransform-16-4=" << (float)transform_16_4[i]
+              << "\ttransform-32-2=" << (float)transform_32_2[i] << std::endl;
   }
 }
 

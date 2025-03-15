@@ -62,20 +62,29 @@ static void verifyFillRng2D() {
   MemRef<float, 2> zuan_4_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_4_4, min, max, seed, &zuan_4_4);
 
-  autovec.verify(zuan_8_1, "Fill-Rng-2D-Zuan-8-1", 0);
-  autovec.verify(zuan_8_2, "Fill-Rng-2D-Zuan-8-2", 0);
-  autovec.verify(zuan_4_1, "Fill-Rng-2D-Zuan-4-1", 0);
-  autovec.verify(zuan_4_2, "Fill-Rng-2D-Zuan-4-2", 0);
-  autovec.verify(zuan_4_4, "Fill-Rng-2D-Zuan-4-4", 0);
+  autovec.verify(zuan_8_1, "fill-rng-2d-zuan-8-1", 0);
+  autovec.verify(zuan_8_2, "fill-rng-2d-zuan-8-2", 0);
+  autovec.verify(zuan_4_1, "fill-rng-2d-zuan-4-1", 0);
+  autovec.verify(zuan_4_2, "fill-rng-2d-zuan-4-2", 0);
+  autovec.verify(zuan_4_4, "fill-rng-2d-zuan-4-4", 0);
+
+  MemRef<float, 2> transform_4_1({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_4_1, min, max, seed, &transform_4_1);
+  MemRef<float, 2> transform_8_1({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_1, min, max, seed, &transform_8_1);
+
+  autovec.verify(transform_4_1, "fill-rng-2d-transform-4-1", 0);
+  autovec.verify(transform_8_1, "fill-rng-2d-transform-8-1", 0);
 
   for (size_t i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autovec[i] << "\tZuan-8-2 = " << std::setprecision(10)
-              << zuan_8_2[i] << "\tZuan-8-1 = " << std::setprecision(10)
-              << zuan_8_1[i] << "\tZuan-4-1 = " << std::setprecision(10)
-              << zuan_4_1[i] << "\tZuan-4-2 = " << std::setprecision(10)
-              << zuan_4_2[i] << "\tZuan-4-4 = " << std::setprecision(10)
-              << zuan_4_4[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec = " << autovec[i] << "\tzuan-8-2 = " << zuan_8_2[i]
+              << "\tzuan-8-1 = " << zuan_8_1[i]
+              << "\tzuan-4-1 = " << zuan_4_1[i]
+              << "\tzuan-4-2 = " << zuan_4_2[i]
+              << "\tzuan-4-4 = " << zuan_4_4[i]
+              << "\ttransform-4-1 = " << transform_4_1[i]
+              << "\ttransform-8-1 = " << transform_8_1[i] << std::endl;
   }
 }
 
@@ -105,10 +114,12 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_4_4, _mlir_ciface_kernel_zuan_4_4)
 // Transform Dialect
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, transform_8_1, _mlir_ciface_kernel_transform_8_1)
+BENCHMARK_CAPTURE(runBenchmark, transform_8_1,
+                  _mlir_ciface_kernel_transform_8_1)
     ->Unit(benchmark::kMicrosecond)
     ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
-BENCHMARK_CAPTURE(runBenchmark, transform_4_1, _mlir_ciface_kernel_transform_4_1)
+BENCHMARK_CAPTURE(runBenchmark, transform_4_1,
+                  _mlir_ciface_kernel_transform_4_1)
     ->Unit(benchmark::kMicrosecond)
     ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
 

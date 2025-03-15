@@ -97,22 +97,51 @@ static void verifyExp() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  autovec.verify(zuan_8_1, "exp-Zuan-8-1", 0);
-  autovec.verify(zuan_8_2, "exp-Zuan-8-2", 0);
-  autovec.verify(zuan_8_4, "exp-Zuan-8-4", 0);
-  autovec.verify(zuan_16_1, "exp-Zuan-16-1", 0);
-  autovec.verify(zuan_16_2, "exp-Zuan-16-2", 0);
-  autovec.verify(zuan_16_4, "exp-Zuan-16-4", 0);
+  autovec.verify(zuan_8_1, "exp-zuan-8-1", 0);
+  autovec.verify(zuan_8_2, "exp-zuan-8-2", 0);
+  autovec.verify(zuan_8_4, "exp-zuan-8-4", 0);
+  autovec.verify(zuan_16_1, "exp-zuan-16-1", 0);
+  autovec.verify(zuan_16_2, "exp-zuan-16-2", 0);
+  autovec.verify(zuan_16_4, "exp-zuan-16-4", 0);
+
+  MemRef<float, 4> transform_8_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_1, &input, &transform_8_1);
+
+  MemRef<float, 4> transform_8_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_2, &input, &transform_8_2);
+
+  MemRef<float, 4> transform_8_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_4, &input, &transform_8_4);
+
+  MemRef<float, 4> transform_16_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_1, &input, &transform_16_1);
+
+  MemRef<float, 4> transform_16_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_2, &input, &transform_16_2);
+  MemRef<float, 4> transform_16_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_4, &input, &transform_16_4);
+
+  autovec.verify(transform_8_1, "exp-transform-8-1", 0);
+  autovec.verify(transform_8_2, "exp-transform-8-2", 0);
+  autovec.verify(transform_8_4, "exp-transform-8-4", 0);
+  autovec.verify(transform_16_1, "exp-transform-16-1", 0);
+  autovec.verify(transform_16_2, "exp-transform-16-2", 0);
+  autovec.verify(transform_16_4, "exp-transform-16-4", 0);
 
   for (size_t i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autovec[i] << "\tZuan-8-1 = " << std::setprecision(10)
-              << zuan_8_1[i] << "\tZuan-8-2 = " << std::setprecision(10)
-              << zuan_8_2[i] << "\tZuan-8-4 = " << std::setprecision(10)
-              << zuan_8_4[i] << "\tZuan-16-1 = " << std::setprecision(10)
-              << zuan_16_1[i] << "\tZuan-16-2 = " << std::setprecision(10)
-              << zuan_16_2[i] << "\tZuan-16-4 = " << std::setprecision(10)
-              << zuan_16_4[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec = " << autovec[i] << "\tzuan-8-1 = " << zuan_8_1[i]
+              << "\tzuan-8-2 = " << zuan_8_2[i]
+              << "\tzuan-8-4 = " << zuan_8_4[i]
+              << "\tzuan-16-1 = " << zuan_16_1[i]
+              << "\tzuan-16-2 = " << zuan_16_2[i]
+              << "\tzuan-16-4 = " << zuan_16_4[i]
+              << "\ttransform-8-1 = " << transform_8_1[i]
+              << "\ttransform-8-2 = " << transform_8_2[i]
+              << "\ttransform-8-4 = " << transform_8_4[i]
+              << "\ttransform-16-1 = " << transform_16_1[i]
+              << "\ttransform-16-2 = " << transform_16_2[i]
+              << "\ttransform-16-4 = " << transform_16_4[i] << std::endl;
   }
 }
 

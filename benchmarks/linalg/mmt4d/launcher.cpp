@@ -14,6 +14,7 @@ void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *,
                                     MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 4> *, MemRef<float, 4> *,
                                     MemRef<float, 4> *);
+
 void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *,
                                   MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *,
@@ -96,17 +97,20 @@ static void verifyMmt4D() {
   MemRef<float, 4> zuan_16_2({M, N, M0, N0}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  autovec.verify(zuan_16_2, "mmt4d-16-2", 0.0001);
-  autovec.verify(zuan_8_4, "mmt4d-8-4", 0.0001);
+  autovec.verify(zuan_16_2, "mmt4d-zuan-16-2", 0.0001);
+  autovec.verify(zuan_8_4, "mmt4d-zuan-8-4", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << autovec[i] << " Zuan-16-2=" << std::setprecision(10)
-              << zuan_16_2[i] << "Zuan-8-4=" << std::setprecision(10)
-              << zuan_8_4[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec=" << autovec[i] << "\tzuan-16-2=" << zuan_16_2[i]
+              << "\tzuan-8-4=" << zuan_8_4[i] << std::endl;
   }
 }
+
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
@@ -128,6 +132,10 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
         {32, 64, 128},
         {32, 64, 128},
     });
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

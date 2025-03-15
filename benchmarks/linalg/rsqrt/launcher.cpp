@@ -86,6 +86,10 @@ static void verifyRsqrt() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
 
+  autivec.verify(zuan_16_1, "rsqrt-zuan-16-1", 0.001);
+  autivec.verify(zuan_16_1, "rsqrt-zuan-16-2", 0.001);
+  autivec.verify(zuan_16_1, "rsqrt-zuan-16-4", 0.001);
+
   MemRef<float, 4> zuan_16_1_est({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_1_est, &input, &zuan_16_1_est);
 
@@ -97,30 +101,38 @@ static void verifyRsqrt() {
 
   // Zuan Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
   // even if fast-math is enabled.
-  autivec.verify(zuan_16_1_est, "Rsqrt-16-1-est",
+  autivec.verify(zuan_16_1_est, "rsqrt-zuan-16-1-est",
                  100); // TODO: verify 7-bit estimate
-  autivec.verify(zuan_16_2_est, "Rsqrt-16-2-est",
+  autivec.verify(zuan_16_2_est, "rsqrt-zuan-16-2-est",
                  100); // TODO: verify 7-bit estimate
-  autivec.verify(zuan_16_4_est, "Rsqrt-16-4-est",
+  autivec.verify(zuan_16_4_est, "rsqrt-zuan-16-4-est",
                  100); // TODO: verify 7-bit estimate
 
-  autivec.verify(zuan_16_1, "Rsqrt-16-1", 0.001);
-  autivec.verify(zuan_16_1, "Rsqrt-16-2", 0.001);
-  autivec.verify(zuan_16_1, "Rsqrt-16-4", 0.001);
+  MemRef<float, 4> transform_16_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_1, &input, &transform_16_1);
+
+  MemRef<float, 4> transform_16_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_2, &input, &transform_16_2);
+
+  MemRef<float, 4> transform_16_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_4, &input, &transform_16_4);
+
+  autivec.verify(transform_16_1, "rsqrt-transform-16-1", 0.001);
+  autivec.verify(transform_16_1, "rsqrt-transform-16-2", 0.001);
+  autivec.verify(transform_16_1, "rsqrt-transform-16-4", 0.001);
 
   for (size_t i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autivec[i]
-              // Comparisons
-              << "\tZuan-16-1 = " << std::setprecision(10) << zuan_16_1[i]
-              << "\tZuan-16-2 = " << std::setprecision(10) << zuan_16_2[i]
-              << "\tZuan-16-4 = " << std::setprecision(10) << zuan_16_4[i]
-              << "\tZuan-16-1-est = " << std::setprecision(10)
-              << zuan_16_1_est[i]
-              << "\tZuan-16-2-est = " << std::setprecision(10)
-              << zuan_16_2_est[i]
-              << "\tZuan-16-4-est = " << std::setprecision(10)
-              << zuan_16_4_est[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec = " << autivec[i]
+              << "\tzuan-16-1 = " << zuan_16_1[i]
+              << "\tzuan-16-2 = " << zuan_16_2[i]
+              << "\tzuan-16-4 = " << zuan_16_4[i]
+              << "\tzuan-16-1-est = " << zuan_16_1_est[i]
+              << "\tzuan-16-2-est = " << zuan_16_2_est[i]
+              << "\tzuan-16-4-est = " << zuan_16_4_est[i]
+              << "\ttransform-16-1 = " << transform_16_1[i]
+              << "\ttransform-16-2 = " << transform_16_2[i]
+              << "\ttransform-16-4 = " << transform_16_4[i] << std::endl;
   }
 }
 

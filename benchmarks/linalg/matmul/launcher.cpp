@@ -87,15 +87,26 @@ static void verifyMatmul() {
   MemRef<float, 2> zuan_16_2({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  autovec.verify(zuan_16_2, "Matmul", 0.0001);
-  autovec.verify(zuan_8_4, "Matmul", 0.0001);
+  autovec.verify(zuan_16_2, "matmul-zuan-16-2", 0.0001);
+  autovec.verify(zuan_8_4, "matmul-zuan-8-4", 0.0001);
+
+  MemRef<float, 2> transform_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_8_4, &input1, &input2,
+            &transform_8_4);
+  MemRef<float, 2> transform_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_2, &input1, &input2,
+            &transform_16_2);
+
+  autovec.verify(transform_16_2, "matmul-transform=16-2", 0.0001);
+  autovec.verify(transform_8_4, "matmul-transform-8-4", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec=" << std::setprecision(10)
-              << autovec[i] << " Zuan-8-4=" << std::setprecision(10)
-              << zuan_8_4[i] << " Zuan-16-2=" << std::setprecision(10)
-              << zuan_16_2[i] << std::endl;
+    std::cerr << "Index " << i << std::setprecision(10)
+              << ": autovec=" << autovec[i] << "\tzuan-8-4=" << zuan_8_4[i]
+              << "\tzuan-16-2=" << zuan_16_2[i]
+              << "\ttransform-8-4=" << transform_8_4[i]
+              << "\ttransform-16-2=" << transform_16_2[i] << std::endl;
   }
 }
 

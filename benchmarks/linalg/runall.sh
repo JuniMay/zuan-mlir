@@ -22,6 +22,7 @@ BENCHMARKS=(
   "reduce-2d"
   "relu"
   "rsqrt"
+  "exp"
 )
 
 for BENCHMARK in "${BENCHMARKS[@]}"; do

@@ -14,6 +14,7 @@ void _mlir_ciface_kernel_autovec_32(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
                                     int, int, MemRef<int, 2> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
                                     int, int, MemRef<int, 2> *);
+
 void _mlir_ciface_kernel_zuan_8_4(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int,
                                   int, MemRef<int, 2> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
@@ -93,11 +94,15 @@ static void verifyMatmul() {
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ":\tAutovec=" << autovec[i]
-              << " Zuan-8-4=" << zuan_8_4[i] << " Zuan-16-2=" << zuan_16_2[i]
+    std::cerr << "Index " << i << ": autovec=" << autovec[i]
+              << "\tzuan-8-4=" << zuan_8_4[i] << "\tzuan-16-2=" << zuan_16_2[i]
               << std::endl;
   }
 }
+
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
@@ -113,6 +118,10 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
                    {128, 192, 256, 384, 512, 768, 1024},
                    {1},
                    {2}});
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

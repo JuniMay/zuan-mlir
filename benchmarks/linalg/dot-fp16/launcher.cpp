@@ -20,7 +20,8 @@ void _mlir_ciface_kernel_zuan_16_2(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
                                    MemRef<float, 0> *);
 
 void _mlir_ciface_kernel_transform_16_1(MemRef<_Float16, 1> *,
-                                        MemRef<_Float16, 1> *, MemRef<float, 0> *);
+                                        MemRef<_Float16, 1> *,
+                                        MemRef<float, 0> *);
 }
 
 using KernelFunc = void (*)(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
@@ -70,20 +71,43 @@ static void verifyDotFp16() {
   MemRef<float, 0> output_16_2({}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &vec_a, &vec_b, &output_16_2);
 
-  MemRef<float,0> output_transform_16_1({}, 0);
-  runKernel(_mlir_ciface_kernel_transform_16_1, &vec_a, &vec_b, &output_transform_16_1);
+  MemRef<float, 0> output_transform_16_1({}, 0);
+  runKernel(_mlir_ciface_kernel_transform_16_1, &vec_a, &vec_b,
+            &output_transform_16_1);
 
   // The clang auto-vectorization generates ordered reduce, while in zuan it
   // uses unordered reduce. The difference in the order of reduction can lead to
   // different results.
-  output0.verify(output_16_2, "Dot-fp16-Zuan-16-2", 10);
-  output0.verify(output_transform_16_1, "Dot-fp16-Transform-16-1", 10);
+  output0.verify(output_16_2, "dot-fp16-zuan-16-2", 10);
+  output0.verify(output_transform_16_1, "dot-fp16-transform-16-1", 10);
 
-  std::cerr << "Autovec = " << std::setprecision(10) << output0[0]
-            << "\tzuan_16_2 = " << std::setprecision(10) << output_16_2[0]
-            << "\ttransform_16_1 = " << std::setprecision(10) << output_transform_16_1[0]
-            << std::endl;
+  std::cerr << "autovec = " << std::setprecision(10) << output0[0]
+            << "\tzuan_16_2 = " << output_16_2[0]
+            << "\ttransform_16_1 = " << output_transform_16_1[0] << std::endl;
 }
+
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_16_1,
+                  _mlir_ciface_kernel_transform_16_1)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
@@ -101,16 +125,6 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_32, _mlir_ciface_kernel_autovec_32)
     ->Range(1 << 10, 1 << 22);
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
-    ->Unit(benchmark::kMillisecond)
-    ->RangeMultiplier(4)
-    ->Range(1 << 10, 1 << 22);
-
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
-    ->Unit(benchmark::kMillisecond)
-    ->RangeMultiplier(4)
-    ->Range(1 << 10, 1 << 22);
-
-BENCHMARK_CAPTURE(runBenchmark, transform_16_1, _mlir_ciface_kernel_transform_16_1)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);
