@@ -15,6 +15,9 @@ void _mlir_ciface_kernel_zuan_4_2(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_4_4(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_8_1(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_8_2(double, double, int, MemRef<float, 2> *);
+
+void _mlir_ciface_kernel_transform_4_1(double, double, int, MemRef<float, 2> *);
+void _mlir_ciface_kernel_transform_8_1(double, double, int, MemRef<float, 2> *);
 }
 
 using KernelFunc = void (*)(double, double, int, MemRef<float, 2> *);
@@ -76,6 +79,10 @@ static void verifyFillRng2D() {
   }
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
     ->Unit(benchmark::kMicrosecond)
     ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
@@ -93,6 +100,21 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_4_2, _mlir_ciface_kernel_zuan_4_2)
 BENCHMARK_CAPTURE(runBenchmark, zuan_4_4, _mlir_ciface_kernel_zuan_4_4)
     ->Unit(benchmark::kMicrosecond)
     ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_8_1, _mlir_ciface_kernel_transform_8_1)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+BENCHMARK_CAPTURE(runBenchmark, transform_4_1, _mlir_ciface_kernel_transform_4_1)
+    ->Unit(benchmark::kMicrosecond)
+    ->ArgsProduct({{256, 512}, {256, 384, 512, 1024, 2048, 4096}});
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMicrosecond)

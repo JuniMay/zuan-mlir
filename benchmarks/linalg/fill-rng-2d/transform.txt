@@ -1,0 +1,18 @@
+module attributes {transform.with_named_sequence} {
+  transform.named_sequence @__transform_main(%module : !transform.any_op) {
+    //---------------------------------------------------------------------
+    // Tiling & Vectorization
+    //---------------------------------------------------------------------
+
+    %linalg_op = transform.structured.match ops{["linalg.fill_rng_2d"]} in %module
+      : (!transform.any_op) -> !transform.any_op
+    // XXX: Cannot lower because there will be a `vector.step` on uf-dim to
+    // generate vector<ufxty> and broadcast to vector<[vf]xufxty> which is
+    // unable to be lowered.
+    %tiled, %loops:2 = transform.structured.tile_using_for %linalg_op tile_sizes [UF, [VF]]
+      : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op)
+    transform.structured.vectorize %tiled vector_sizes [UF, [VF]] : !transform.any_op
+
+    transform.yield
+  }
+}

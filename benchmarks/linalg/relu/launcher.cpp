@@ -14,16 +14,25 @@ void _mlir_ciface_relu_kernel_autovec_32(MemRef<float, 4> *,
 void _mlir_ciface_relu_kernel_autovec_64(MemRef<float, 4> *,
                                          MemRef<float, 4> *);
 
-// void _mlir_ciface_relu_kernel_zuan_4_1(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_4_2(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_4_4(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_4_8(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_8_1(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_8_2(MemRef<float, 4> *, MemRef<float, 4> *);
-// void _mlir_ciface_relu_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_4_1(MemRef<float, 4> *, MemRef<float, 4>
+// *); void _mlir_ciface_relu_kernel_zuan_4_2(MemRef<float, 4> *, MemRef<float,
+// 4> *); void _mlir_ciface_relu_kernel_zuan_4_4(MemRef<float, 4> *,
+// MemRef<float, 4> *); void _mlir_ciface_relu_kernel_zuan_4_8(MemRef<float, 4>
+// *, MemRef<float, 4> *); void _mlir_ciface_relu_kernel_zuan_8_1(MemRef<float,
+// 4> *, MemRef<float, 4> *); void
+// _mlir_ciface_relu_kernel_zuan_8_2(MemRef<float, 4> *, MemRef<float, 4> *);
+// void _mlir_ciface_relu_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4>
+// *);
 void _mlir_ciface_relu_kernel_zuan_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
+
+void _mlir_ciface_relu_kernel_transform_16_1(MemRef<float, 4> *,
+                                             MemRef<float, 4> *);
+void _mlir_ciface_relu_kernel_transform_16_2(MemRef<float, 4> *,
+                                             MemRef<float, 4> *);
+void _mlir_ciface_relu_kernel_transform_16_4(MemRef<float, 4> *,
+                                             MemRef<float, 4> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -122,20 +131,25 @@ static void verifyRelu() {
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << ":\tAutovec = " << std::setprecision(10)
-              << autovec[i] 
-              // << "\tZuan-8-1 = " << std::setprecision(10) << zuan_8_1[i] 
-              // << "\tZuan-8-2 = " << std::setprecision(10) << zuan_8_2[i] 
-              // << "\tZuan-8-4 = " << std::setprecision(10) << zuan_8_4[i] 
-              << "\tZuan-16-1 = " << std::setprecision(10) << zuan_16_1[i] 
-              << "\tZuan-16-2 = " << std::setprecision(10) << zuan_16_2[i] 
-              << "\tZuan-16-4 = " << std::setprecision(10) << zuan_16_4[i] 
-              // << "\tZuan-4-1 = " << std::setprecision(10) << zuan_4_1[i] 
-              // << "\tZuan-4-2 = " << std::setprecision(10) << zuan_4_2[i] 
-              // << "\tZuan-4-4 = " << std::setprecision(10) << zuan_4_4[i] 
-              // << "\tZuan-4-8 = " << std::setprecision(10) << zuan_4_8[i] 
+              << autovec[i]
+              // << "\tZuan-8-1 = " << std::setprecision(10) << zuan_8_1[i]
+              // << "\tZuan-8-2 = " << std::setprecision(10) << zuan_8_2[i]
+              // << "\tZuan-8-4 = " << std::setprecision(10) << zuan_8_4[i]
+              << "\tZuan-16-1 = " << std::setprecision(10) << zuan_16_1[i]
+              << "\tZuan-16-2 = " << std::setprecision(10) << zuan_16_2[i]
+              << "\tZuan-16-4 = " << std::setprecision(10)
+              << zuan_16_4[i]
+              // << "\tZuan-4-1 = " << std::setprecision(10) << zuan_4_1[i]
+              // << "\tZuan-4-2 = " << std::setprecision(10) << zuan_4_2[i]
+              // << "\tZuan-4-4 = " << std::setprecision(10) << zuan_4_4[i]
+              // << "\tZuan-4-8 = " << std::setprecision(10) << zuan_4_8[i]
               << std::endl;
   }
 }
+
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
 
 // BENCHMARK_CAPTURE(runBenchmark, zuan_4_1, _mlir_ciface_relu_kernel_zuan_4_1)
 //     ->Unit(benchmark::kMillisecond)
@@ -171,6 +185,27 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_relu_kernel_zuan_16_2)
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_relu_kernel_zuan_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_16_1,
+                  _mlir_ciface_relu_kernel_transform_16_1)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+BENCHMARK_CAPTURE(runBenchmark, transform_16_2,
+                  _mlir_ciface_relu_kernel_transform_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+BENCHMARK_CAPTURE(runBenchmark, transform_16_4,
+                  _mlir_ciface_relu_kernel_transform_16_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_relu_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

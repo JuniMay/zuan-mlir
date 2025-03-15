@@ -9,7 +9,9 @@ void _mlir_ciface_kernel_autovec_8(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 1> *, MemRef<float, 0> *);
+
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_transform_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 1> *, MemRef<float, 0> *);
@@ -59,10 +61,28 @@ static void verifyReduce() {
   std::cerr << "Zuan-16-2: " << zuan_16_2[0] << "\n";
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_16_2,
+                  _mlir_ciface_kernel_transform_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->RangeMultiplier(4)
+    ->Range(1 << 10, 1 << 22);
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

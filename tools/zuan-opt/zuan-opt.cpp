@@ -3,6 +3,7 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "mlir/InitAllExtensions.h"
 
 #include "Conversion/LinalgToZuan.h"
 #include "Conversion/LowerZuan.h"
@@ -26,6 +27,7 @@ int main(int argc, char **argv) {
   registry.insert<mlir::vp::VPDialect>();
   registry.insert<mlir::zuan::ZuanDialect>();
   mlir::registerAllDialects(registry);
+  mlir::registerAllExtensions(registry);
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Adaptiv optimizer driver\n", registry));

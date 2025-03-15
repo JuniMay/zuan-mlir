@@ -27,6 +27,22 @@ void _mlir_ciface_kernel_zuan_16_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                    MemRef<_Float16, 2> *);
 void _mlir_ciface_kernel_zuan_32_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                    MemRef<_Float16, 2> *);
+
+void _mlir_ciface_kernel_transform_8_4(MemRef<_Float16, 2> *,
+                                       MemRef<_Float16, 2> *,
+                                       MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_transform_8_8(MemRef<_Float16, 2> *,
+                                       MemRef<_Float16, 2> *,
+                                       MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_transform_16_2(MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_transform_16_4(MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *);
+void _mlir_ciface_kernel_transform_32_2(MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *,
+                                        MemRef<_Float16, 2> *);
 }
 
 using KernelFunc = void (*)(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
@@ -115,6 +131,10 @@ static void verifyMatmul() {
   }
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
@@ -151,6 +171,50 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_32_2, _mlir_ciface_kernel_zuan_32_2)
         {128, 192, 256, 384, 512, 768, 1024},
     });
 
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, zuan_32_2, _mlir_ciface_kernel_zuan_32_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
@@ -179,7 +243,7 @@ BENCHMARK_CAPTURE(runBenchmark, autovec_64, _mlir_ciface_kernel_autovec_64)
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-    
+
 int main(int argc, char **argv) {
   std::cerr << "------------------------------------------------" << std::endl;
   verifyMatmul();

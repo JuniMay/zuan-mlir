@@ -43,7 +43,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -lower-affine 
         -convert-scf-to-cf 
         -convert-cf-to-llvm 
-        -convert-vector-to-llvm 
+        -convert-vector-to-llvm
         -convert-arith-to-llvm 
         -convert-math-to-llvm
         -convert-math-to-libm
@@ -86,8 +86,8 @@ function(add_linalg_autovec_kernel benchmark_name virtvecsize)
       ${LLVM_BINARY_DIR}/mlir-opt
         -convert-linalg-to-affine-loops
         -affine-super-vectorize="virtual-vector-size=${virtvecsize};vectorize-reductions"
-        -convert-vector-to-scf="full-unroll"
-        -convert-vector-to-llvm
+        -convert-vector-to-scf="full-unroll;target-rank=1"
+        -convert-vector-to-llvm="reassociate-fp-reductions"
         -lower-affine
         -convert-scf-to-cf
         -convert-cf-to-llvm 
@@ -104,11 +104,70 @@ function(add_linalg_autovec_kernel benchmark_name virtvecsize)
       ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
-    DEPENDS ${mlir_file} zuan-opt
+    DEPENDS ${mlir_file}
   )
 
   add_library(linalg_${benchmark_name}_autovec_${virtvecsize} STATIC ${autovec_obj})
   set_target_properties(linalg_${benchmark_name}_autovec_${virtvecsize} PROPERTIES LINKER_LANGUAGE CXX)
+endfunction()
+
+# `linalg_${benchmark_name}_transform_${vf}_${uf}`
+function(add_linalg_transform_kernel benchmark_name vf uf)
+  set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.mlir)
+
+  set(transform_file ${CMAKE_CURRENT_SOURCE_DIR}/transform.txt)
+  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_transform_${vf}_${uf})
+
+  set(transform_mlir ${generated_file_prefix}.mlir)
+  set(transform_llvm ${generated_file_prefix}.ll)
+  set(transform_debug_file ${generated_file_prefix}_debug.mlir)
+  set(transform_obj ${generated_file_prefix}.o)
+
+  # The file that has `VF` and `UF` to be replaced
+  set(transform_sed ${generated_file_prefix}.transform.mlir)
+  # Firstly, sed the `VF` and `UF` in the transform.mlir file
+  add_custom_command(
+    OUTPUT ${transform_sed}
+    COMMAND
+      cat ${transform_file} |
+      sed "'s/VF/${vf}/'" |
+      sed "'s/UF/${uf}/'" > ${transform_sed}
+    DEPENDS ${transform_file}
+  )
+
+  add_custom_command(
+    OUTPUT ${transform_mlir} ${transform_llvm} ${transform_obj}
+    COMMAND
+      cat ${mlir_file} |
+      sed "'s/kernel(/kernel_transform_${vf}_${uf}(/'" |
+      ${LLVM_BINARY_DIR}/mlir-opt
+        -transform-preload-library="transform-library-paths=${transform_sed}"
+        -transform-interpreter
+        -canonicalize
+        -lower-vector-mask
+        -convert-vector-to-scf="full-unroll;target-rank=1;lower-scalable"
+        -convert-scf-to-cf
+        -convert-cf-to-llvm
+        -expand-strided-metadata
+        -convert-math-to-llvm
+        -convert-math-to-libm
+        -convert-vector-to-llvm="reassociate-fp-reductions"
+        -convert-ub-to-llvm
+        -llvm-request-c-wrappers
+        -finalize-memref-to-llvm
+        -lower-affine
+        -convert-arith-to-llvm
+        -convert-func-to-llvm
+        -reconcile-unrealized-casts
+        -mlir-print-ir-after-all 2> ${transform_debug_file} |
+        ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${transform_llvm}
+    COMMAND
+      ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${transform_llvm} -c -save-temps -o ${transform_obj}
+    DEPENDS ${mlir_file} ${transform_sed}
+  )
+
+  add_library(linalg_${benchmark_name}_transform_${vf}_${uf} STATIC ${transform_obj})
+  set_target_properties(linalg_${benchmark_name}_transform_${vf}_${uf} PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 
 add_subdirectory(dot-fp16)

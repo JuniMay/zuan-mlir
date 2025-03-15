@@ -14,10 +14,16 @@ void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 2> *,
                                     MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 2> *,
                                     MemRef<float, 2> *);
+
 void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 2> *, MemRef<float, 2> *,
                                    MemRef<float, 2> *);
+
+void _mlir_ciface_kernel_transform_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
+                                       MemRef<float, 2> *);
+void _mlir_ciface_kernel_transform_16_2(MemRef<float, 2> *, MemRef<float, 2> *,
+                                        MemRef<float, 2> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 2> *, MemRef<float, 2> *,
@@ -93,6 +99,10 @@ static void verifyMatmul() {
   }
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
@@ -107,6 +117,31 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_8_4,
+                  _mlir_ciface_kernel_transform_8_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+BENCHMARK_CAPTURE(runBenchmark, transform_16_2,
+                  _mlir_ciface_kernel_transform_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+        {128, 192, 256, 384, 512, 768, 1024},
+    });
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

@@ -93,6 +93,10 @@ static void verifyMatmul() {
   }
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
+
 BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
@@ -107,6 +111,10 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)

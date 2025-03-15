@@ -18,6 +18,10 @@ void _mlir_ciface_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_1_est(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_2_est(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_4_est(MemRef<float, 4> *, MemRef<float, 4> *);
+
+void _mlir_ciface_kernel_transform_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_transform_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_transform_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -120,6 +124,9 @@ static void verifyRsqrt() {
   }
 }
 
+//-------------------------------------------------------------------
+// Zuan
+//-------------------------------------------------------------------
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
@@ -142,6 +149,27 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_4_est,
                   _mlir_ciface_kernel_zuan_16_4_est)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_16_1,
+                  _mlir_ciface_kernel_transform_16_1)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
+BENCHMARK_CAPTURE(runBenchmark, transform_16_2,
+                  _mlir_ciface_kernel_transform_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
+BENCHMARK_CAPTURE(runBenchmark, transform_16_4,
+                  _mlir_ciface_kernel_transform_16_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
+
+//-------------------------------------------------------------------
+// Auto-vectorization
+//-------------------------------------------------------------------
 
 BENCHMARK_CAPTURE(runBenchmark, autovec_8, _mlir_ciface_kernel_autovec_8)
     ->Unit(benchmark::kMillisecond)
