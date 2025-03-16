@@ -19,6 +19,11 @@ void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 4> *, MemRef<float, 4> *,
                                   MemRef<float, 4> *);
 void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *,
                                    MemRef<float, 4> *);
+
+void _mlir_ciface_kernel_transform_32_4(MemRef<float, 4> *, MemRef<float, 4> *,
+                                        MemRef<float, 4> *);
+void _mlir_ciface_kernel_transform_64_2(MemRef<float, 4> *, MemRef<float, 4> *,
+                                        MemRef<float, 4> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 4> *, MemRef<float, 4> *,
@@ -100,11 +105,23 @@ static void verifyMmt4D() {
   autovec.verify(zuan_16_2, "mmt4d-zuan-16-2", 0.0001);
   autovec.verify(zuan_8_4, "mmt4d-zuan-8-4", 0.0001);
 
+  MemRef<float, 4> transform_32_4({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_transform_32_4, &input1, &input2,
+            &transform_32_4);
+  MemRef<float, 4> transform_64_2({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_transform_64_2, &input1, &input2,
+            &transform_64_2);
+
+  autovec.verify(transform_32_4, "mmt4d-transform-32-4", 0.0001);
+  autovec.verify(transform_64_2, "mmt4d-transform-64-2", 0.0001);
+
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
               << ": autovec=" << autovec[i] << "\tzuan-16-2=" << zuan_16_2[i]
-              << "\tzuan-8-4=" << zuan_8_4[i] << std::endl;
+              << "\tzuan-8-4=" << zuan_8_4[i]
+              << "\ttransform-32-4=" << transform_32_4[i]
+              << "\ttransform-64-2=" << transform_64_2[i] << std::endl;
   }
 }
 
@@ -123,6 +140,33 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
         {32, 64, 128},
     });
 BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {4, 8},
+        {4, 8},
+        {4, 8},
+        {32, 64, 128},
+        {32, 64, 128},
+        {32, 64, 128},
+    });
+
+//-------------------------------------------------------------------
+// Transform Dialect
+//-------------------------------------------------------------------
+
+BENCHMARK_CAPTURE(runBenchmark, transform_32_4,
+                  _mlir_ciface_kernel_transform_32_4)
+    ->Unit(benchmark::kMillisecond)
+    ->ArgsProduct({
+        {4, 8},
+        {4, 8},
+        {4, 8},
+        {32, 64, 128},
+        {32, 64, 128},
+        {32, 64, 128},
+    });
+BENCHMARK_CAPTURE(runBenchmark, transform_64_2,
+                  _mlir_ciface_kernel_transform_64_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {4, 8},

@@ -1,17 +1,18 @@
 // This file is adapted from llvm-project/mlir/test/Integration/Dialect/Linalg/CPU/ArmSME/matmul-transpose-a.mlir
 // See the original file for more details.
 
-// XXX: Cannot lower because of `vector.create_mask` on `vector<[8]x1xi1>` type.
+// XXX: Cannot lower because of `vector.create_mask` on `vector<[vf]x1xi1>` type.
+// So scalable vector is not used here.
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%module : !transform.any_op {transform.readonly}) {
     %matmul_transpose_b = transform.structured.match ops{["linalg.matmul_transpose_b"]} in %module
       : (!transform.any_op) -> !transform.any_op
     %generalized = transform.structured.generalize %matmul_transpose_b : (!transform.any_op) -> !transform.any_op
 
-    %tiled_linalg_op, %loops:3 = transform.structured.tile_using_for %generalized tile_sizes [UF, [VF], 1]
+    %tiled_linalg_op, %loops:3 = transform.structured.tile_using_for %generalized tile_sizes [UF, VF, 1]
       : (!transform.any_op) -> (!transform.any_op, !transform.any_op, !transform.any_op, !transform.any_op)
 
-    transform.structured.vectorize %tiled_linalg_op vector_sizes [UF, [VF], 1]
+    transform.structured.vectorize %tiled_linalg_op vector_sizes [UF, VF, 1]
       : !transform.any_op
 
     %func = transform.structured.match ops{["func.func"]} in %module

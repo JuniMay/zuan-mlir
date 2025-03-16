@@ -103,7 +103,9 @@ function(add_linalg_autovec_kernel benchmark_name virtvecsize)
         -mlir-print-ir-after-all 2> ${autovec_debug_file} |
       ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
     COMMAND
-      ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
+      ${LLVM_BINARY_DIR}/clang
+        -march=rv64gcv_zvfh -O3 -ffast-math -mllvm --riscv-v-vector-bits-min=256
+        ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
     DEPENDS ${mlir_file}
   )
 
@@ -162,7 +164,9 @@ function(add_linalg_transform_kernel benchmark_name vf uf)
         -mlir-print-ir-after-all 2> ${transform_debug_file} |
         ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${transform_llvm}
     COMMAND
-      ${LLVM_BINARY_DIR}/clang -march=rv64gcv_zvfh -O3 -ffast-math ${CLANG_FLAGS_LIST} ${transform_llvm} -c -save-temps -o ${transform_obj}
+      ${LLVM_BINARY_DIR}/clang
+        -march=rv64gcv_zvfh -O3 -ffast-math -mllvm --riscv-v-vector-bits-min=256
+        ${CLANG_FLAGS_LIST} ${transform_llvm} -c -save-temps -o ${transform_obj}
     DEPENDS ${mlir_file} ${transform_sed}
   )
 
