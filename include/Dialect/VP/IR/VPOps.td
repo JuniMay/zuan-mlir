@@ -84,6 +84,7 @@ def VP_PredicateOp : VP_Op<"predicate", [
 }
 
 def VP_GetVLOp : VP_Op<"getvl", [
+  Pure,
   AllTypesMatch<["cnt", "result"]>
 ]> {
   let summary = "Get Vector Length Operation.";
