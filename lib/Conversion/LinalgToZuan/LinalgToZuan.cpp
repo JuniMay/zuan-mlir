@@ -18,6 +18,8 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
@@ -87,9 +89,18 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
       auto mappedOpd = getOrSplat(builder, yieldedOperand, state);
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToEnd(state.yieldBlock);
-      Value linalgInitMemref = state.linalgOp.getDpsInitOperand(i)->get();
-      Value dynamicInitMemref = state.valueMap.lookup(linalgInitMemref);
-      builder.create<zuan::StoreOp>(loc, mappedOpd, dynamicInitMemref);
+      auto initOpOperand = state.linalgOp.getDpsInitOperand(i);
+      auto indexingMap = state.linalgOp.getMatchingIndexingMap(initOpOperand);
+      Value linalgInitMemref = initOpOperand->get();
+      if (indexingMap.isProjectedPermutation()) {
+        Value dynamicInitMemref = state.transformedMemRefs[linalgInitMemref];
+        builder.create<zuan::StoreOp>(loc, mappedOpd, dynamicInitMemref);
+      } else {
+        // Handle the non-projected permutation operands.
+        auto indices = state.nonProjectedPermutationIndices[initOpOperand];
+        builder.create<zuan::ScatterOp>(loc, mappedOpd, linalgInitMemref,
+                                        indices);
+      }
     }
     return success();
   }
@@ -369,6 +380,53 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
   return success();
 }
 
+/// Compute a indexing tile used in gather/scatter operations for the dps
+/// inputs/inits.
+static Value convertIndexingDim(OpBuilder &builder, AffineExpr currExpr,
+                                AffineMap indexingMap, unsigned dim,
+                                SmallVector<OpFoldResult> ofrShape) {
+  auto loc = builder.getUnknownLoc();
+  if (auto constExpr = dyn_cast<AffineConstantExpr>(currExpr)) {
+    auto cst =
+        builder.create<arith::ConstantIndexOp>(loc, constExpr.getValue());
+    return builder.create<zuan::SplatOp>(loc, cst, ofrShape);
+  }
+  if (auto dimExpr = dyn_cast<AffineDimExpr>(currExpr)) {
+    int64_t pos = dimExpr.getPosition();
+    auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    Value step = builder.create<zuan::StepOp>(loc, zero, pos, ofrShape);
+    return step;
+  }
+  if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(currExpr)) {
+    auto kind = binExpr.getKind();
+    auto lhs = convertIndexingDim(builder, binExpr.getLHS(), indexingMap, dim,
+                                  ofrShape);
+    auto rhs = convertIndexingDim(builder, binExpr.getRHS(), indexingMap, dim,
+                                  ofrShape);
+
+    if (!lhs || !rhs) {
+      return nullptr;
+    }
+
+    switch (kind) {
+    case mlir::AffineExprKind::Add:
+      return builder.create<arith::AddIOp>(loc, lhs, rhs);
+    case mlir::AffineExprKind::Mul:
+      return builder.create<arith::MulIOp>(loc, lhs, rhs);
+    case mlir::AffineExprKind::Mod:
+      return builder.create<arith::RemUIOp>(loc, lhs, rhs);
+    case mlir::AffineExprKind::FloorDiv:
+      return builder.create<arith::FloorDivSIOp>(loc, lhs, rhs);
+    case mlir::AffineExprKind::CeilDiv:
+      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
+    default:
+      llvm_unreachable("unexpected affine binary op");
+    }
+  }
+
+  return nullptr;
+}
+
 struct LinalgGenericToZuanPattern : RewritePattern {
   LinalgGenericToZuanPattern(MLIRContext *context)
       : RewritePattern(MatchAnyOpTypeTag(), 1, context) {}
@@ -387,13 +445,6 @@ struct LinalgGenericToZuanPattern : RewritePattern {
       return rewriter.notifyMatchFailure(op, "expected pure buffer semantics");
     }
 
-    for (auto map : linalgOp.getIndexingMapsArray()) {
-      if (!map.isProjectedPermutation(true)) {
-        return rewriter.notifyMatchFailure(op,
-                                           "expected projected permutation");
-      }
-    }
-
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(linalgOp);
     auto loc = linalgOp.getLoc();
@@ -402,22 +453,36 @@ struct LinalgGenericToZuanPattern : RewritePattern {
     // 1. Compute the common shape of the linalg op.
     //----------------------------------------------------------------------
 
+    // The static loop ranges of the linalg op.
     SmallVector<int64_t> staticSizes = linalgOp.getStaticLoopRanges();
+    // The dynamic loop ranges of the linalg op.
     SmallVector<OpFoldResult> commonShape;
+    // The shape of the dps init operand, which is reduced according to the
+    // iterator types.
+    SmallVector<OpFoldResult> reducedShape;
+
     for (size_t dimPos = 0; dimPos < linalgOp.getNumLoops(); ++dimPos) {
       auto staticSize = staticSizes[dimPos];
+      auto iteratorType = linalgOp.getIteratorTypesArray()[dimPos];
       if (ShapedType::isDynamic(staticSize)) {
         Value operand;
         unsigned operandDimPos;
         if (failed(linalgOp.mapIterationSpaceDimToOperandDim(dimPos, operand,
                                                              operandDimPos))) {
-          llvm_unreachable("should successfully map iteration space wth "
-                           "projected permutation");
+          // TODO: Are there any alternative approaches to handle the iteration
+          // space mapping?
+          return rewriter.notifyMatchFailure(op,
+                                             "unable to get the loop range");
         }
         Value dim = rewriter.create<memref::DimOp>(loc, operand, operandDimPos);
         commonShape.push_back(dim);
       } else {
         commonShape.push_back(rewriter.getIndexAttr(staticSize));
+      }
+
+      if (!linalg::isReductionIterator(iteratorType)) {
+        // This dim is not reduced, so we keep it in the reduced shape.
+        reducedShape.push_back(commonShape.back());
       }
     }
 
@@ -429,15 +494,18 @@ struct LinalgGenericToZuanPattern : RewritePattern {
     // Three things will be mapped here:
     // 1. The values defined above the linalg op.
     // 2. The values defined inside the linalg op.
-    // 3. The transformed memrefs for the linalg op.
     IRMapping valueMap;
     // Map the values defined above the linalg op.
     SetVector<Value> valuesDefinedAbove;
     mlir::getUsedValuesDefinedAbove(linalgOp->getRegion(0), valuesDefinedAbove);
     valueMap.map(valuesDefinedAbove.getArrayRef(),
                  valuesDefinedAbove.getArrayRef());
+    // The map of shape-transformed memrefs.
+    DenseMap<Value, Value> transformedMemRefs;
     /// The memrefs for zuan.dynamic op init operands.
     SmallVector<Value> initMemrefs;
+    /// The operands that are not using a projected permutation.
+    SmallVector<OpOperand *> nonProjectedPermutationOperands;
 
     for (OpOperand *opOperand : linalgOpOperands) {
       auto bbArg = linalgOp.getMatchingBlockArgument(opOperand);
@@ -446,6 +514,15 @@ struct LinalgGenericToZuanPattern : RewritePattern {
         continue;
       }
       auto indexingMap = linalgOp.getMatchingIndexingMap(opOperand);
+      if (!indexingMap.isProjectedPermutation()) {
+        // We need to compute the indices and use `gather` or `scatter` to
+        // load/store the values. And this will be handled later in the dynamic
+        // op.
+        nonProjectedPermutationOperands.push_back(opOperand);
+        continue;
+      }
+
+      // Handle the projected permutation with broadcasting.
       if (linalgOp.isDpsInput(opOperand)) {
         auto memrefType = cast<MemRefType>(opOperand->get().getType());
         auto memrefShape = memrefType.getShape();
@@ -538,7 +615,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
         Value subview = rewriter.create<memref::SubViewOp>(
             loc, transposed, offsets, commonShape, strides);
         // Map the original memref to the valueMap.
-        valueMap.map(opOperand->get(), subview);
+        transformedMemRefs[opOperand->get()] = subview;
         // bbArgs are not mapped here, zuan.loads will be created inside the
         // dynamic region.
       } else {
@@ -548,8 +625,9 @@ struct LinalgGenericToZuanPattern : RewritePattern {
         // All the initial reads will be performed on this transposed memref.
         auto transposed = rewriter.create<memref::TransposeOp>(
             loc, opOperand->get(), AffineMapAttr::get(permutationMap));
-        // Map the original and transposed memrefs to the valueMap.
-        valueMap.map(opOperand->get(), transposed);
+        // Map the original and transposed memrefs.
+        transformedMemRefs[opOperand->get()] = transposed;
+        // The transposed memref is the init for the dynamic op.
         initMemrefs.push_back(transposed);
         // bbArgs are not mapped here, because zuan.dynamic will build
         // corresponding block arguments.
@@ -562,6 +640,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
 
     // The memrefs that are explicitly written to inside the linalg op.
     SetVector<Value> storeMemrefs;
+    // TODO: Investigate if this is necessary.
     linalgOp->walk([&](memref::StoreOp storeOp) {
       storeMemrefs.insert(storeOp.getMemRef());
     });
@@ -578,10 +657,16 @@ struct LinalgGenericToZuanPattern : RewritePattern {
             if (linalgOp.isScalar(opOperand)) {
               continue;
             }
+            auto indexingMap = linalgOp.getMatchingIndexingMap(opOperand);
             auto bbArg = linalgOp.getMatchingBlockArgument(opOperand);
+
+            if (!indexingMap.isProjectedPermutation()) {
+              // Handle the non-projected permutation operands later.
+              continue;
+            }
             if (linalgOp.isDpsInput(opOperand)) {
               // Get the mapped subview for the dps input operand.
-              Value subview = valueMap.lookup(opOperand->get());
+              Value subview = transformedMemRefs[opOperand->get()];
               // Create a load op for the subview.
               Value loaded = b.create<zuan::LoadOp>(loc, subview);
               // Map the dps input bbarg to the loaded value.
@@ -600,14 +685,45 @@ struct LinalgGenericToZuanPattern : RewritePattern {
 
     zuan::LinalgConversionState state(commonShape, dynamicBlock, yieldBlock,
                                       linalgOp);
+
+    // Insert new operations before the yield op.
+    rewriter.setInsertionPoint(yieldOp);
+
+    // Gather the non-projected permutation operands.
+    for (auto opOperand : nonProjectedPermutationOperands) {
+      auto indexingMap = linalgOp.getMatchingIndexingMap(opOperand);
+      auto bbArg = linalgOp.getMatchingBlockArgument(opOperand);
+      SmallVector<Value> indices;
+      // Iterate the rhs of the indexing map
+      for (unsigned i = 0; i < indexingMap.getNumResults(); ++i) {
+        auto expr = indexingMap.getResult(i);
+        Value dim;
+        if (linalgOp.isDpsInput(opOperand)) {
+          dim = convertIndexingDim(rewriter, expr, indexingMap, i, commonShape);
+        } else {
+          dim =
+              convertIndexingDim(rewriter, expr, indexingMap, i, reducedShape);
+        }
+        if (!dim) {
+          return rewriter.notifyMatchFailure(op, "unable to compute indexing");
+        }
+        indices.push_back(dim);
+      }
+      state.nonProjectedPermutationIndices[opOperand] = indices;
+      // Gather the values from the memref.
+      Value gathered =
+          rewriter.create<zuan::GatherOp>(loc, opOperand->get(), indices);
+      // Map the dps init bbarg to the gathered value.
+      valueMap.map(bbArg, gathered);
+    }
+
     state.valueMap = valueMap;
+    state.transformedMemRefs = transformedMemRefs;
 
     //----------------------------------------------------------------------
     // 4. Convert the operations.
     //----------------------------------------------------------------------
 
-    // Insert new operations before the yield op.
-    rewriter.setInsertionPoint(yieldOp);
     for (auto &op : linalgOp.getBlock()->getOperations()) {
       LLVM_DEBUG(DBGS() << "Converting: " << op.getName() << "\n");
       if (failed(convertOneOpToZuan(rewriter, &op, state))) {

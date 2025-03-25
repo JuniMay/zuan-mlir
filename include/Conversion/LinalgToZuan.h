@@ -21,6 +21,8 @@ namespace zuan {
 
 struct LinalgConversionState {
   IRMapping valueMap;
+  // The transformed input & init buffers
+  DenseMap<Value, Value> transformedMemRefs;
 
   /// Common shapes.
   SmallVector<OpFoldResult> ofrShape;
@@ -33,6 +35,9 @@ struct LinalgConversionState {
 
   /// The converted values of scf if condition.
   SmallVector<Value> masks;
+
+  /// The indices for gather/scatter.
+  DenseMap<OpOperand*, SmallVector<Value>> nonProjectedPermutationIndices;
 
   LinalgConversionState() = default;
 
