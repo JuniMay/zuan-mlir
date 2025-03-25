@@ -161,6 +161,7 @@ def draw_figure(
         annotate,
     )
     plt.savefig(perf_filename)
+    plt.savefig(perf_filename.replace(".pdf", ".png"))
     plt.close(fig)
 
     # Plot throughput
@@ -176,6 +177,8 @@ def draw_figure(
         annotate,
     )
     plt.savefig(throughput_filename)
+    # png
+    plt.savefig(throughput_filename.replace(".pdf", ".png"))
     plt.close(fig)
 
 
