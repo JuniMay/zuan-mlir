@@ -2,7 +2,7 @@
 
 // CHECK-LABEL: func.func @vstep_unmasked
 func.func @vstep_unmasked(%vl: index) -> vector<[8]xindex> {
-  // CHECK: vp.intr.rvv.vid
+  // CHECK: llvm.intr.stepvector
   %res = vp.predicate %vl : index, mask = none, passthru = none, maskedoff = none {
     %res = vector.step : vector<[8]xindex>
     vector.yield %res : vector<[8]xindex>
