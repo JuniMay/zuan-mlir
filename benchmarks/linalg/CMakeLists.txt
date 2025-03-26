@@ -174,6 +174,7 @@ function(add_linalg_transform_kernel benchmark_name vf uf)
   set_target_properties(linalg_${benchmark_name}_transform_${vf}_${uf} PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 
+add_subdirectory(conv_2d)
 add_subdirectory(dot-fp16)
 add_subdirectory(exp)
 add_subdirectory(fill-rng-2d)
