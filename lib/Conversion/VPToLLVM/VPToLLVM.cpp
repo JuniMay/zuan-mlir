@@ -293,6 +293,18 @@ static Value buildPtrVec(Location loc, MemRefType type,
                                          ValueRange{bufferPtrCasted, mask, evl})
           ->getResult(0);
 
+  auto elementType = typeConverter->convertType(type.getElementType());
+  // XXX: All element types should be byte-aligned.
+  auto elementSize = elementType.getIntOrFloatBitWidth() / 8;
+  Value elementSizeValue = rewriter.create<LLVM::ConstantOp>(
+      loc, indexType, rewriter.getIntegerAttr(indexType, elementSize));
+  // Splat the element size to the vector type.
+  Value elementSizeVec = rewriter
+                             .create<LLVM::CallIntrinsicOp>(
+                                 loc, indexVecType, splatIntrName,
+                                 ValueRange{elementSizeValue, mask, evl})
+                             ->getResult(0);
+
   for (int i = 0, e = indices.size(); i < e; ++i) {
     Value increment = indices[i];
     if (strides[i] != 1) {
@@ -305,6 +317,9 @@ static Value buildPtrVec(Location loc, MemRefType type,
       increment = rewriter.create<LLVM::VPMulOp>(
           loc, increment.getType(), increment, strideSplat, mask, evl);
     }
+    // Multiply the increment with the element size.
+    increment = rewriter.create<LLVM::VPMulOp>(
+        loc, increment.getType(), increment, elementSizeVec, mask, evl);
     indexVec = rewriter.create<LLVM::VPAddOp>(loc, indexVec.getType(), indexVec,
                                               increment, mask, evl);
   }
