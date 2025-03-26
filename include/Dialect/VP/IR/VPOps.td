@@ -199,7 +199,7 @@ def VP_StepOp : VP_Op<"step", [Pure]> {
     `vp.step` is an alternative to `vector.step` which only supports index type.
   }];
 
-  let results = (outs VPIntVector:$result);
+  let results = (outs VPVector:$result);
 
   let assemblyFormat = [{
     attr-dict `:` type($result)
