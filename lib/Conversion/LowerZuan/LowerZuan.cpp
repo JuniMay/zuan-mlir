@@ -35,24 +35,23 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     ShapeInferenceState shapeInferenceState;
     shapeInfo.inferShape(op, shapeInferenceState);
 
+    if (isDynamicOpUnrolled(op, targetRank, shapeInfo)) {
+      return rewriter.notifyMatchFailure(
+          op, "the dynamic op is already unrolled");
+    }
+
     splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
 
-    auto yieldOp = op.getYieldOp();
-    auto yieldRegion = &yieldOp.getRegion();
+    auto opsToUnroll = op.getOpsToUnroll();
 
-    if (yieldRegion->getOps().empty()) {
+    if (opsToUnroll.empty()) {
       // The scalars will not be unrolled, so no need to create a dummy loop for
       // them. Just handle it to other passes.
       return rewriter.notifyMatchFailure(
           op, "empty yield region, other patterns are needed");
     }
 
-    if (isDynamicOpUnrolled(op, targetRank, shapeInfo)) {
-      return rewriter.notifyMatchFailure(
-          op, "expected all the shapes to be <= targetRank");
-    }
-
-    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto referenceOp = opsToUnroll.front();
     auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
     assert(iface && "expected an unrolling interface");
 
@@ -137,7 +136,7 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           auto accIter = iterArgs[0];
 
-          UnrollState state{IRMapping{}, nullptr};
+          UnrollState state{IRMapping{}};
           state.initialize(dynamicOp);
           // Unrolling on the last dimension, regardless of the rank.
           UnrollOptions options(iv, b.getIndexAttr(1), lhsShape.size() - 1,
@@ -262,7 +261,7 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
     SmallVector<scf::ForOp> loops;
     SmallVector<Value> valuesToYield;
 
-    UnrollState state{IRMapping{}, nullptr};
+    UnrollState state{IRMapping{}};
     state.initialize(dynamicOp);
 
     for (auto dim : reductionDims) {

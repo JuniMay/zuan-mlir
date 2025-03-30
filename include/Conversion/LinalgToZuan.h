@@ -29,7 +29,6 @@ struct LinalgConversionState {
   SmallVector<int64_t> staticShape;
 
   Block *dynamicBlock;
-  Block *yieldBlock;
 
   linalg::LinalgOp linalgOp;
 
@@ -37,12 +36,12 @@ struct LinalgConversionState {
   SmallVector<Value> masks;
 
   /// The indices for gather/scatter.
-  DenseMap<OpOperand*, SmallVector<Value>> nonProjectedPermutationIndices;
+  DenseMap<OpOperand *, SmallVector<Value>> nonProjectedPermutationIndices;
 
   LinalgConversionState() = default;
 
   LinalgConversionState(SmallVector<OpFoldResult> ofrShape, Block *dynamicBlock,
-                        Block *yieldBlock, linalg::LinalgOp linalgOp);
+                        linalg::LinalgOp linalgOp);
 
   void pushMask(Value mask) { masks.push_back(mask); }
   void popMask() { masks.pop_back(); }

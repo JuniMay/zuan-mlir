@@ -49,8 +49,12 @@ getRankedShape(OpBuilder &builder, Location loc, ArrayRef<DimSize> shape,
     auto dim0 = getDim(shape[0].getOrCreateOpFoldResult(builder, loc));
     auto dim1 = getDim(shape[1].getOrCreateOpFoldResult(builder, loc));
 
+    // TODO: More efficient method for this. The cloned result might overwrite
+    // the original mapping and leads to def-after-use problem when there are
+    // nested ops.
+    auto valueMapCkpt = state.valueMap;
     auto dim1Val = std::get<Value>(dim1);
-    Value cloned = builder.clone(*dim1Val.getDefiningOp(), state.valueMap)
+    Value cloned = builder.clone(*dim1Val.getDefiningOp(), valueMapCkpt)
                        ->getResult(0); // XXX: idx 0 is not always correct
 
     return {std::get<int64_t>(dim0), cloned, 2};
@@ -59,7 +63,8 @@ getRankedShape(OpBuilder &builder, Location loc, ArrayRef<DimSize> shape,
     if (auto val = std::get_if<int64_t>(&dim)) {
       return {*val, std::nullopt, 1};
     } else if (auto val = std::get_if<Value>(&dim)) {
-      Value cloned = builder.clone(*val->getDefiningOp(), state.valueMap)
+      auto valueMapCkpt = state.valueMap;
+      Value cloned = builder.clone(*val->getDefiningOp(), valueMapCkpt)
                          ->getResult(0); // XXX: idx 0 is not always correct
       return {1, cloned, 1};
     } else {
@@ -554,8 +559,8 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
   state.tileMap[stepOp.getResult()] = values;
 }
 
-Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
-                          Type outType, Value source) {
+Value createCastOp(OpBuilder &b, Location loc, CastKind kind, Type outType,
+                   Value source) {
   Value casted;
   switch (kind) {
   case CastKind::BITCAST:
@@ -996,19 +1001,6 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
                  VPConversionState &state) {
   TypeSwitch<Operation *, void>(op)
       .Case([&](DynamicOp dynamicOp) {
-        auto inits = dynamicOp.getInits();
-        state.valueMap.map(inits, inits);
-        auto args = dynamicOp.getBody().getArguments();
-        for (auto [init, arg] : llvm::zip(inits, args)) {
-          if (cast<TileType>(arg.getType()).getRank() > 2) {
-            // This is something not canonicalized, no need to handle.
-            assert(arg.getUses().empty() &&
-                   "Unexpected no uses for rank > 2 args.");
-            continue;
-          }
-          handleLoad(rewriter, arg.getLoc(), arg, state.valueMap.lookup(init),
-                     shapeInfo, state);
-        }
         for (auto &op : dynamicOp.getBody().getOps()) {
           convertToVP(rewriter, &op, shapeInfo, state);
         }
@@ -1031,10 +1023,6 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         for (auto [opd, result] : llvm::zip(operands, results)) {
           auto mappedOperand = state.tileMap[opd][0];
           rewriter.replaceAllUsesWith(result, mappedOperand);
-        }
-        auto region = &yieldOp.getBody();
-        for (auto &op : region->getOps()) {
-          convertToVP(rewriter, &op, shapeInfo, state);
         }
       })
       .Case<arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp,

@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "Zuan/Interfaces/ZuanUnrollingInterface.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -21,6 +22,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
@@ -44,45 +46,26 @@ namespace zuan {
 // DynamicOp
 //===----------------------------------------------------------------------===//
 
-void DynamicOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  for (auto &operand : getDpsInitsMutable()) {
-    effects.emplace_back(MemoryEffects::Read::get(), &operand, /*stage=*/0,
-                         /*effectOnFullRegion=*/true,
-                         SideEffects::DefaultResource::get());
-  }
-}
-
-void DynamicOp::build(
-    OpBuilder &builder, OperationState &result, TypeRange resultTypes,
-    ValueRange inits,
-    function_ref<void(OpBuilder &, Location, ValueRange)> bodybuilder) {
+void DynamicOp::build(OpBuilder &builder, OperationState &result,
+                      TypeRange resultTypes,
+                      function_ref<void(OpBuilder &, Location)> bodybuilder) {
   OpBuilder::InsertionGuard guard(builder);
 
-  result.addOperands(inits);
   result.addTypes(resultTypes);
 
   Region *bodyRegion = result.addRegion();
   Block *bodyBlock = builder.createBlock(bodyRegion);
-  for (auto init : inits) {
-    auto memrefType = dyn_cast<MemRefType>(init.getType());
-    assert(memrefType && "expected memref type");
-    auto tileType =
-        TileType::get(memrefType.getShape(), memrefType.getElementType());
-    bodyBlock->addArgument(tileType, init.getLoc());
-  }
+
   if (bodybuilder) {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToStart(bodyBlock);
-    bodybuilder(builder, result.location, bodyBlock->getArguments());
+    bodybuilder(builder, result.location);
   }
 }
 
-void DynamicOp::build(
-    OpBuilder &builder, OperationState &result, ValueRange inits,
-    function_ref<void(OpBuilder &, Location, ValueRange)> bodybuilder) {
-  build(builder, result, {}, inits, bodybuilder);
+void DynamicOp::build(OpBuilder &builder, OperationState &result,
+                      function_ref<void(OpBuilder &, Location)> bodybuilder) {
+  build(builder, result, {}, bodybuilder);
 }
 
 LogicalResult DynamicOp::verify() {
@@ -91,69 +74,55 @@ LogicalResult DynamicOp::verify() {
   if (block->mightHaveTerminator() && !isa<YieldOp>(block->getTerminator())) {
     return emitOpError("expected a `zuan.yield` terminator");
   }
-  // Verify that the only memory writes are happening in the yield op.
-  for (auto &op : getBody().getOps()) {
-    if (isa<YieldOp>(op)) {
-      // Yield op is the terminator, just break.
-      break;
-    }
-    // Aggressively check the memory writes.
-    auto effects = mlir::getEffectsRecursively(&op).value_or(
-        SmallVector<MemoryEffects::EffectInstance>{});
-    for (auto effect : effects) {
-      if (isa<MemoryEffects::Write>(effect.getEffect())) {
-        return emitOpError("expected only memory reads in the dynamic region");
-      }
-    }
-  }
   return success();
 }
 
 void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto bodyBlock = &getBody().front();
-  for (auto [bbArg, memref] :
-       llvm::zip(bodyBlock->getArguments(), getDpsInits())) {
-    auto memrefType = cast<MemRefType>(memref.getType());
-    ShapeVector shape;
-    for (unsigned i = 0, e = memrefType.getRank(); i < e; ++i) {
-      shape.push_back(DimSize(memref, i));
-    }
-    shapeInfo.markEquivalent(bbArg, shape);
-  }
   // Recursively infer the shape of the dynamic region.
   for (auto &op : bodyBlock->getOperations()) {
     shapeInfo.inferShape(&op, state);
   }
 }
 
+SmallVector<Operation *> DynamicOp::getOpsToUnroll() {
+  SmallVector<Operation *> ops;
+  auto bodyBlock = &getBody().front();
+  for (auto &op : bodyBlock->getOperations()) {
+    if (isa<StoreOp, ScatterOp>(&op)) {
+      ops.push_back(&op);
+    } else if (auto maskOp = dyn_cast<MaskOp>(&op)) {
+      auto maskedOp = maskOp.getMaskedOp();
+      if (isa_and_present<StoreOp, ScatterOp>(maskedOp)) {
+        ops.push_back(&op);
+      }
+    }
+    // TODO: More general implementation with memory effect.
+    // TODO: Implement foreign interface for if/for/...
+  }
+  return ops;
+}
+
 Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
                              UnrollState &state) {
-  auto bodyBlock = &getBody().front();
   auto yieldOp = getYieldOp();
-  auto yieldRegion = &yieldOp.getRegion();
 
-  SmallVector<Value> inits = llvm::map_to_vector(getInits(), [&](Value init) {
-    return getUnrolledMemref(builder, init, options, state);
+  return builder.create<DynamicOp>(getLoc(), [&](OpBuilder &b, Location loc) {
+    OpBuilder::InsertionGuard guard(b);
+
+    // Unroll the store, scatter and yield operations.
+    auto opsToUnroll = getOpsToUnroll();
+    for (auto op : opsToUnroll) {
+      auto iface = dyn_cast<ZuanUnrollingInterface>(op);
+      iface.unroll(b, options, state);
+    }
+
+    SmallVector<Value> newOperands =
+        llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
+          return getUnrolledValue(builder, value, options, state);
+        });
+    builder.create<YieldOp>(loc, newOperands);
   });
-
-  return builder.create<DynamicOp>(
-      getLoc(), inits, [&](OpBuilder &b, Location loc, ValueRange args) {
-        OpBuilder::InsertionGuard guard(b);
-
-        state.valueMap.map(bodyBlock->getArguments(), args);
-        SmallVector<Value> newYieldOperands =
-            llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
-              return getUnrolledValue(b, value, options, state);
-            });
-
-        auto newYieldOp = b.create<YieldOp>(loc, newYieldOperands, nullptr);
-        state.yieldBlock = &newYieldOp.getBody().front();
-        b.setInsertionPoint(newYieldOp);
-
-        for (auto &op : yieldRegion->getOps()) {
-          unrollOp(b, &op, options, state);
-        }
-      });
 }
 
 std::optional<ShapeVector> DynamicOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
@@ -167,22 +136,27 @@ struct ElideEmptyDynamicOp : OpRewritePattern<DynamicOp> {
 
   LogicalResult matchAndRewrite(DynamicOp op,
                                 PatternRewriter &rewriter) const override {
-    Block *block = &op.getBody().front();
-    auto terminator = cast<YieldOp>(block->getTerminator());
-
-    // The only memory write effects are in the yield op, so only check if the
-    // yielded region has memory effects. Other operations in the dynamic region
-    // will not be checked. Here the check is aggressive, if no side-effects
-    // interface provided, it is assumed to have no memory writes.
-    auto effects = mlir::getEffectsRecursively(terminator)
-                       .value_or(SmallVector<MemoryEffects::EffectInstance>{});
-    for (auto effect : effects) {
-      if (isa<MemoryEffects::Write>(effect.getEffect())) {
-        return rewriter.notifyMatchFailure(op, "memory write effect");
+    bool hasEffects = false;
+    op->walk([&](MemoryEffectOpInterface iface) {
+      SmallVector<MemoryEffects::EffectInstance> effects;
+      iface.getEffects(effects);
+      for (auto effect : effects) {
+        if (isa<MemoryEffects::Write>(effect.getEffect())) {
+          hasEffects = true;
+          return WalkResult::interrupt();
+        }
       }
+      return WalkResult::advance();
+    });
+
+    if (hasEffects) {
+      return rewriter.notifyMatchFailure(op, "has memory writes");
     }
 
-    auto yieldedOperands = terminator.getScalars();
+    Block *block = &op.getBody().front();
+
+    auto yieldOp = op.getYieldOp();
+    auto yieldedOperands = yieldOp.getScalars();
     if (yieldedOperands.empty()) {
       rewriter.eraseOp(op);
     } else {
@@ -232,43 +206,9 @@ struct HoistMemRefOpPattern : OpRewritePattern<DynamicOp> {
   }
 };
 
-/// Elide dead block arguments and operands of this dynamic op.
-struct ElideDeadInitsPattern : OpRewritePattern<DynamicOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(DynamicOp op,
-                                PatternRewriter &rewriter) const override {
-    auto block = &op.getBody().front();
-    auto initArgs = block->getArguments();
-    auto inits = op.getInits();
-
-    SmallVector<Value> liveInits;
-    BitVector deadArgs(initArgs.size(), false);
-    for (auto [init, arg] : llvm::zip(inits, initArgs)) {
-      if (!arg.use_empty()) {
-        liveInits.push_back(init);
-      } else {
-        deadArgs.set(arg.getArgNumber());
-      }
-    }
-
-    if (liveInits.size() == inits.size()) {
-      return rewriter.notifyMatchFailure(op, "no dead inits");
-    }
-
-    rewriter.modifyOpInPlace(op, [&]() {
-      op.getInitsMutable().assign(liveInits);
-      block->eraseArguments(deadArgs);
-    });
-
-    return success();
-  }
-};
-
 void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                             MLIRContext *context) {
-  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern, ElideDeadInitsPattern>(
-      context);
+  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern>(context);
 }
 
 YieldOp DynamicOp::getYieldOp() {
@@ -281,26 +221,12 @@ YieldOp DynamicOp::getYieldOp() {
 // YieldOp
 //===----------------------------------------------------------------------===//
 
-void YieldOp::build(OpBuilder &builder, OperationState &result) {
-  OpBuilder::InsertionGuard guard(builder);
-  Region *bodyRegion = result.addRegion();
-  Block *bodyBlock = builder.createBlock(bodyRegion);
-  (void)bodyBlock;
-}
+void YieldOp::build(OpBuilder &builder, OperationState &result) {}
 
 void YieldOp::build(OpBuilder &builder, OperationState &result,
-                    ValueRange scalars,
-                    function_ref<void(OpBuilder &, Location)> bodyBuilder) {
+                    ValueRange scalars) {
   OpBuilder::InsertionGuard guard(builder);
   result.addOperands(scalars);
-  Region *bodyRegion = result.addRegion();
-  Block *bodyBlock = builder.createBlock(bodyRegion);
-
-  if (bodyBuilder) {
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(bodyBlock);
-    bodyBuilder(builder, result.location);
-  }
 }
 
 LogicalResult YieldOp::verify() {
@@ -327,13 +253,7 @@ LogicalResult YieldOp::verify() {
 }
 
 void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  if (getBody().empty()) {
-    return;
-  }
-  auto bodyBlock = &getBody().front();
-  for (auto &op : bodyBlock->getOperations()) {
-    shapeInfo.inferShape(&op, state);
-  }
+  return;
 }
 
 //===----------------------------------------------------------------------===//
@@ -578,14 +498,7 @@ LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
-LogicalResult MatmulOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.matmul` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult MatmulOp::verify() { return success(); }
 
 unsigned MatmulOp::getLeadingSize() {
   auto lhsRank = getLhs().getType().getRank();
@@ -746,15 +659,7 @@ LogicalResult ReductionOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
-LogicalResult ReductionOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError(
-        "`zuan.multi_reduction` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult ReductionOp::verify() { return success(); }
 
 void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto tile = getTile();
@@ -844,14 +749,7 @@ LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
-LogicalResult LoadOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.load` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult LoadOp::verify() { return success(); }
 
 void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto base = getBase();
@@ -912,7 +810,6 @@ Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto memref = getUnrolledMemref(builder, getBase(), options, state);
   auto value = getUnrolledValue(builder, getValue(), options, state);
 
-  builder.setInsertionPointToEnd(state.yieldBlock);
   auto storeOp = builder.create<StoreOp>(getLoc(), value, memref);
   return storeOp;
 }
@@ -943,14 +840,7 @@ LogicalResult SplatOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
-LogicalResult SplatOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.splat` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult SplatOp::verify() { return success(); }
 
 void SplatOp::build(OpBuilder &builder, OperationState &result, Value value,
                     ArrayRef<int64_t> dims) {
@@ -1084,11 +974,6 @@ LogicalResult OuterOp::verify() {
   if (std::abs(lhsRank - rhsRank) > 1) {
     return emitOpError(
         "expected the rank of the lhs and rhs to differ by at most one");
-  }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
   }
   return success();
 }
@@ -1230,14 +1115,7 @@ void StepOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   }
 }
 
-LogicalResult StepOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.step` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult StepOp::verify() { return success(); }
 
 Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
                           UnrollState &state) {
@@ -1316,11 +1194,6 @@ std::optional<ShapeVector> StepOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
 //===----------------------------------------------------------------------===//
 
 LogicalResult CastOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.cast` cannot be nested inside a `zuan.yield`");
-  }
   // TODO: Verify the types.
   return success();
 }
@@ -1355,14 +1228,7 @@ std::optional<ShapeVector> CastOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
 // SelectOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult SelectOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.select` cannot be nested inside a `zuan.yield`");
-  }
-  return success();
-}
+LogicalResult SelectOp::verify() { return success(); }
 
 void SelectOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto cond = getCond();
@@ -1422,11 +1288,6 @@ LogicalResult GatherOp::verify() {
   if (indices.size() != static_cast<size_t>(baseType.getRank())) {
     return emitOpError("expected the number of indices to be the same as the "
                        "rank of the base memref");
-  }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.gather` cannot be nested inside a `zuan.yield`");
   }
   // TODO: Verify index shapes.
   return success();
@@ -1521,7 +1382,6 @@ Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
     unrolledIndices.push_back(getUnrolledValue(builder, index, options, state));
   }
 
-  builder.setInsertionPointToEnd(state.yieldBlock);
   auto scatterOp =
       builder.create<ScatterOp>(getLoc(), value, memref, unrolledIndices);
   return scatterOp;

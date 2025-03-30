@@ -19,9 +19,8 @@ func.func @softmax(%src: memref<?xf32>, %dst: memref<?xf32>) {
 
     %sum_splat = zuan.splat %sum [%dim] : !zuan.tile<f32>
     %vdst = arith.divf %exp, %sum_splat : !zuan.tile<?xf32>
-    zuan.yield {
-      zuan.store %vdst, %dst : !zuan.tile<?xf32>, memref<?xf32>
-    }
+    zuan.store %vdst, %dst : !zuan.tile<?xf32>, memref<?xf32>
+    zuan.yield
   }
 
   return

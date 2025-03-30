@@ -75,8 +75,6 @@ struct UnrollState {
   /// dependencies. Operations-to-unroll are handled each time it is needed and
   /// are not stored in the valueMap.
   IRMapping valueMap;
-  /// The final yield block for store operations to insert.
-  Block *yieldBlock;
 
   void initialize(DynamicOp op);
 };

@@ -95,9 +95,7 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
         loc, type, rewriter.getZeroAttr(type));
 
     auto newDynamicOp =
-        rewriter.create<DynamicOp>(loc, type, dynamicOp.getInits(), nullptr);
-    state.valueMap.map(dynamicOp.getBody().getArguments(),
-                       newDynamicOp.getBody().getArguments());
+        rewriter.create<DynamicOp>(loc, type, nullptr);
     rewriter.setInsertionPointToStart(&newDynamicOp.getBody().front());
 
     SmallVector<OpFoldResult> sizes{vlmax};
@@ -142,7 +140,7 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     Value finalRed = rewriter.create<zuan::ReductionOp>(loc, op.getKind(),
                                                         finalAcc, dims, init);
 
-    rewriter.create<YieldOp>(loc, finalRed, nullptr);
+    rewriter.create<YieldOp>(loc, finalRed);
 
     rewriter.setInsertionPoint(op);
     Value splat = rewriter.create<zuan::SplatOp>(
@@ -171,20 +169,21 @@ struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
     splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
 
     auto yieldOp = op.getYieldOp();
-    auto yieldRegion = &yieldOp.getBody();
-    if (yieldRegion->getOps().empty()) {
-      // Scalars are produced with 1-D reduction or dummy splat. So no need to
-      // stripmine them anymore.
-      return rewriter.notifyMatchFailure(op, "empty yield region");
-    }
-
     if (yieldOp->getNumOperands() != 0) {
       return rewriter.notifyMatchFailure(op, "expected no operand");
     }
 
+    auto opsToUnroll = op.getOpsToUnroll();
+    if (opsToUnroll.empty()) {
+      // Scalars are produced with 1-D reduction or dummy splat. So no need to
+      // stripmine them anymore.
+      return rewriter.notifyMatchFailure(op,
+                                         "no side-effect operations to unroll");
+    }
+
     auto loc = op.getLoc();
 
-    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto referenceOp = opsToUnroll.front();
     auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
     assert(iface && "expected an unrolling interface");
 
@@ -267,21 +266,22 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
 
     // TODO: Refactor this preparation code.
     auto yieldOp = op.getYieldOp();
-    auto yieldRegion = &yieldOp.getBody();
-    if (yieldRegion->getOps().empty()) {
-      // TODO: Split the scalar operations.
-      // Scalars are produced with 1-D reduction or dummy splat. So no need to
-      // stripmine them anymore.
-      return rewriter.notifyMatchFailure(op, "empty yield region");
-    }
-
     if (yieldOp->getNumOperands() != 0) {
       return rewriter.notifyMatchFailure(op, "expected no operand");
     }
 
+    auto opsToUnroll = op.getOpsToUnroll();
+    if (opsToUnroll.empty()) {
+      // TODO: Split the scalar operations.
+      // Scalars are produced with 1-D reduction or dummy splat. So no need to
+      // stripmine them anymore.
+      return rewriter.notifyMatchFailure(op,
+                                         "no side-effect operations to unroll");
+    }
+
     auto loc = op.getLoc();
 
-    auto referenceOp = &*yieldRegion->getOps().begin();
+    auto referenceOp = opsToUnroll.front();
     auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
     assert(iface && "expected an unrolling interface");
 

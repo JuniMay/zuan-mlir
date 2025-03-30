@@ -229,7 +229,7 @@ static Operation *unrollSCFForOp(OpBuilder &builder, scf::ForOp forOp,
   auto ub = getUnrolledValue(builder, forOp.getUpperBound(), options, state);
   auto step = getUnrolledValue(builder, forOp.getStep(), options, state);
 
-  UnrollState inLoopState = {IRMapping{state.valueMap}, state.yieldBlock};
+  UnrollState inLoopState = {IRMapping{state.valueMap}};
   auto newForOp =
       builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, newInits);
 
@@ -418,16 +418,11 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
                                 unsigned unrollIdx, ShapeInfo &shapeInfo) {
   OpBuilder::InsertionGuard guard(rewriter);
 
-  auto bodyBlock = &dynamicOp.getBody().front();
-  assert(bodyBlock->mightHaveTerminator() && "expected `zuan.yield`");
-  auto yieldOp = cast<YieldOp>(bodyBlock->getTerminator());
-
   /// Map from dim to the operations that use the dim.
   std::map<DimSize, SmallVector<Operation *>> dimToOps;
-  auto yieldRegion = &yieldOp.getRegion();
 
-  for (auto &op : yieldRegion->getOps()) {
-    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
+  for (auto op : dynamicOp.getOpsToUnroll()) {
+    if (auto iface = dyn_cast<ZuanUnrollingInterface>(op)) {
       if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
         if (unrollIdx >= shape->size()) {
           continue;
@@ -436,7 +431,7 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
         if (dimToOps.count(dim) == 0) {
           dimToOps[dim] = {};
         }
-        dimToOps[dim].push_back(&op);
+        dimToOps[dim].push_back(op);
       }
     }
   }
@@ -455,31 +450,23 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
     auto dim = pair.first;
     auto ops = pair.second;
 
-    rewriter.create<DynamicOp>(
-        dynamicOp->getLoc(), dynamicOp.getInits(),
-        [&](OpBuilder &builder, Location loc, ValueRange args) {
-          OpBuilder::InsertionGuard guard(builder);
+    rewriter.create<DynamicOp>(dynamicOp->getLoc(), [&](OpBuilder &builder,
+                                                        Location loc) {
+      OpBuilder::InsertionGuard guard(builder);
 
-          UnrollOptions options(builder.getIndexAttr(0),
-                                dim.getOrCreateOpFoldResult(builder, loc),
-                                unrollIdx, false);
-          UnrollState state;
-          state.valueMap.map(bodyBlock->getArguments(), args);
-          SetVector<Value> valuesDefinedAbove;
-          mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(),
-                                          valuesDefinedAbove);
-          state.valueMap.map(valuesDefinedAbove.getArrayRef(),
-                             valuesDefinedAbove.getArrayRef());
-
-          auto yieldOp = builder.create<YieldOp>(loc);
-          state.yieldBlock = &yieldOp.getBody().front();
-
-          builder.setInsertionPoint(yieldOp);
-
-          for (auto op : ops) {
-            unrollOp(builder, op, options, state);
-          }
-        });
+      UnrollOptions options(builder.getIndexAttr(0),
+                            dim.getOrCreateOpFoldResult(builder, loc),
+                            unrollIdx, false);
+      UnrollState state;
+      SetVector<Value> valuesDefinedAbove;
+      mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(), valuesDefinedAbove);
+      state.valueMap.map(valuesDefinedAbove.getArrayRef(),
+                         valuesDefinedAbove.getArrayRef());
+      for (auto op : ops) {
+        unrollOp(builder, op, options, state);
+      }
+      builder.create<YieldOp>(loc);
+    });
   }
 
   for (auto [i, pair] : llvm::enumerate(dimToOps)) {
@@ -494,12 +481,9 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
 
 bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank,
                          ShapeInfo &shapeInfo) {
-  auto yieldOp = dynamicOp.getYieldOp();
-  auto yieldRegion = &yieldOp.getRegion();
-
   bool unrolled = true;
-  for (auto &op : yieldRegion->getOps()) {
-    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
+  for (auto op : dynamicOp.getOpsToUnroll()) {
+    if (auto iface = dyn_cast<ZuanUnrollingInterface>(op)) {
       if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
         if (shape->size() > targetRank) {
           unrolled = false;

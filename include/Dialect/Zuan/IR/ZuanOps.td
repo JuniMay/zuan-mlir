@@ -26,34 +26,26 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 def Zuan_YieldOp : Zuan_Op<"yield", [
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   // The yield op is the terminator of the dynamic region.
-  ReturnLike, Terminator,
-  // There might be memory effects in the store region.
-  RecursiveMemoryEffects,
-  // The store region does not have any arguments, nor terminators.
-  NoRegionArguments, NoTerminator,
-  HasParent<"zuan::DynamicOp">,
+  ReturnLike, Terminator, HasParent<"zuan::DynamicOp">,
 ]> {
   let summary = "Yield operation in Zuan dialect";
   let description = [{
     `zuan.yield` operation brings the computed value out of the dynamic region.
-    The scalars will be yielded as results. And all the stores should be done in
-    the yield region.
+    The scalars will be yielded as results.
 
     The yielded values corresponds to the results of the dynamic region. 0-D
     tiles can also be yielded as scalars.
   }];
 
   let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>>:$scalars);
-  let regions = (region AnyRegion:$body);
 
   let builders = [
     OpBuilder<(ins)>,
-    OpBuilder<(ins "ValueRange":$scalars,
-                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder)>
+    OpBuilder<(ins "ValueRange":$scalars)>
   ];
 
   let assemblyFormat = [{
-    ($scalars^ `:` type($scalars))? $body attr-dict
+    ($scalars^ `:` type($scalars))? attr-dict
   }];
   let hasVerifier = 1;
   let skipDefaultBuilders = 1;
@@ -62,8 +54,7 @@ def Zuan_YieldOp : Zuan_Op<"yield", [
 def Zuan_DynamicOp : Zuan_Op<"dynamic", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DestinationStyleOpInterface,
+  NoRegionArguments,
   RecursiveMemoryEffects // The memory effects are in the yield op region.
 ]> {
   let summary = "A region that contains size-agnostic tile operations.";
@@ -87,26 +78,22 @@ def Zuan_DynamicOp : Zuan_Op<"dynamic", [
     The dynamic regions cannot be nested.
   }];
 
-  let arguments = (ins Variadic<AnyMemRef>:$inits);
   let regions = (region SizedRegion<1>:$body);
   let results = (outs Variadic<ZuanTileElement>:$results);
 
   let assemblyFormat = [{
-    (`(` $inits^ `:` type($inits) `)`)? $body attr-dict (`:` type($results)^)?
+    $body attr-dict (`:` type($results)^)?
   }];
 
   let extraClassDeclaration = [{
-    MutableOperandRange getDpsInitsMutable() { return getInitsMutable(); }
-
     zuan::YieldOp getYieldOp();
+    SmallVector<Operation*> getOpsToUnroll();
   }];
 
   let builders = [
     OpBuilder<(ins "TypeRange":$resultTypes,
-                   "ValueRange":$inits,
-                   CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>">:$bodyBuilder)>,
-    OpBuilder<(ins "ValueRange":$inits,
-                   CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>">:$bodyBuilder)>
+                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder)>,
+    OpBuilder<(ins CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder)>
   ];
 
   let skipDefaultBuilders = 1;
@@ -136,7 +123,8 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
   DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   RecursiveMemoryEffects,
-  SingleBlockImplicitTerminator<"zuan::MaskYieldOp">
+  NoRegionArguments,
+  SingleBlockImplicitTerminator<"zuan::MaskYieldOp">,
 ]> {
   let summary = "A mask region for conditional execution";
   let description = [{
