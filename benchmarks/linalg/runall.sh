@@ -10,6 +10,7 @@ BUILD_DIR=$1
 DATA_DIR=$2
 
 BENCHMARKS=(
+  "conv_2d"
   "dot-fp16"
   "fill-rng-2d"
   "matmul"

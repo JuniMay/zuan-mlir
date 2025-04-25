@@ -10,8 +10,8 @@ void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 1> *, MemRef<float, 0> *);
 
-void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
-void _mlir_ciface_kernel_transform_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_zuan_16_1(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_transform_16_1(MemRef<float, 1> *, MemRef<float, 0> *);
 }
 
 using KernelFunc = void (*)(MemRef<float, 1> *, MemRef<float, 0> *);
@@ -52,23 +52,23 @@ static void verifyReduce() {
   const size_t N = 1397;
   MemRef<float, 1> vec = initializeData(N);
   MemRef<float, 0> autovec({}, 0);
-  MemRef<float, 0> zuan_16_2({}, 0);
-  MemRef<float, 0> transform_16_2({}, 0);
+  MemRef<float, 0> zuan_16_1({}, 0);
+  MemRef<float, 0> transform_16_1({}, 0);
 
   runKernel(_mlir_ciface_kernel_autovec_16, &vec, &autovec);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &zuan_16_2);
-  runKernel(_mlir_ciface_kernel_transform_16_2, &vec, &transform_16_2);
+  runKernel(_mlir_ciface_kernel_zuan_16_1, &vec, &zuan_16_1);
+  runKernel(_mlir_ciface_kernel_transform_16_1, &vec, &transform_16_1);
 
   std::cerr << "autovec:   " << autovec[0] << "\n";
-  std::cerr << "zuan-16-2: " << zuan_16_2[0] << "\n";
-  std::cerr << "transform-16-2: " << transform_16_2[0] << "\n";
+  std::cerr << "zuan-16-2: " << zuan_16_1[0] << "\n";
+  std::cerr << "transform-16-2: " << transform_16_1[0] << "\n";
 }
 
 //-------------------------------------------------------------------
 // Zuan
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);
@@ -77,8 +77,8 @@ BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
 // Transform Dialect
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, transform_16_2,
-                  _mlir_ciface_kernel_transform_16_2)
+BENCHMARK_CAPTURE(runBenchmark, transform_16_1,
+                  _mlir_ciface_kernel_transform_16_1)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);
