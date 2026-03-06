@@ -283,7 +283,8 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
         values.push_back(state.tileMap[source][0]);
       } else {
         auto vecType = getVectorType(result.getType().getElementType(), state);
-        auto splatOp = builder.create<vector::SplatOp>(loc, vecType, source);
+        auto splatOp =
+            builder.create<vector::BroadcastOp>(loc, vecType, source);
         auto predOp = vp::predicateOperation(builder, splatOp, *cols, mask,
                                              nullptr, maskedoff);
         values.push_back(predOp->getResult(0));
@@ -520,7 +521,8 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
       Operation *step = builder.create<vp::StepOp>(loc, vectorType);
       step = vp::predicateOperation(builder, step, *cols, mask, nullptr,
                                     maskedoff);
-      auto startSplat = builder.create<vector::SplatOp>(loc, vectorType, start);
+      auto startSplat =
+          builder.create<vector::BroadcastOp>(loc, vectorType, start);
       Operation *add =
           builder.create<arith::AddIOp>(loc, startSplat, step->getResult(0));
       add =
@@ -531,7 +533,7 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
           loc, start.getType(), builder.getIntegerAttr(start.getType(), i));
       Value newStart = builder.create<arith::AddIOp>(loc, start, increment);
       Operation *splat =
-          builder.create<vector::SplatOp>(loc, vectorType, newStart);
+          builder.create<vector::BroadcastOp>(loc, vectorType, newStart);
       splat = vp::predicateOperation(builder, splat, *cols, mask, nullptr,
                                      maskedoff);
       values.push_back(splat->getResult(0));
@@ -717,7 +719,7 @@ static void handleOuterOp(OpBuilder &b, OuterOp outerOp, ShapeInfo &shapeInfo,
       Value rhsRow = state.tileMap[rhs][0];
 
       Operation *lhsSplat =
-          b.create<vector::SplatOp>(loc, rhsRow.getType(), lhsRow);
+          b.create<vector::BroadcastOp>(loc, rhsRow.getType(), lhsRow);
       lhsSplat = vp::predicateOperation(b, lhsSplat, *rhsCols, mask, nullptr,
                                         maskedoff);
       auto outer =

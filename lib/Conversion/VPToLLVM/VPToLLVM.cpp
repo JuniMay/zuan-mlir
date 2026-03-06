@@ -233,6 +233,26 @@ static Value buildAllTrueMask(ConversionPatternRewriter &rewriter, Location loc,
       loc, maskType, DenseIntElementsAttr::get(maskType, true));
 }
 
+static Value buildLLVMSplat(ConversionPatternRewriter &rewriter, Location loc,
+                            Value scalar, VectorType vectorType,
+                            const LLVMTypeConverter *typeConverter) {
+  auto i32Type = typeConverter->convertType(rewriter.getI32Type());
+  auto zero = LLVM::ConstantOp::create(rewriter, loc, i32Type,
+                                       rewriter.getZeroAttr(rewriter.getI32Type()));
+  auto poison = LLVM::PoisonOp::create(rewriter, loc, vectorType);
+
+  if (vectorType.getRank() == 0) {
+    return LLVM::InsertElementOp::create(rewriter, loc, vectorType, poison,
+                                         scalar, zero);
+  }
+
+  Value inserted = LLVM::InsertElementOp::create(rewriter, loc, vectorType,
+                                                 poison, scalar, zero);
+  SmallVector<int32_t> zeroMask(vectorType.getDimSize(0), 0);
+  return LLVM::ShuffleVectorOp::create(rewriter, loc, inserted, poison,
+                                       zeroMask);
+}
+
 /// Build the passthru value and the policy for the RVV intrinsic.
 [[maybe_unused]]
 static std::pair<Value, unsigned>
@@ -324,8 +344,8 @@ static Value buildPtrVec(Location loc, MemRefType type,
                                               increment, mask, evl);
   }
   Type ptrType = rewriter.getType<LLVM::LLVMPointerType>();
-  Type ptrVecType = rewriter.getType<LLVM::LLVMScalableVectorType>(
-      ptrType, vectorType.getNumElements());
+  Type ptrVecType = LLVM::getVectorType(ptrType, vectorType.getDimSize(0),
+                                        vectorType.getScalableDims()[0]);
   Value ptrVec =
       rewriter.create<LLVM::VPIntToPtrOp>(loc, ptrVecType, indexVec, mask, evl);
   return ptrVec;
@@ -346,6 +366,7 @@ public:
   matchAndRewrite(vp::PredicateOp op, vp::PredicateOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto predicatedOp = &op.getBody().front().front();
+    rewriter.setInsertionPoint(op);
 
     auto loc = op->getLoc();
     auto evlxlen = adaptor.getEvl();
@@ -481,22 +502,14 @@ public:
           loweredOp = intrOp.getOperation();
           doMerge = false;
         })
-        .Case([&](vector::SplatOp splatOp) {
-          auto src = splatOp.getOperand();
+        .Case([&](vector::BroadcastOp splatOp) {
+          auto src = splatOp.getSource();
           src = materializeOperand(rewriter, typeConverter, src);
           auto targetResType =
-              typeConverter->convertType(splatOp.getResult().getType());
-
-          if (!mask) {
-            mask =
-                buildAllTrueMask(rewriter, loc, splatOp.getResult().getType());
-          }
-
-          auto vpSplat = rewriter.create<LLVM::CallIntrinsicOp>(
-              loc, targetResType,
-              rewriter.getStringAttr("llvm.experimental.vp.splat"),
-              ValueRange{src, mask, evl});
-          loweredOp = vpSplat.getOperation();
+              cast<VectorType>(typeConverter->convertType(splatOp.getType()));
+          auto value =
+              buildLLVMSplat(rewriter, loc, src, targetResType, typeConverter);
+          loweredOp = value.getDefiningOp();
         })
         .Case([&](vector::StepOp stepOp) {
           auto targetResType =
@@ -596,8 +609,9 @@ public:
           }
 
           auto llvmPtrType = rewriter.getType<LLVM::LLVMPointerType>();
-          auto dataPtr = getStridedElementPtr(loc, loadOp.getMemRefType(),
-                                              baseStruct, indices, rewriter);
+          auto dataPtr = getStridedElementPtr(rewriter, loc,
+                                              loadOp.getMemRefType(),
+                                              baseStruct, indices);
           auto dataPtrCasted =
               rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, dataPtr);
 
@@ -608,11 +622,9 @@ public:
               // 0-stride load, make it scalar load & splat
               Value load = rewriter.create<LLVM::LoadOp>(
                   loc, vectorType.getElementType(), dataPtrCasted);
-              auto splatOp = rewriter.create<LLVM::CallIntrinsicOp>(
-                  loc, vectorType,
-                  rewriter.getStringAttr("llvm.experimental.vp.splat"),
-                  ValueRange{load, mask, evl});
-              loweredOp = splatOp.getOperation();
+              auto splat =
+                  buildLLVMSplat(rewriter, loc, load, vectorType, typeConverter);
+              loweredOp = splat.getDefiningOp();
             } else {
               // strided load
               MemRefDescriptor memrefDesc(baseStruct);
@@ -657,8 +669,9 @@ public:
           }
 
           auto llvmPtrType = rewriter.getType<LLVM::LLVMPointerType>();
-          auto dataPtr = getStridedElementPtr(loc, storeOp.getMemRefType(),
-                                              baseStruct, indices, rewriter);
+          auto dataPtr = getStridedElementPtr(rewriter, loc,
+                                              storeOp.getMemRefType(),
+                                              baseStruct, indices);
           auto dataPtrCasted =
               rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, dataPtr);
 
@@ -881,12 +894,10 @@ public:
             auto elementType = targetVecType.getElementType();
             auto one = rewriter.create<LLVM::ConstantOp>(
                 loc, elementType, rewriter.getFloatAttr(elementType, 1.0));
-            auto splatIntrName =
-                rewriter.getStringAttr("llvm.experimental.vp.splat");
-            auto oneSplat = rewriter.create<LLVM::CallIntrinsicOp>(
-                loc, targetResType, splatIntrName, ValueRange{one, mask, evl});
+            auto oneSplat =
+                buildLLVMSplat(rewriter, loc, one, targetVecType, typeConverter);
             auto divOp = rewriter.create<LLVM::VPFDivOp>(
-                loc, targetResType, oneSplat.getResult(0), sqrtOp->getResult(0),
+                loc, targetResType, oneSplat, sqrtOp->getResult(0),
                 mask, evl);
             loweredOp = divOp.getOperation();
           }

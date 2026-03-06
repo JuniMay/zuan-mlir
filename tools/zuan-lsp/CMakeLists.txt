@@ -6,6 +6,8 @@ set(
   ${dialect_libs}
   ${conversion_libs}
   ${extension_libs}
+  MLIRRegisterAllDialects
+  MLIRRegisterAllExtensions
   MLIRLspServerLib
 )
 add_llvm_executable(zuan-lsp zuan-lsp.cpp)

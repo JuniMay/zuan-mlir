@@ -22,7 +22,13 @@ func.func @linalg_matmul_transpose_a(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %
   // CHECK-NEXT: zuan.yield {
   // CHECK-NEXT:   zuan.store %[[RED]], %{{.*}} : <?x?xf32>, memref<?x?xf32, strided<[?, 1]>
   // CHECK-NEXT: }
-  linalg.matmul_transpose_a ins(%a, %b : memref<?x?xf32>, memref<?x?xf32>) outs(%c: memref<?x?xf32>)
+  linalg.matmul indexing_maps = [
+                       affine_map<(d0, d1, d2) -> (d2, d0)>,
+                       affine_map<(d0, d1, d2) -> (d2, d1)>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>
+                      ]
+                      ins(%a, %b : memref<?x?xf32>, memref<?x?xf32>)
+                      outs(%c: memref<?x?xf32>)
   return 
 }
 
@@ -35,6 +41,12 @@ func.func @linalg_matmul_transpose_b(%a: memref<?x?xf32>, %b: memref<?x?xf32>, %
   // CHECK-NEXT: zuan.yield {
   // CHECK-NEXT:   zuan.store %[[RED]], %{{.*}} : <?x?xf32>, memref<?x?xf32, strided<[?, 1]>
   // CHECK-NEXT: }
-  linalg.matmul_transpose_b ins(%a, %b : memref<?x?xf32>, memref<?x?xf32>) outs(%c: memref<?x?xf32>)
+  linalg.matmul indexing_maps = [
+                       affine_map<(d0, d1, d2) -> (d0, d2)>,
+                       affine_map<(d0, d1, d2) -> (d1, d2)>,
+                       affine_map<(d0, d1, d2) -> (d0, d1)>
+                      ]
+                      ins(%a, %b : memref<?x?xf32>, memref<?x?xf32>)
+                      outs(%c: memref<?x?xf32>)
   return 
 }

@@ -250,7 +250,8 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto cond = getOrSplat(builder, ifOp.getCondition(), state);
     // Negate the condition for the else branch.
     Value trueElem =
-        builder.create<arith::ConstantIntOp>(loc, 1, builder.getIntegerType(1));
+        builder.create<arith::ConstantOp>(loc, builder.getI1Type(),
+                                          builder.getBoolAttr(true));
     Value trueValue =
         builder.create<zuan::SplatOp>(loc, trueElem, state.ofrShape);
     Value negCond = builder.create<arith::XOrIOp>(loc, cond, trueValue);

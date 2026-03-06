@@ -92,6 +92,9 @@ DimSize::DimSize(OpFoldResult ofr) {
 bool DimSize::operator<(const DimSize &rhs) const {
   if (dimsize.index() != rhs.dimsize.index()) {
     return dimsize.index() < rhs.dimsize.index();
+  } else if (auto lhsSpecial = std::get_if<SpecialKey>(&dimsize)) {
+    return static_cast<unsigned>(*lhsSpecial) <
+           static_cast<unsigned>(*std::get_if<SpecialKey>(&rhs.dimsize));
   } else if (auto lhsDim = std::get_if<int64_t>(&dimsize)) {
     return *lhsDim < *std::get_if<int64_t>(&rhs.dimsize);
   } else if (auto lhsValue = std::get_if<Value>(&dimsize)) {
@@ -109,6 +112,10 @@ bool DimSize::operator<(const DimSize &rhs) const {
 }
 
 void DimSize::dump(llvm::raw_ostream &os) const {
+  if (auto special = std::get_if<SpecialKey>(&dimsize)) {
+    os << (*special == SpecialKey::Empty ? "<empty>" : "<tombstone>");
+    return;
+  }
   if (auto value = std::get_if<Value>(&dimsize)) {
     os << *value;
     return;
@@ -122,7 +129,9 @@ void DimSize::dump(llvm::raw_ostream &os) const {
 }
 
 Value DimSize::getOrCreateValue(OpBuilder &builder, Location loc) const {
-  if (auto val = std::get_if<Value>(&dimsize)) {
+  if (std::holds_alternative<SpecialKey>(dimsize)) {
+    llvm_unreachable("dense map sentinel does not have a value");
+  } else if (auto val = std::get_if<Value>(&dimsize)) {
     return *val;
   } else if (auto val = std::get_if<int64_t>(&dimsize)) {
     return builder.create<arith::ConstantIndexOp>(loc, *val);
@@ -134,7 +143,9 @@ Value DimSize::getOrCreateValue(OpBuilder &builder, Location loc) const {
 
 OpFoldResult DimSize::getOrCreateOpFoldResult(OpBuilder &builder,
                                               Location loc) const {
-  if (auto val = std::get_if<Value>(&dimsize)) {
+  if (std::holds_alternative<SpecialKey>(dimsize)) {
+    llvm_unreachable("dense map sentinel does not have an OpFoldResult");
+  } else if (auto val = std::get_if<Value>(&dimsize)) {
     return *val;
   } else if (auto val = std::get_if<int64_t>(&dimsize)) {
     return builder.getIndexAttr(*val);
@@ -146,6 +157,9 @@ OpFoldResult DimSize::getOrCreateOpFoldResult(OpBuilder &builder,
 }
 
 std::optional<Value> DimSize::getValue() const {
+  if (std::holds_alternative<SpecialKey>(dimsize)) {
+    return std::nullopt;
+  }
   if (auto value = std::get_if<Value>(&dimsize)) {
     return *value;
   }
@@ -153,10 +167,35 @@ std::optional<Value> DimSize::getValue() const {
 }
 
 std::optional<int64_t> DimSize::getInteger() const {
+  if (std::holds_alternative<SpecialKey>(dimsize)) {
+    return std::nullopt;
+  }
   if (auto integer = std::get_if<int64_t>(&dimsize)) {
     return *integer;
   }
   return std::nullopt;
+}
+
+DimSize DimSize::getDenseMapEmptyKey() { return DimSize(SpecialKey::Empty); }
+
+DimSize DimSize::getDenseMapTombstoneKey() {
+  return DimSize(SpecialKey::Tombstone);
+}
+
+unsigned DimSize::getHashValue() const {
+  if (auto special = std::get_if<SpecialKey>(&dimsize)) {
+    return llvm::DenseMapInfo<unsigned>::getHashValue(
+        static_cast<unsigned>(*special));
+  }
+  if (auto integer = std::get_if<int64_t>(&dimsize)) {
+    return llvm::DenseMapInfo<int64_t>::getHashValue(*integer);
+  }
+  if (auto value = std::get_if<Value>(&dimsize)) {
+    return llvm::DenseMapInfo<Value>::getHashValue(*value);
+  }
+  auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
+  return static_cast<unsigned>(llvm::hash_combine(memref.getAsOpaquePointer(),
+                                                  dim));
 }
 
 std::optional<ShapeRef> ShapeInfo::getShape(Value value) {

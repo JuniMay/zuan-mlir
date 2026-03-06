@@ -12,7 +12,9 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/EquivalenceClasses.h"
+#include "llvm/ADT/Hashing.h"
 #include <utility>
 #include <variant>
 
@@ -43,8 +45,19 @@ struct DimSize {
   /// Get the integer value of the dimsize, if it is an integer. Otherwise,
   std::optional<int64_t> getInteger() const;
 
+  static DimSize getDenseMapEmptyKey();
+  static DimSize getDenseMapTombstoneKey();
+  unsigned getHashValue() const;
+
 
 private:
+  enum class SpecialKey {
+    Empty,
+    Tombstone
+  };
+
+  explicit DimSize(SpecialKey key) : dimsize(key) {}
+
   /// The size can be a value, constant or corresponding to the size of a
   /// memref.
   ///
@@ -52,6 +65,8 @@ private:
   /// inference process to generate unnecessary memref.dim operations, which
   /// might lead to infinite loops in the greedy pattern rewriter.
   std::variant<
+      // DenseMap sentinels.
+      SpecialKey,
       // This dim is a runtime value.
       Value,
       // This dim is static.
@@ -149,5 +164,29 @@ Value getOrCreateIndexValue(OpBuilder &builder, OpFoldResult ofr, Location loc);
 
 } // namespace zuan
 } // namespace mlir
+
+namespace llvm {
+
+template <>
+struct DenseMapInfo<mlir::zuan::DimSize> {
+  static mlir::zuan::DimSize getEmptyKey() {
+    return mlir::zuan::DimSize::getDenseMapEmptyKey();
+  }
+
+  static mlir::zuan::DimSize getTombstoneKey() {
+    return mlir::zuan::DimSize::getDenseMapTombstoneKey();
+  }
+
+  static unsigned getHashValue(const mlir::zuan::DimSize &value) {
+    return value.getHashValue();
+  }
+
+  static bool isEqual(const mlir::zuan::DimSize &lhs,
+                      const mlir::zuan::DimSize &rhs) {
+    return lhs == rhs;
+  }
+};
+
+} // namespace llvm
 
 #endif // ZUAN_UTILS_SHAPEINFERENCE_H

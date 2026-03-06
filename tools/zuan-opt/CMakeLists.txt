@@ -8,6 +8,9 @@ set(
   ${conversion_libs}
   ${extension_libs}
   MLIROptLib
+  MLIRRegisterAllDialects
+  MLIRRegisterAllExtensions
+  MLIRRegisterAllPasses
 
   VPToLLVMConversion
   LinalgToZuanConversion
