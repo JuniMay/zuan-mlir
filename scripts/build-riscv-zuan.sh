@@ -1,12 +1,15 @@
 
-mkdir ${RISCV_ZUAN_BUILD_DIR}
+mkdir -p ${RISCV_ZUAN_BUILD_DIR}
 cd ${RISCV_ZUAN_BUILD_DIR}
 
+PATH=${RISCV_GNU_TOOLCHAIN_DIR}/bin:${PATH} \
 cmake -G Ninja .. \
     -DCMAKE_SYSTEM_NAME=Linux \
+    -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
     -DMLIR_DIR=${RISCV_LLVM_BUILD_DIR}/lib/cmake/mlir \
     -DLLVM_DIR=${RISCV_LLVM_BUILD_DIR}/lib/cmake/llvm \
     -DCMAKE_CROSSCOMPILING=True \
+    -DCMAKE_CROSSCOMPILING_EMULATOR=qemu-riscv64 \
     -DCMAKE_BUILD_TYPE=Release \
     -DLLVM_NATIVE_ARCH=RISCV \
     -DLLVM_HOST_TRIPLE=riscv64-unknown-linux-gnu \

@@ -67,7 +67,7 @@ function(add_triton_benchmark benchmark_name python_args)
     COMMAND
       cat ${mlir_file} |
       sed "'s/kernel(/kernel_zuan(/'" |
-      ${ZUAN_OPT}
+      ${ZUAN_OPT_CMD}
         -linalg-fuse-elementwise-ops 
         -empty-tensor-to-alloc-tensor 
         -one-shot-bufferize="allow-return-allocs-from-loops=true"
@@ -97,7 +97,7 @@ function(add_triton_benchmark benchmark_name python_args)
         -mlir-print-ir-after-all
         -o ${zuan_mlir} 2> ${zuan_debug_file}
     COMMAND
-      ${ZUAN_TRANSLATE} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
+      ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang 
         -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}

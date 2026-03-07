@@ -27,7 +27,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
     COMMAND
       cat ${mlir_file} |
       sed "'s/kernel(/kernel_zuan_${vf}_${uf}${estimate_math_suffix}(/'" |
-      ${ZUAN_OPT}
+      ${ZUAN_OPT_CMD}
         -linalg-generalize-named-ops
         -convert-linalg-to-zuan
         -lower-zuan="target-rank=2"
@@ -57,7 +57,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -mlir-print-ir-after-all
         -o ${zuan_mlir} 2> ${zuan_debug_file}
     COMMAND
-      ${ZUAN_TRANSLATE} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
+      ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang 
         -march=rv64gcv_zvfh -O3 -ffast-math -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}

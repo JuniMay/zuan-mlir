@@ -12,11 +12,11 @@ set(asm_file ${CMAKE_CURRENT_BINARY_DIR}/matmul.s)
 
 add_custom_command(
   OUTPUT ${obj_file}
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-opt -lower-zuan="target-rank=2" -o ${CMAKE_CURRENT_BINARY_DIR}/stage0.mlir ${mlir_file}
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-opt -zuan-stripmining="vf=16;uf=2;scalable=true" -o ${CMAKE_CURRENT_BINARY_DIR}/stage1.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage0.mlir 
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-opt -convert-zuan-to-vp="vf=16;scalable=true" -o ${CMAKE_CURRENT_BINARY_DIR}/stage2.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage1.mlir
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-opt -convert-vp-to-llvm -o ${CMAKE_CURRENT_BINARY_DIR}/stage3.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage2.mlir
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-opt
+  COMMAND ${ZUAN_OPT_CMD} -lower-zuan="target-rank=2" -o ${CMAKE_CURRENT_BINARY_DIR}/stage0.mlir ${mlir_file}
+  COMMAND ${ZUAN_OPT_CMD} -zuan-stripmining="vf=16;uf=2;scalable=true" -o ${CMAKE_CURRENT_BINARY_DIR}/stage1.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage0.mlir 
+  COMMAND ${ZUAN_OPT_CMD} -convert-zuan-to-vp="vf=16;scalable=true" -o ${CMAKE_CURRENT_BINARY_DIR}/stage2.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage1.mlir
+  COMMAND ${ZUAN_OPT_CMD} -convert-vp-to-llvm -o ${CMAKE_CURRENT_BINARY_DIR}/stage3.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage2.mlir
+  COMMAND ${ZUAN_OPT_CMD}
     -expand-strided-metadata 
     -lower-affine 
     -convert-scf-to-cf 
@@ -32,7 +32,7 @@ add_custom_command(
     -reconcile-unrealized-casts 
     -canonicalize 
     -cse -o ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage3.mlir
-  COMMAND ${ZUAN_BINARY_DIR}/bin/zuan-translate ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir -zuan-to-llvmir -o ${ll_file}
+  COMMAND ${ZUAN_TRANSLATE_CMD} ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir -zuan-to-llvmir -o ${ll_file}
   COMMAND ${ZUAN_SOURCE_DIR}/llvm-project/build/bin/clang -march=rv64gcv_zvfh -O3 -g ${CLANG_FLAGS_LIST} -c -save-temps ${ll_file} -o ${obj_file}
   DEPENDS ${mlir_file} zuan-opt
 )
