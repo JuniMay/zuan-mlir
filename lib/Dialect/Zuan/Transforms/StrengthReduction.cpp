@@ -71,7 +71,7 @@ struct SplatCastPattern : OpRewritePattern<CastOp> {
       auto cast = createCastOp(rewriter, op.getLoc(), op.getKind(), resultType,
                                splatValue);
       auto newSplat =
-          rewriter.create<SplatOp>(op.getLoc(), cast, splatOp.getMixedDims());
+          SplatOp::create(rewriter, op.getLoc(), cast, splatOp.getMixedDims());
       rewriter.replaceOp(op, newSplat);
       return success();
     }
@@ -93,7 +93,7 @@ struct StepCastPattern : OpRewritePattern<CastOp> {
       auto resultType = result.getType().getElementType();
       auto cast = createCastOp(rewriter, op.getLoc(), op.getKind(), resultType,
                                startValue);
-      auto newStep = rewriter.create<StepOp>(op.getLoc(), cast,
+      auto newStep = StepOp::create(rewriter, op.getLoc(), cast,
                                              stepOp.getDim().getZExtValue(),
                                              stepOp.getMixedSizes());
       rewriter.replaceOp(op, newStep);
@@ -150,7 +150,7 @@ struct SplatElementwisePattern : OpTraitRewritePattern<OpTrait::Elementwise> {
     auto newOp = rewriter.create(op->getLoc(), op->getName().getIdentifier(),
                                  newOperands, resultTypes, op->getAttrs());
     auto newValue = newOp->getResult(0);
-    auto splat = rewriter.create<SplatOp>(op->getLoc(), newValue, splatDims);
+    auto splat = SplatOp::create(rewriter, op->getLoc(), newValue, splatDims);
     rewriter.replaceOp(op, splat);
     return success();
   }
@@ -190,8 +190,8 @@ struct SplatStepAddPattern : OpRewritePattern<arith::AddIOp> {
     auto start = step.getStart();
 
     auto newStart =
-        rewriter.create<arith::AddIOp>(op.getLoc(), splatted, start);
-    auto newStep = rewriter.create<StepOp>(op.getLoc(), newStart,
+        arith::AddIOp::create(rewriter, op.getLoc(), splatted, start);
+    auto newStep = StepOp::create(rewriter, op.getLoc(), newStart,
                                            step.getDim().getZExtValue(),
                                            step.getMixedSizes());
     rewriter.replaceOp(op, newStep);
@@ -220,9 +220,9 @@ struct GatherToLoadPattern : OpRewritePattern<GatherOp> {
     if (indices.empty()) {
       // load the scalar and splat with empty sizes.
       auto load =
-          rewriter.create<memref::LoadOp>(op.getLoc(), memref, ValueRange{});
+          memref::LoadOp::create(rewriter, op.getLoc(), memref, ValueRange{});
       auto splat =
-          rewriter.create<SplatOp>(op.getLoc(), load, ArrayRef<int64_t>());
+          SplatOp::create(rewriter, op.getLoc(), load, ArrayRef<int64_t>());
       rewriter.replaceOp(op, splat);
       return success();
     }
@@ -265,9 +265,9 @@ struct GatherToLoadPattern : OpRewritePattern<GatherOp> {
       }
     }
     // Create subview.
-    auto subview = rewriter.create<memref::SubViewOp>(op.getLoc(), memref,
+    auto subview = memref::SubViewOp::create(rewriter, op.getLoc(), memref,
                                                       offsets, sizes, strides);
-    auto load = rewriter.create<LoadOp>(op.getLoc(), subview);
+    auto load = LoadOp::create(rewriter, op.getLoc(), subview);
 
     rewriter.replaceOp(op, load);
     return success();

@@ -136,7 +136,7 @@ Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
     return getUnrolledMemref(builder, init, options, state);
   });
 
-  return builder.create<DynamicOp>(
+  return DynamicOp::create(builder, 
       getLoc(), inits, [&](OpBuilder &b, Location loc, ValueRange args) {
         OpBuilder::InsertionGuard guard(b);
 
@@ -146,7 +146,7 @@ Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
               return getUnrolledValue(b, value, options, state);
             });
 
-        auto newYieldOp = b.create<YieldOp>(loc, newYieldOperands, nullptr);
+        auto newYieldOp = YieldOp::create(b, loc, newYieldOperands, nullptr);
         state.yieldBlock = &newYieldOp.getBody().front();
         b.setInsertionPoint(newYieldOp);
 
@@ -342,14 +342,14 @@ void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 
 void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp) {
   if (!maskedOp) {
-    builder.create<MaskYieldOp>(loc);
+    MaskYieldOp::create(builder, loc);
     return;
   }
   assert(maskedOp->getBlock() && "maskedOp must be inserted into a block");
   Block *insBlock = builder.getInsertionBlock();
   insBlock->getOperations().splice(
       insBlock->begin(), maskedOp->getBlock()->getOperations(), maskedOp);
-  builder.create<MaskYieldOp>(maskedOp->getLoc(), maskedOp->getResults());
+  MaskYieldOp::create(builder, maskedOp->getLoc(), maskedOp->getResults());
 }
 
 Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
@@ -365,7 +365,7 @@ Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
     builder.setInsertionPointAfter(maskedOp);
     resultTypes = maskedOp->getResultTypes();
   }
-  return builder.create<MaskOp>(
+  return MaskOp::create(builder, 
       loc, resultTypes, mask,
       [&](OpBuilder &b, Location loc) { createMaskOpRegion(b, loc, maskedOp); },
       maskedoff);
@@ -476,10 +476,10 @@ Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
         });
     auto newResultTypes = llvm::map_to_vector(
         newOperands, [&](Value opd) { return opd.getType(); });
-    return builder.create<MaskOp>(
+    return MaskOp::create(builder, 
         getLoc(), newResultTypes, mask,
         [&](OpBuilder &b, Location loc) {
-          b.create<MaskYieldOp>(loc, newOperands);
+          MaskYieldOp::create(b, loc, newOperands);
         },
         maskedoff);
   }
@@ -701,16 +701,16 @@ Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
   if (useDot) {
     Value mul;
     if (isa<FloatType>(getLhs().getType().getElementType())) {
-      mul = builder.create<arith::MulFOp>(getLoc(), lhs, rhs);
+      mul = arith::MulFOp::create(builder, getLoc(), lhs, rhs);
     } else {
-      mul = builder.create<arith::MulIOp>(getLoc(), lhs, rhs);
+      mul = arith::MulIOp::create(builder, getLoc(), lhs, rhs);
     }
     SmallVector<int64_t> dims{static_cast<int64_t>(leadingSize)};
-    auto reduction = builder.create<ReductionOp>(getLoc(), CombiningKind::ADD,
+    auto reduction = ReductionOp::create(builder, getLoc(), CombiningKind::ADD,
                                                  mul, dims, /*init=*/nullptr);
     return reduction;
   } else {
-    auto matmulOp = builder.create<MatmulOp>(getLoc(), lhs, rhs);
+    auto matmulOp = MatmulOp::create(builder, getLoc(), lhs, rhs);
     return matmulOp;
   }
 }
@@ -821,7 +821,7 @@ Operation *ReductionOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 
   auto reductionOp =
-      builder.create<ReductionOp>(getLoc(), getKind(), tile, newDims, init);
+      ReductionOp::create(builder, getLoc(), getKind(), tile, newDims, init);
   return reductionOp;
 }
 
@@ -873,7 +873,7 @@ void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
 Operation *LoadOp::unroll(OpBuilder &builder, UnrollOptions options,
                           UnrollState &state) {
   auto memref = getUnrolledMemref(builder, getBase(), options, state);
-  auto loadOp = builder.create<LoadOp>(getLoc(), memref);
+  auto loadOp = LoadOp::create(builder, getLoc(), memref);
   return loadOp;
 }
 
@@ -913,7 +913,7 @@ Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto value = getUnrolledValue(builder, getValue(), options, state);
 
   builder.setInsertionPointToEnd(state.yieldBlock);
-  auto storeOp = builder.create<StoreOp>(getLoc(), value, memref);
+  auto storeOp = StoreOp::create(builder, getLoc(), value, memref);
   return storeOp;
 }
 
@@ -1029,7 +1029,7 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 
   Value unrolledValue = getUnrolledValue(builder, value, options, state);
-  auto splatOp = builder.create<SplatOp>(getLoc(), unrolledValue, newDims);
+  auto splatOp = SplatOp::create(builder, getLoc(), unrolledValue, newDims);
   return splatOp;
 }
 
@@ -1167,7 +1167,7 @@ Operation *OuterOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto lhs = getUnrolledValue(builder, getLhs(), lhsOptions, state);
   auto rhs = getUnrolledValue(builder, getRhs(), rhsOptions, state);
 
-  auto outerOp = builder.create<OuterOp>(getLoc(), getKind(), lhs, rhs);
+  auto outerOp = OuterOp::create(builder, getLoc(), getKind(), lhs, rhs);
   return outerOp;
 }
 
@@ -1269,39 +1269,39 @@ Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
       if (offset.getType() != start.getType()) {
         if (isa<IndexType>(offset.getType()) ||
             isa<IndexType>(start.getType())) {
-          offset = builder.create<arith::IndexCastOp>(getLoc(), start.getType(),
+          offset = arith::IndexCastOp::create(builder, getLoc(), start.getType(),
                                                       offset);
         } else if (offset.getType().getIntOrFloatBitWidth() >
                    start.getType().getIntOrFloatBitWidth()) {
-          offset = builder.create<arith::TruncIOp>(getLoc(), start.getType(),
+          offset = arith::TruncIOp::create(builder, getLoc(), start.getType(),
                                                    offset);
         } else {
           offset =
-              builder.create<arith::ExtUIOp>(getLoc(), start.getType(), offset);
+              arith::ExtUIOp::create(builder, getLoc(), start.getType(), offset);
         }
       }
-      increment = builder.create<arith::AddIOp>(getLoc(), start, offset);
+      increment = arith::AddIOp::create(builder, getLoc(), start, offset);
     } else {
       auto offsetInt =
           cast<IntegerAttr>(options.getOffset().dyn_cast<Attribute>()).getInt();
-      auto offsetValue = builder.create<arith::ConstantOp>(
+      auto offsetValue = arith::ConstantOp::create(builder, 
           getLoc(), start.getType(),
           builder.getIntegerAttr(start.getType(), offsetInt));
-      increment = builder.create<arith::AddIOp>(getLoc(), start, offsetValue);
+      increment = arith::AddIOp::create(builder, getLoc(), start, offsetValue);
     }
 
     if (options.shouldReduce()) {
-      auto splatOp = builder.create<SplatOp>(getLoc(), increment, newSizes);
+      auto splatOp = SplatOp::create(builder, getLoc(), increment, newSizes);
       return splatOp;
     } else {
-      auto stepOp = builder.create<StepOp>(getLoc(), increment, dim, newSizes);
+      auto stepOp = StepOp::create(builder, getLoc(), increment, dim, newSizes);
       return stepOp;
     }
   } else {
     if (dim > unrollIdx && options.shouldReduce()) {
       dim -= 1;
     }
-    auto stepOp = builder.create<StepOp>(getLoc(), start, dim, newSizes);
+    auto stepOp = StepOp::create(builder, getLoc(), start, dim, newSizes);
     return stepOp;
   }
 }
@@ -1342,7 +1342,7 @@ Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
                           UnrollState &state) {
   auto tile = getUnrolledValue(builder, getTile(), options, state);
   auto targetType = getUnrolledTileType(getResult().getType(), options);
-  auto castOp = builder.create<CastOp>(getLoc(), targetType, getKind(), tile);
+  auto castOp = CastOp::create(builder, getLoc(), targetType, getKind(), tile);
   return castOp;
 }
 
@@ -1387,7 +1387,7 @@ Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto cond = getUnrolledValue(builder, getCond(), options, state);
   auto lhs = getUnrolledValue(builder, getLhs(), options, state);
   auto rhs = getUnrolledValue(builder, getRhs(), options, state);
-  auto selectOp = builder.create<SelectOp>(getLoc(), cond, lhs, rhs);
+  auto selectOp = SelectOp::create(builder, getLoc(), cond, lhs, rhs);
   return selectOp;
 }
 
@@ -1462,7 +1462,7 @@ Operation *GatherOp::unroll(OpBuilder &builder, UnrollOptions options,
   for (auto index : indices) {
     unrolledIndices.push_back(getUnrolledValue(builder, index, options, state));
   }
-  auto gatherOp = builder.create<GatherOp>(getLoc(), memref, unrolledIndices);
+  auto gatherOp = GatherOp::create(builder, getLoc(), memref, unrolledIndices);
   return gatherOp;
 }
 
@@ -1523,7 +1523,7 @@ Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
 
   builder.setInsertionPointToEnd(state.yieldBlock);
   auto scatterOp =
-      builder.create<ScatterOp>(getLoc(), value, memref, unrolledIndices);
+      ScatterOp::create(builder, getLoc(), value, memref, unrolledIndices);
   return scatterOp;
 }
 

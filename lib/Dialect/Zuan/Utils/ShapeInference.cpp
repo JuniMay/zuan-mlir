@@ -134,10 +134,10 @@ Value DimSize::getOrCreateValue(OpBuilder &builder, Location loc) const {
   } else if (auto val = std::get_if<Value>(&dimsize)) {
     return *val;
   } else if (auto val = std::get_if<int64_t>(&dimsize)) {
-    return builder.create<arith::ConstantIndexOp>(loc, *val);
+    return arith::ConstantIndexOp::create(builder, loc, *val);
   } else {
     auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-    return builder.create<memref::DimOp>(loc, memref, dim);
+    return memref::DimOp::create(builder, loc, memref, dim);
   }
 }
 
@@ -151,7 +151,7 @@ OpFoldResult DimSize::getOrCreateOpFoldResult(OpBuilder &builder,
     return builder.getIndexAttr(*val);
   } else {
     auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-    Value dimVal = builder.create<memref::DimOp>(loc, memref, dim);
+    Value dimVal = memref::DimOp::create(builder, loc, memref, dim);
     return dimVal;
   }
 }
@@ -421,7 +421,7 @@ Value getOrCreateIndexValue(OpBuilder &builder, OpFoldResult ofr,
     return value;
   }
   auto integer = cast<IntegerAttr>(ofr.dyn_cast<Attribute>()).getInt();
-  return builder.create<arith::ConstantIndexOp>(loc, integer);
+  return arith::ConstantIndexOp::create(builder, loc, integer);
 }
 
 } // namespace zuan

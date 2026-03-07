@@ -63,8 +63,8 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     // to access the first.
     auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
 
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
     UnrollState state;
     state.initialize(op);
@@ -72,12 +72,12 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
     // Make sure no use-before-def is produced.
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
 
-    auto loop = rewriter.create<scf::ForOp>(
+    auto loop = scf::ForOp::create(rewriter, 
         loc, zero, dim, one, ValueRange{},
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           UnrollOptions options(iv, b.getIndexAttr(1), 0, true);
           op.unroll(b, options, state);
-          b.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(b, loc);
         });
 
     // loop->getParentOfType<func::FuncOp>().dump();
@@ -120,19 +120,19 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
     auto rhsRank = rhs.getType().getRank();
 
     auto elementType = lhs.getType().getElementType();
-    auto zero = rewriter.create<arith::ConstantOp>(
+    auto zero = arith::ConstantOp::create(rewriter, 
         loc, elementType, rewriter.getZeroAttr(elementType));
 
     auto resShape = *shapeInfo.getShapeWithEquivalence(op.getResult());
     auto ofrShape = llvm::map_to_vector(resShape, [&](DimSize dim) {
       return dim.getOrCreateOpFoldResult(rewriter, loc);
     });
-    Value acc = rewriter.create<zuan::SplatOp>(loc, zero, ofrShape);
+    Value acc = zuan::SplatOp::create(rewriter, loc, zero, ofrShape);
     Value ub = lhsShape.back().getOrCreateValue(rewriter, loc);
-    Value lb = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    Value step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    Value lb = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value step = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
-    auto forOp = rewriter.create<scf::ForOp>(
+    auto forOp = scf::ForOp::create(rewriter, 
         loc, lb, ub, step, acc,
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           auto accIter = iterArgs[0];
@@ -157,37 +157,37 @@ struct ZuanLowerMatmulPattern : OpRewritePattern<MatmulOp> {
             auto [mask, maskedoff] = *masks;
             auto type = op.getResult().getType();
 
-            auto outerOp = b.create<MaskOp>(
+            auto outerOp = MaskOp::create(b, 
                 loc, type, mask, [&](OpBuilder &b, Location loc) {
-                  Value outer = b.create<OuterOp>(loc, CombiningKind::MUL,
+                  Value outer = OuterOp::create(b, loc, CombiningKind::MUL,
                                                   unrolledLhs, unrolledRhs);
-                  b.create<MaskYieldOp>(loc, outer);
+                  MaskYieldOp::create(b, loc, outer);
                 });
             Value outer = outerOp.getResult(0);
-            auto maskOp = b.create<MaskOp>(
+            auto maskOp = MaskOp::create(b, 
                 loc, type, mask,
                 [&](OpBuilder &b, Location loc) {
                   Value add;
                   if (isa<FloatType>(elementType)) {
-                    add = b.create<arith::AddFOp>(loc, accIter, outer);
+                    add = arith::AddFOp::create(b, loc, accIter, outer);
                   } else {
-                    add = b.create<arith::AddIOp>(loc, accIter, outer);
+                    add = arith::AddIOp::create(b, loc, accIter, outer);
                   }
-                  b.create<MaskYieldOp>(loc, add);
+                  MaskYieldOp::create(b, loc, add);
                 },
                 maskedoff);
             res = maskOp.getResult(0);
           } else {
-            res = b.create<OuterOp>(loc, CombiningKind::MUL, unrolledLhs,
+            res = OuterOp::create(b, loc, CombiningKind::MUL, unrolledLhs,
                                     unrolledRhs);
             if (isa<FloatType>(elementType)) {
-              res = b.create<arith::AddFOp>(loc, accIter, res);
+              res = arith::AddFOp::create(b, loc, accIter, res);
             } else {
-              res = b.create<arith::AddIOp>(loc, accIter, res);
+              res = arith::AddIOp::create(b, loc, accIter, res);
             }
           }
 
-          b.create<scf::YieldOp>(loc, res);
+          scf::YieldOp::create(b, loc, res);
         });
 
     // op->getParentOfType<func::FuncOp>().dump();
@@ -239,15 +239,15 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
           return dim.getOrCreateOpFoldResult(rewriter, loc);
         });
 
-    auto zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    auto one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    auto one = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
     auto elementType = op.getTile().getType().getElementType();
     auto acc = op.getInit();
     if (!acc) {
-      auto zero = rewriter.create<arith::ConstantOp>(
+      auto zero = arith::ConstantOp::create(rewriter, 
           loc, elementType, rewriter.getZeroAttr(elementType));
-      acc = rewriter.create<zuan::SplatOp>(loc, zero, resultShape);
+      acc = zuan::SplatOp::create(rewriter, loc, zero, resultShape);
     }
 
     // sort reduction dims in descending order, so that expanding leading dims
@@ -267,7 +267,7 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
 
     for (auto dim : reductionDims) {
       auto ub = sourceShapeRef[dim].getOrCreateValue(rewriter, loc);
-      auto loop = rewriter.create<scf::ForOp>(loc, zero, ub, one, currAcc);
+      auto loop = scf::ForOp::create(rewriter, loc, zero, ub, one, currAcc);
 
       rewriter.setInsertionPointToStart(loop.getBody());
       UnrollOptions options(loop.getInductionVar(), rewriter.getIndexAttr(1),
@@ -291,10 +291,10 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
                         currAcc)
               ->getResult(0);
     }
-    rewriter.create<scf::YieldOp>(loc, partialReduced);
+    scf::YieldOp::create(rewriter, loc, partialReduced);
     for (size_t i = 0; i < loops.size() - 1; ++i) {
       rewriter.setInsertionPointToEnd(loops[i].getBody());
-      rewriter.create<scf::YieldOp>(loc, valuesToYield[i + 1]);
+      scf::YieldOp::create(rewriter, loc, valuesToYield[i + 1]);
     }
     rewriter.replaceOp(op, loops.front());
     // loops.front()->getParentOfType<func::FuncOp>().dump();

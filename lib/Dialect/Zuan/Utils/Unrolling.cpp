@@ -93,8 +93,8 @@ Value createMemrefSlice(OpBuilder &rewriter, Value memref,
     } else if (ShapedType::isDynamic(memrefShape[i])) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointAfterValue(memref);
-      Value idx = rewriter.create<arith::ConstantIndexOp>(loc, i);
-      Value dim = rewriter.create<memref::DimOp>(loc, memref, idx);
+      Value idx = arith::ConstantIndexOp::create(rewriter, loc, i);
+      Value dim = memref::DimOp::create(rewriter, loc, memref, idx);
       sizes.push_back(dim);
     } else {
       sizes.push_back(rewriter.getIndexAttr(memrefShape[i]));
@@ -128,7 +128,7 @@ Value createMemrefSlice(OpBuilder &rewriter, Value memref,
                                        unreducedOffset, resultStrides);
   auto resultType =
       MemRefType::get(resultSizes, memrefType.getElementType(), layout);
-  Value subview = rewriter.create<memref::SubViewOp>(loc, resultType, memref,
+  Value subview = memref::SubViewOp::create(rewriter, loc, resultType, memref,
                                                      offsets, sizes, strides);
   return subview;
 }
@@ -209,7 +209,7 @@ static Operation *unrollSubviewOp(OpBuilder &builder,
       resultSizes, cast<MemRefType>(unreducedMemrefType).getElementType(),
       StridedLayoutAttr::get(builder.getContext(), unreducedOffset,
                              resultStrides));
-  auto newSubviewOp = builder.create<memref::SubViewOp>(
+  auto newSubviewOp = memref::SubViewOp::create(builder, 
       subviewOp.getLoc(), cast<MemRefType>(targetType), oldSource, offsets,
       sizes, strides);
   return newSubviewOp;
@@ -231,7 +231,7 @@ static Operation *unrollSCFForOp(OpBuilder &builder, scf::ForOp forOp,
 
   UnrollState inLoopState = {IRMapping{state.valueMap}, state.yieldBlock};
   auto newForOp =
-      builder.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, newInits);
+      scf::ForOp::create(builder, forOp.getLoc(), lb, ub, step, newInits);
 
   inLoopState.valueMap.map(forOp.getInductionVar(), newForOp.getInductionVar());
   inLoopState.valueMap.map(forOp.getRegionIterArgs(),
@@ -245,7 +245,7 @@ static Operation *unrollSCFForOp(OpBuilder &builder, scf::ForOp forOp,
         getUnrolledValue(builder, value, options, inLoopState);
     newYieldedValues.push_back(newYieldedValue);
   }
-  builder.create<scf::YieldOp>(forOp.getLoc(), newYieldedValues);
+  scf::YieldOp::create(builder, forOp.getLoc(), newYieldedValues);
   return newForOp;
 }
 
@@ -284,17 +284,17 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
     auto memref = getUnrolledValue(builder, dimOp.getSource(), options, state);
     // Clone it.
     auto index = getUnrolledValue(builder, dimOp.getIndex(), options, state);
-    return builder.create<memref::DimOp>(op->getLoc(), memref, index);
+    return memref::DimOp::create(builder, op->getLoc(), memref, index);
   }
 
   if (isa<arith::CmpIOp, arith::CmpFOp>(op)) {
     auto lhs = getUnrolledValue(builder, op->getOperand(0), options, state);
     auto rhs = getUnrolledValue(builder, op->getOperand(1), options, state);
     if (auto cmpi = dyn_cast<arith::CmpIOp>(op)) {
-      return builder.create<arith::CmpIOp>(op->getLoc(), cmpi.getPredicate(),
+      return arith::CmpIOp::create(builder, op->getLoc(), cmpi.getPredicate(),
                                            lhs, rhs);
     } else if (auto cmpf = dyn_cast<arith::CmpFOp>(op)) {
-      return builder.create<arith::CmpFOp>(op->getLoc(), cmpf.getPredicate(),
+      return arith::CmpFOp::create(builder, op->getLoc(), cmpf.getPredicate(),
                                            lhs, rhs);
     } else {
       llvm_unreachable("unexpected comparison operation");
@@ -353,61 +353,61 @@ Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
   switch (kind) {
   case zuan::CombiningKind::ADD:
     if (isInteger) {
-      result = b.create<arith::AddIOp>(loc, lhs, rhs);
+      result = arith::AddIOp::create(b, loc, lhs, rhs);
     } else {
-      result = b.create<arith::AddFOp>(loc, lhs, rhs);
+      result = arith::AddFOp::create(b, loc, lhs, rhs);
     }
     break;
   case zuan::CombiningKind::MUL:
     if (isInteger) {
-      result = b.create<arith::MulIOp>(loc, lhs, rhs);
+      result = arith::MulIOp::create(b, loc, lhs, rhs);
     } else {
-      result = b.create<arith::MulFOp>(loc, lhs, rhs);
+      result = arith::MulFOp::create(b, loc, lhs, rhs);
     }
     break;
   case zuan::CombiningKind::MINIMUMF:
     assert(!isInteger && "MINIMUMF is only supported for floating point types");
-    result = b.create<arith::MinimumFOp>(loc, lhs, rhs);
+    result = arith::MinimumFOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MAXIMUMF:
     assert(!isInteger && "MAXIMUMF is only supported for floating point types");
-    result = b.create<arith::MaximumFOp>(loc, lhs, rhs);
+    result = arith::MaximumFOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MAXNUMF:
     assert(!isInteger && "MAXNUMF is only supported for floating point types");
-    result = b.create<arith::MaxNumFOp>(loc, lhs, rhs);
+    result = arith::MaxNumFOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MINNUMF:
     assert(!isInteger && "MINNUMF is only supported for floating point types");
-    result = b.create<arith::MinNumFOp>(loc, lhs, rhs);
+    result = arith::MinNumFOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::AND:
     assert(isInteger && "ANDI is only supported for integer types");
-    result = b.create<arith::AndIOp>(loc, lhs, rhs);
+    result = arith::AndIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::OR:
     assert(isInteger && "ORI is only supported for integer types");
-    result = b.create<arith::OrIOp>(loc, lhs, rhs);
+    result = arith::OrIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::XOR:
     assert(isInteger && "XORI is only supported for integer types");
-    result = b.create<arith::XOrIOp>(loc, lhs, rhs);
+    result = arith::XOrIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MAXUI:
     assert(isInteger && "MAXU is only supported for integer types");
-    result = b.create<arith::MaxUIOp>(loc, lhs, rhs);
+    result = arith::MaxUIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MINUI:
     assert(isInteger && "MINU is only supported for integer types");
-    result = b.create<arith::MinUIOp>(loc, lhs, rhs);
+    result = arith::MinUIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MAXSI:
     assert(isInteger && "MAXS is only supported for integer types");
-    result = b.create<arith::MaxSIOp>(loc, lhs, rhs);
+    result = arith::MaxSIOp::create(b, loc, lhs, rhs);
     break;
   case zuan::CombiningKind::MINSI:
     assert(isInteger && "MINS is only supported for integer types");
-    result = b.create<arith::MinSIOp>(loc, lhs, rhs);
+    result = arith::MinSIOp::create(b, loc, lhs, rhs);
     break;
   }
 
@@ -455,7 +455,7 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
     auto dim = pair.first;
     auto ops = pair.second;
 
-    rewriter.create<DynamicOp>(
+    DynamicOp::create(rewriter, 
         dynamicOp->getLoc(), dynamicOp.getInits(),
         [&](OpBuilder &builder, Location loc, ValueRange args) {
           OpBuilder::InsertionGuard guard(builder);
@@ -471,7 +471,7 @@ void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
           state.valueMap.map(valuesDefinedAbove.getArrayRef(),
                              valuesDefinedAbove.getArrayRef());
 
-          auto yieldOp = builder.create<YieldOp>(loc);
+          auto yieldOp = YieldOp::create(builder, loc);
           state.yieldBlock = &yieldOp.getBody().front();
 
           builder.setInsertionPoint(yieldOp);

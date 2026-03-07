@@ -86,40 +86,40 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     // Additional loads are expected to be eliminated with CSE, after lowered to
     // VP dialect.
     rewriter.setInsertionPoint(dynamicOp);
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Type type = tile.getType().getElementType();
     Value dim = tileShape[0].getOrCreateValue(rewriter, loc);
-    Value vlmax = rewriter.create<vp::GetVLOp>(loc, dim, vf, type, scalable);
+    Value vlmax = vp::GetVLOp::create(rewriter, loc, dim, vf, type, scalable);
 
-    Value zeroElem = rewriter.create<arith::ConstantOp>(
+    Value zeroElem = arith::ConstantOp::create(rewriter, 
         loc, type, rewriter.getZeroAttr(type));
 
     auto newDynamicOp =
-        rewriter.create<DynamicOp>(loc, type, dynamicOp.getInits(), nullptr);
+        DynamicOp::create(rewriter, loc, type, dynamicOp.getInits(), nullptr);
     state.valueMap.map(dynamicOp.getBody().getArguments(),
                        newDynamicOp.getBody().getArguments());
     rewriter.setInsertionPointToStart(&newDynamicOp.getBody().front());
 
     SmallVector<OpFoldResult> sizes{vlmax};
-    Value initAcc = rewriter.create<zuan::SplatOp>(loc, zeroElem, sizes);
+    Value initAcc = zuan::SplatOp::create(rewriter, loc, zeroElem, sizes);
     SmallVector<Value> inits = {dim, zero, initAcc};
     SmallVector<Type> resultTypes = {dim.getType(), zero.getType(),
                                      initAcc.getType()};
 
-    auto whileOp = rewriter.create<scf::WhileOp>(
+    auto whileOp = scf::WhileOp::create(rewriter, 
         loc, resultTypes, inits,
         [&](OpBuilder &b, Location loc, ValueRange args) {
           auto avl = args[0];
-          Value cond = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
+          Value cond = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sgt,
                                                avl, zero);
-          b.create<scf::ConditionOp>(loc, cond, args);
+          scf::ConditionOp::create(b, loc, cond, args);
         },
         [&](OpBuilder &b, Location loc, ValueRange args) -> void {
           auto avl = args[0];
           auto idx = args[1];
           auto acc = args[2];
 
-          Value vl = rewriter.create<vp::GetVLOp>(loc, avl, vf, type, scalable);
+          Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
           UnrollOptions options(idx, vl, 0, true);
 
           auto newSourceTile = getUnrolledValue(rewriter, tile, options, state);
@@ -128,9 +128,9 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
           newAcc.getDefiningOp()->setAttr("zuan_passthru_operand",
                                           b.getIndexAttr(0));
 
-          Value newAvl = b.create<arith::SubIOp>(loc, avl, vl);
-          Value newIdx = b.create<arith::AddIOp>(loc, idx, vl);
-          b.create<scf::YieldOp>(loc, ValueRange{newAvl, newIdx, newAcc});
+          Value newAvl = arith::SubIOp::create(b, loc, avl, vl);
+          Value newIdx = arith::AddIOp::create(b, loc, idx, vl);
+          scf::YieldOp::create(b, loc, ValueRange{newAvl, newIdx, newAcc});
         });
 
     Value init = op.getInit();
@@ -139,13 +139,13 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     }
 
     auto finalAcc = whileOp->getResult(2);
-    Value finalRed = rewriter.create<zuan::ReductionOp>(loc, op.getKind(),
+    Value finalRed = zuan::ReductionOp::create(rewriter, loc, op.getKind(),
                                                         finalAcc, dims, init);
 
-    rewriter.create<YieldOp>(loc, finalRed, nullptr);
+    YieldOp::create(rewriter, loc, finalRed, nullptr);
 
     rewriter.setInsertionPoint(op);
-    Value splat = rewriter.create<zuan::SplatOp>(
+    Value splat = zuan::SplatOp::create(rewriter, 
         loc, newDynamicOp->getResult(0), ArrayRef<int64_t>{});
     rewriter.replaceOp(op, splat);
 
@@ -211,31 +211,31 @@ struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
     state.initialize(op);
 
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
 
     SmallVector<Value> inits = {dim, zero};
     SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
 
-    rewriter.create<scf::WhileOp>(
+    scf::WhileOp::create(rewriter, 
         loc, resultTypes, inits,
         [&](OpBuilder &b, Location loc, ValueRange args) {
           auto avl = args[0];
-          Value cond = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt,
+          Value cond = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sgt,
                                                avl, zero);
-          b.create<scf::ConditionOp>(loc, cond, args);
+          scf::ConditionOp::create(b, loc, cond, args);
         },
         [&](OpBuilder &b, Location loc, ValueRange args) {
           auto avl = args[0];
           auto idx = args[1];
 
-          Value vl = rewriter.create<vp::GetVLOp>(loc, avl, vf, type, scalable);
+          Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
           UnrollOptions options(idx, vl, unrollIdx, false);
           op.unroll(b, options, state);
 
-          Value newAvl = b.create<arith::SubIOp>(loc, avl, vl);
-          Value newIdx = b.create<arith::AddIOp>(loc, idx, vl);
+          Value newAvl = arith::SubIOp::create(b, loc, avl, vl);
+          Value newIdx = arith::AddIOp::create(b, loc, idx, vl);
 
-          b.create<scf::YieldOp>(loc, ValueRange{newAvl, newIdx});
+          scf::YieldOp::create(b, loc, ValueRange{newAvl, newIdx});
         });
 
     // whileOp->getParentOfType<func::FuncOp>().dump();
@@ -301,9 +301,9 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     // to access the first.
     auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
 
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    Value step = rewriter.create<arith::ConstantIndexOp>(loc, uf);
+    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
+    Value step = arith::ConstantIndexOp::create(rewriter, loc, uf);
 
     UnrollState state;
     state.initialize(op);
@@ -311,17 +311,17 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
     // Make sure no use-before-def is produced.
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
 
-    Value size = rewriter.create<arith::ConstantIndexOp>(loc, uf);
-    Value div = rewriter.create<arith::DivUIOp>(loc, dim, size);
-    Value ub = rewriter.create<arith::MulIOp>(loc, div, size);
+    Value size = arith::ConstantIndexOp::create(rewriter, loc, uf);
+    Value div = arith::DivUIOp::create(rewriter, loc, dim, size);
+    Value ub = arith::MulIOp::create(rewriter, loc, div, size);
 
     [[maybe_unused]]
-    auto loop = rewriter.create<scf::ForOp>(
+    auto loop = scf::ForOp::create(rewriter, 
         loc, zero, ub, step, ValueRange{},
         [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
           UnrollOptions options(iv, b.getIndexAttr(uf), 0, false);
           op.unroll(b, options, state);
-          b.create<scf::YieldOp>(loc);
+          scf::YieldOp::create(b, loc);
         });
 
     if (uf != 1) {
@@ -329,12 +329,12 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
       tailState.initialize(op);
 
       [[maybe_unused]]
-      auto taileLoop = rewriter.create<scf::ForOp>(
+      auto taileLoop = scf::ForOp::create(rewriter, 
           loc, ub, dim, one, ValueRange{},
           [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
             UnrollOptions options(iv, b.getIndexAttr(1), 0, false);
             op.unroll(b, options, tailState);
-            b.create<scf::YieldOp>(loc);
+            scf::YieldOp::create(b, loc);
           });
     }
 

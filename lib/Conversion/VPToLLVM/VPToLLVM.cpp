@@ -229,7 +229,7 @@ static Value materializeOperand(OpBuilder &b,
 static Value buildAllTrueMask(ConversionPatternRewriter &rewriter, Location loc,
                               VectorType vecType) {
   auto maskType = vecType.cloneWith(std::nullopt, rewriter.getI1Type());
-  return rewriter.create<LLVM::ConstantOp>(
+  return LLVM::ConstantOp::create(rewriter, 
       loc, maskType, DenseIntElementsAttr::get(maskType, true));
 }
 
@@ -268,7 +268,7 @@ buildRVVPassthru(ConversionPatternRewriter &rewriter, Location loc, Value evl,
 
   if (!passthru && !maskedoff) {
     // Both not provided, use undef
-    passthru = rewriter.create<LLVM::UndefOp>(loc, targetResType);
+    passthru = LLVM::UndefOp::create(rewriter, loc, targetResType);
     policy = 3; // tail & mask agnostic
   } else if (passthru && !maskedoff) {
     // Do nothing.
@@ -281,9 +281,9 @@ buildRVVPassthru(ConversionPatternRewriter &rewriter, Location loc, Value evl,
     // Merge first to get the final passthru.
     auto allTrue =
         buildAllTrueMask(rewriter, loc, cast<VectorType>(targetResType));
-    auto notmask = rewriter.create<LLVM::VPXorOp>(loc, mask.getType(), mask,
+    auto notmask = LLVM::VPXorOp::create(rewriter, loc, mask.getType(), mask,
                                                   allTrue, allTrue, evl);
-    auto passthruMerged = rewriter.create<LLVM::VPMergeMinOp>(
+    auto passthruMerged = LLVM::VPMergeMinOp::create(rewriter, 
         loc, targetResType, notmask, maskedoff, passthru, evl);
     passthru = passthruMerged.getResult();
   }
@@ -304,50 +304,48 @@ static Value buildPtrVec(Location loc, MemRefType type,
   Value bufferPtr = memrefDesc.bufferPtr(rewriter, loc, *typeConverter, type);
   // Bitcast the buffer pointer to the index type.
   Value bufferPtrCasted =
-      rewriter.create<LLVM::PtrToIntOp>(loc, indexType, bufferPtr);
+      LLVM::PtrToIntOp::create(rewriter, loc, indexType, bufferPtr);
   auto splatIntrName = rewriter.getStringAttr("llvm.experimental.vp.splat");
   // Splats the offset value to the vector type.
   Value indexVec =
-      rewriter
-          .create<LLVM::CallIntrinsicOp>(loc, indexVecType, splatIntrName,
-                                         ValueRange{bufferPtrCasted, mask, evl})
+      LLVM::CallIntrinsicOp::create(rewriter, loc, indexVecType,
+                                    splatIntrName,
+                                    ValueRange{bufferPtrCasted, mask, evl})
           ->getResult(0);
 
   auto elementType = typeConverter->convertType(type.getElementType());
   // XXX: All element types should be byte-aligned.
   auto elementSize = elementType.getIntOrFloatBitWidth() / 8;
-  Value elementSizeValue = rewriter.create<LLVM::ConstantOp>(
+  Value elementSizeValue = LLVM::ConstantOp::create(rewriter, 
       loc, indexType, rewriter.getIntegerAttr(indexType, elementSize));
   // Splat the element size to the vector type.
-  Value elementSizeVec = rewriter
-                             .create<LLVM::CallIntrinsicOp>(
-                                 loc, indexVecType, splatIntrName,
-                                 ValueRange{elementSizeValue, mask, evl})
+  Value elementSizeVec = LLVM::CallIntrinsicOp::create(
+                             rewriter, loc, indexVecType, splatIntrName,
+                             ValueRange{elementSizeValue, mask, evl})
                              ->getResult(0);
 
   for (int i = 0, e = indices.size(); i < e; ++i) {
     Value increment = indices[i];
     if (strides[i] != 1) {
       Value stride = memrefDesc.stride(rewriter, loc, i);
-      Value strideSplat = rewriter
-                              .create<LLVM::CallIntrinsicOp>(
-                                  loc, increment.getType(), splatIntrName,
-                                  ValueRange{stride, mask, evl})
+      Value strideSplat = LLVM::CallIntrinsicOp::create(
+                              rewriter, loc, increment.getType(),
+                              splatIntrName, ValueRange{stride, mask, evl})
                               ->getResult(0);
-      increment = rewriter.create<LLVM::VPMulOp>(
+      increment = LLVM::VPMulOp::create(rewriter, 
           loc, increment.getType(), increment, strideSplat, mask, evl);
     }
     // Multiply the increment with the element size.
-    increment = rewriter.create<LLVM::VPMulOp>(
+    increment = LLVM::VPMulOp::create(rewriter, 
         loc, increment.getType(), increment, elementSizeVec, mask, evl);
-    indexVec = rewriter.create<LLVM::VPAddOp>(loc, indexVec.getType(), indexVec,
+    indexVec = LLVM::VPAddOp::create(rewriter, loc, indexVec.getType(), indexVec,
                                               increment, mask, evl);
   }
   Type ptrType = rewriter.getType<LLVM::LLVMPointerType>();
   Type ptrVecType = LLVM::getVectorType(ptrType, vectorType.getDimSize(0),
                                         vectorType.getScalableDims()[0]);
   Value ptrVec =
-      rewriter.create<LLVM::VPIntToPtrOp>(loc, ptrVecType, indexVec, mask, evl);
+      LLVM::VPIntToPtrOp::create(rewriter, loc, ptrVecType, indexVec, mask, evl);
   return ptrVec;
 }
 
@@ -375,7 +373,7 @@ public:
     auto maskedoff = adaptor.getMaskedoff();
 
     auto evl =
-        rewriter.create<LLVM::TruncOp>(loc, rewriter.getI32Type(), evlxlen);
+        LLVM::TruncOp::create(rewriter, loc, rewriter.getI32Type(), evlxlen);
 
     auto typeConverter = getTypeConverter();
     bool doMerge = true;
@@ -402,7 +400,7 @@ public:
                   predicatedOp.getResult().getType());
               lhs = materializeOperand(rewriter, typeConverter, lhs);
               rhs = materializeOperand(rewriter, typeConverter, rhs);
-              auto intrOp = rewriter.create<VPIntrOp>(loc, targetResType, lhs,
+              auto intrOp = VPIntrOp::create(rewriter, loc, targetResType, lhs,
                                                       rhs, mask, evl);
               loweredOp = intrOp.getOperation();
             })
@@ -419,7 +417,7 @@ public:
             auto vectorType = cast<VectorType>(lhs.getType());
             mask = buildAllTrueMask(rewriter, loc, vectorType);
           }
-          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          auto intrOp = LLVM::CallIntrinsicOp::create(rewriter, 
               loc, lhs.getType(), intrName,
               ArrayRef<Value>({lhs, rhs, mask, evl}));
           loweredOp = intrOp.getOperation();
@@ -434,7 +432,7 @@ public:
           if (acc) {
             acc = materializeOperand(rewriter, typeConverter, acc);
           } else {
-            acc = rewriter.create<LLVM::ZeroOp>(loc, targetResType);
+            acc = LLVM::ZeroOp::create(rewriter, loc, targetResType);
           }
           if (!mask) {
             mask = buildAllTrueMask(rewriter, loc, redOp.getSourceVectorType());
@@ -496,7 +494,7 @@ public:
 
           // VPIntrinsics does not support fast-math flags. Using call_intrinsic
           // here instead.
-          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          auto intrOp = LLVM::CallIntrinsicOp::create(rewriter, 
               loc, targetResType, rewriter.getStringAttr(intrName),
               ValueRange{acc, vec, mask, evl}, llvmFmf);
           loweredOp = intrOp.getOperation();
@@ -521,14 +519,14 @@ public:
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {
               // This passthru is either an undef or just the original passthru.
-              auto intrOp = rewriter.create<vp::RVVIntrVidOp>(
+              auto intrOp = vp::RVVIntrVidOp::create(rewriter, 
                   loc, targetResType, passthruMerged, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
-              auto policyValue = rewriter.create<LLVM::ConstantOp>(
+              auto policyValue = LLVM::ConstantOp::create(rewriter, 
                   loc, rewriter.getI32Type(),
                   rewriter.getI32IntegerAttr(policy));
-              auto intrOp = rewriter.create<vp::RVVIntrVidMaskedOp>(
+              auto intrOp = vp::RVVIntrVidMaskedOp::create(rewriter, 
                   loc, targetResType, passthruMerged, mask, evlxlen,
                   policyValue);
               loweredOp = intrOp.getOperation();
@@ -539,7 +537,7 @@ public:
             // mimic the behavior. The mask and passthru will be merged later
             // with the result.
             auto intrOp =
-                rewriter.create<LLVM::StepVectorOp>(loc, targetResType);
+                LLVM::StepVectorOp::create(rewriter, loc, targetResType);
             loweredOp = intrOp.getOperation();
           }
         })
@@ -554,14 +552,14 @@ public:
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {
               // This passthru is either an undef or just the original passthru.
-              auto intrOp = rewriter.create<vp::RVVIntrVidOp>(
+              auto intrOp = vp::RVVIntrVidOp::create(rewriter, 
                   loc, targetResType, passthruMerged, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
-              auto policyValue = rewriter.create<LLVM::ConstantOp>(
+              auto policyValue = LLVM::ConstantOp::create(rewriter, 
                   loc, rewriter.getI32Type(),
                   rewriter.getI32IntegerAttr(policy));
-              auto intrOp = rewriter.create<vp::RVVIntrVidMaskedOp>(
+              auto intrOp = vp::RVVIntrVidMaskedOp::create(rewriter, 
                   loc, targetResType, passthruMerged, mask, evlxlen,
                   policyValue);
               loweredOp = intrOp.getOperation();
@@ -572,7 +570,7 @@ public:
             // mimic the behavior. The mask and passthru will be merged later
             // with the result.
             auto intrOp =
-                rewriter.create<LLVM::StepVectorOp>(loc, targetResType);
+                LLVM::StepVectorOp::create(rewriter, loc, targetResType);
             loweredOp = intrOp.getOperation();
           }
         })
@@ -589,7 +587,7 @@ public:
           lhs = materializeOperand(rewriter, typeConverter, lhs);
           rhs = materializeOperand(rewriter, typeConverter, rhs);
           acc = materializeOperand(rewriter, typeConverter, acc);
-          auto intrOp = rewriter.create<LLVM::VPFmaOp>(loc, targetResType, lhs,
+          auto intrOp = LLVM::VPFmaOp::create(rewriter, loc, targetResType, lhs,
                                                        rhs, acc, mask, evl);
           loweredOp = intrOp.getOperation();
         })
@@ -613,14 +611,14 @@ public:
                                               loadOp.getMemRefType(),
                                               baseStruct, indices);
           auto dataPtrCasted =
-              rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, dataPtr);
+              LLVM::BitcastOp::create(rewriter, loc, llvmPtrType, dataPtr);
 
           auto [strides, offset] = loadOp.getMemRefType().getStridesAndOffset();
           auto rank = loadOp.getMemRefType().getRank();
           if (strides[rank - 1] != 1) {
             if (strides[rank - 1] == 0) {
               // 0-stride load, make it scalar load & splat
-              Value load = rewriter.create<LLVM::LoadOp>(
+              Value load = LLVM::LoadOp::create(rewriter, 
                   loc, vectorType.getElementType(), dataPtrCasted);
               auto splat =
                   buildLLVMSplat(rewriter, loc, load, vectorType, typeConverter);
@@ -632,11 +630,11 @@ public:
               // Need to multiply the stride with the byte size of the element.
               auto bytewidth =
                   vectorType.getElementType().getIntOrFloatBitWidth() / 8;
-              Value scale = rewriter.create<LLVM::ConstantOp>(
+              Value scale = LLVM::ConstantOp::create(rewriter, 
                   loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
               Value strideScaled =
-                  rewriter.create<LLVM::MulOp>(loc, stride, scale);
-              auto intrOp = rewriter.create<LLVM::VPStridedLoadOp>(
+                  LLVM::MulOp::create(rewriter, loc, stride, scale);
+              auto intrOp = LLVM::VPStridedLoadOp::create(rewriter, 
                   loc, vectorType, dataPtrCasted, strideScaled, mask, evl);
               loweredOp = intrOp.getOperation();
             }
@@ -644,11 +642,11 @@ public:
             if (vectorType.getElementType().isInteger(1) && enableRVV) {
               // XXX: Ignore mask here
               // XXX: RISC-V intrinsic only support xlen vl
-              auto intrOp = rewriter.create<vp::RVVIntrVlmOp>(
+              auto intrOp = vp::RVVIntrVlmOp::create(rewriter, 
                   loc, vectorType, dataPtrCasted, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
-              auto intrOp = rewriter.create<LLVM::VPLoadOp>(
+              auto intrOp = LLVM::VPLoadOp::create(rewriter, 
                   loc, vectorType, dataPtrCasted, mask, evl);
               loweredOp = intrOp.getOperation();
             }
@@ -673,7 +671,7 @@ public:
                                               storeOp.getMemRefType(),
                                               baseStruct, indices);
           auto dataPtrCasted =
-              rewriter.create<LLVM::BitcastOp>(loc, llvmPtrType, dataPtr);
+              LLVM::BitcastOp::create(rewriter, loc, llvmPtrType, dataPtr);
 
           auto [strides, offset] =
               storeOp.getMemRefType().getStridesAndOffset();
@@ -688,11 +686,11 @@ public:
                                  .getElementType()
                                  .getIntOrFloatBitWidth() /
                              8;
-            Value scale = rewriter.create<LLVM::ConstantOp>(
+            Value scale = LLVM::ConstantOp::create(rewriter, 
                 loc, stride.getType(), rewriter.getI64IntegerAttr(bytewidth));
             Value strideScaled =
-                rewriter.create<LLVM::MulOp>(loc, stride, scale);
-            auto intrOp = rewriter.create<LLVM::VPStridedStoreOp>(
+                LLVM::MulOp::create(rewriter, loc, stride, scale);
+            auto intrOp = LLVM::VPStridedStoreOp::create(rewriter, 
                 loc, value, dataPtrCasted, strideScaled, mask, evl);
             loweredOp = intrOp.getOperation();
           } else {
@@ -700,11 +698,11 @@ public:
                 enableRVV) {
               // XXX: Ignore mask here
               // XXX: RISC-V intrinsic only support xlen vl
-              auto intrOp = rewriter.create<vp::RVVIntrVsmOp>(
+              auto intrOp = vp::RVVIntrVsmOp::create(rewriter, 
                   loc, value, dataPtrCasted, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
-              auto intrOp = rewriter.create<LLVM::VPStoreOp>(
+              auto intrOp = LLVM::VPStoreOp::create(rewriter, 
                   loc, value, dataPtrCasted, mask, evl);
               loweredOp = intrOp.getOperation();
             }
@@ -724,7 +722,7 @@ public:
             mask = buildAllTrueMask(rewriter, loc,
                                     cast<VectorType>(vtrue.getType()));
           }
-          auto intrOp = rewriter.create<LLVM::VPSelectMinOp>(
+          auto intrOp = LLVM::VPSelectMinOp::create(rewriter, 
               loc, targetResType, vcond, vtrue, vfalse, evl);
           loweredOp = intrOp.getOperation();
         })
@@ -745,7 +743,7 @@ public:
 
           auto targetResType = typeConverter->convertType(resultType);
           auto gatherIntrName = rewriter.getStringAttr("llvm.vp.gather");
-          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          auto intrOp = LLVM::CallIntrinsicOp::create(rewriter, 
               loc, targetResType, gatherIntrName,
               ValueRange{ptrVec, mask, evl});
           loweredOp = intrOp.getOperation();
@@ -767,7 +765,7 @@ public:
           auto gatherIntrName = rewriter.getStringAttr("llvm.vp.scatter");
           auto value =
               materializeOperand(rewriter, typeConverter, scatterOp.getValue());
-          auto intrOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          auto intrOp = LLVM::CallIntrinsicOp::create(rewriter, 
               loc, gatherIntrName, ValueRange{value, ptrVec, mask, evl});
           loweredOp = intrOp.getOperation();
         })
@@ -786,7 +784,7 @@ public:
                                     cast<VectorType>(src.getType()));
           }
           auto intrOp =
-              rewriter.create<VPIntrOp>(loc, targetResType, src, mask, evl);
+              VPIntrOp::create(rewriter, loc, targetResType, src, mask, evl);
           loweredOp = intrOp.getOperation();
         })
         .Case<arith::IndexCastOp, arith::IndexCastUIOp>([&](auto indexcastOp) {
@@ -806,7 +804,7 @@ public:
                                     cast<VectorType>(src.getType()));
           }
           if (srcElemBits > dstElemBits) {
-            auto intrOp = rewriter.create<LLVM::VPTruncOp>(loc, targetResType,
+            auto intrOp = LLVM::VPTruncOp::create(rewriter, loc, targetResType,
                                                            src, mask, evl);
             loweredOp = intrOp.getOperation();
           } else if (srcElemBits == dstElemBits) {
@@ -816,7 +814,7 @@ public:
             using VPIntrOp =
                 typename LLVMVPIntrOpMapping<decltype(indexcastOp)>::VPIntrT;
             auto intrOp =
-                rewriter.create<VPIntrOp>(loc, targetResType, src, mask, evl);
+                VPIntrOp::create(rewriter, loc, targetResType, src, mask, evl);
             loweredOp = intrOp.getOperation();
           }
         })
@@ -835,7 +833,7 @@ public:
           StringRef prefStr = arith::stringifyCmpFPredicate(predicate);
 
           auto llvmPred = rewriter.getStringAttr(prefStr);
-          auto intrOp = rewriter.create<vp::VPIntrFCmpOp>(loc, targetResType,
+          auto intrOp = vp::VPIntrFCmpOp::create(rewriter, loc, targetResType,
                                                           lhs, rhs, mask, evl);
           intrOp->setAttr("predicate", llvmPred);
           loweredOp = intrOp.getOperation();
@@ -855,7 +853,7 @@ public:
           StringRef prefStr = arith::stringifyCmpIPredicate(predicate);
 
           auto llvmPred = rewriter.getStringAttr(prefStr);
-          auto intrOp = rewriter.create<vp::VPIntrICmpOp>(loc, targetResType,
+          auto intrOp = vp::VPIntrICmpOp::create(rewriter, loc, targetResType,
                                                           lhs, rhs, mask, evl);
           intrOp->setAttr("predicate", llvmPred);
           loweredOp = intrOp.getOperation();
@@ -870,14 +868,14 @@ public:
             auto [passthruMerged, policy] = buildRVVPassthru(
                 rewriter, loc, evl, mask, passthru, maskedoff, targetResType);
             if (!mask) {
-              auto intrOp = rewriter.create<vp::RVVIntrFRsqrt7Op>(
+              auto intrOp = vp::RVVIntrFRsqrt7Op::create(rewriter, 
                   loc, targetResType, passthruMerged, src, evlxlen);
               loweredOp = intrOp.getOperation();
             } else {
-              auto policyValue = rewriter.create<LLVM::ConstantOp>(
+              auto policyValue = LLVM::ConstantOp::create(rewriter, 
                   loc, rewriter.getI32Type(),
                   rewriter.getI32IntegerAttr(policy));
-              auto intrOp = rewriter.create<vp::RVVIntrFRsqrt7MaskedOp>(
+              auto intrOp = vp::RVVIntrFRsqrt7MaskedOp::create(rewriter, 
                   loc, targetResType, passthruMerged, src, mask, evlxlen,
                   policyValue);
               loweredOp = intrOp.getOperation();
@@ -888,15 +886,15 @@ public:
               mask = buildAllTrueMask(rewriter, loc, targetVecType);
             }
             auto sqrtIntrName = "llvm.vp.sqrt";
-            auto sqrtOp = rewriter.create<LLVM::CallIntrinsicOp>(
+            auto sqrtOp = LLVM::CallIntrinsicOp::create(rewriter, 
                 loc, targetResType, rewriter.getStringAttr(sqrtIntrName),
                 ValueRange{src, mask, evl});
             auto elementType = targetVecType.getElementType();
-            auto one = rewriter.create<LLVM::ConstantOp>(
+            auto one = LLVM::ConstantOp::create(rewriter, 
                 loc, elementType, rewriter.getFloatAttr(elementType, 1.0));
             auto oneSplat =
                 buildLLVMSplat(rewriter, loc, one, targetVecType, typeConverter);
-            auto divOp = rewriter.create<LLVM::VPFDivOp>(
+            auto divOp = LLVM::VPFDivOp::create(rewriter, 
                 loc, targetResType, oneSplat, sqrtOp->getResult(0),
                 mask, evl);
             loweredOp = divOp.getOperation();
@@ -907,7 +905,7 @@ public:
           // fallback to the scalar version.
           auto src = expOp.getOperand();
           src = materializeOperand(rewriter, typeConverter, src);
-          auto newOp = rewriter.create<math::ExpOp>(loc, src);
+          auto newOp = math::ExpOp::create(rewriter, loc, src);
           loweredOp = newOp.getOperation();
         })
         .Default([&](Operation *) {
@@ -922,19 +920,19 @@ public:
       Value result = (*loweredOp)->getResult(0);
       if (!maskedoff) {
         // No maskedoff value provided, only merge passthru.
-        result = rewriter.create<LLVM::VPMergeMinOp>(
+        result = LLVM::VPMergeMinOp::create(rewriter, 
             loc, result.getType(), mask, result, passthru, evl);
       } else {
         // Also merge maskedoff value into the result where the mask is false.
-        auto maskMerged = rewriter.create<LLVM::VPSelectMinOp>(
+        auto maskMerged = LLVM::VPSelectMinOp::create(rewriter, 
             loc, result.getType(), mask, result, maskedoff, evl);
         // Create a mask with all true values to merge the tail from passthru.
         auto vectorType = cast<VectorType>(passthru.getType());
         auto maskType =
             vectorType.cloneWith(std::nullopt, rewriter.getI1Type());
-        mask = rewriter.create<LLVM::ConstantOp>(
+        mask = LLVM::ConstantOp::create(rewriter, 
             loc, maskType, DenseIntElementsAttr::get(maskType, true));
-        result = rewriter.create<LLVM::VPMergeMinOp>(
+        result = LLVM::VPMergeMinOp::create(rewriter, 
             loc, result.getType(), mask, maskMerged, passthru, evl);
       }
     }
@@ -970,9 +968,9 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
 
     auto vlType = rewriter.getIntegerType(vlBitwidth);
     if (resultBitwidth > vlBitwidth) {
-      cnt = rewriter.create<LLVM::TruncOp>(loc, vlType, cnt);
+      cnt = LLVM::TruncOp::create(rewriter, loc, vlType, cnt);
     } else if (resultBitwidth < vlBitwidth) {
-      cnt = rewriter.create<LLVM::ZExtOp>(loc, vlType, cnt);
+      cnt = LLVM::ZExtOp::create(rewriter, loc, vlType, cnt);
     }
 
     auto vf = adaptor.getVf();
@@ -1007,31 +1005,29 @@ struct GetVLOpLowering : ConvertOpToLLVMPattern<vp::GetVLOp> {
         lmul = std::log2(factor);
       }
 
-      Value lmulValue = rewriter.create<LLVM::ConstantOp>(
+      Value lmulValue = LLVM::ConstantOp::create(rewriter, 
           loc, vlType, rewriter.getIntegerAttr(vlType, lmul));
-      Value sewValue = rewriter.create<LLVM::ConstantOp>(
+      Value sewValue = LLVM::ConstantOp::create(rewriter, 
           loc, vlType, rewriter.getIntegerAttr(vlType, sew));
-      vl = rewriter.create<vp::RVVIntrSetVliOp>(loc, vlType, cnt, sewValue,
+      vl = vp::RVVIntrSetVliOp::create(rewriter, loc, vlType, cnt, sewValue,
                                                 lmulValue);
     } else {
-      Value vfValue = rewriter.create<LLVM::ConstantOp>(
+      Value vfValue = LLVM::ConstantOp::create(rewriter, 
           loc, rewriter.getI32Type(),
           rewriter.getI32IntegerAttr(sewBytes * vf));
-      Value scalableValue = rewriter.create<LLVM::ConstantOp>(
+      Value scalableValue = LLVM::ConstantOp::create(rewriter, 
           loc, rewriter.getI1Type(), rewriter.getBoolAttr(scalable));
-      vl =
-          rewriter
-              .create<LLVM::CallIntrinsicOp>(
-                  loc, rewriter.getI32Type(),
-                  rewriter.getStringAttr("llvm.experimental.get.vector.length"),
-                  ValueRange({cnt, vfValue, scalableValue}))
-              ->getResult(0);
+      vl = LLVM::CallIntrinsicOp::create(
+               rewriter, loc, rewriter.getI32Type(),
+               rewriter.getStringAttr("llvm.experimental.get.vector.length"),
+               ValueRange({cnt, vfValue, scalableValue}))
+               ->getResult(0);
     }
 
     if (resultBitwidth > vlBitwidth) {
-      vl = rewriter.create<LLVM::ZExtOp>(loc, resultType, vl);
+      vl = LLVM::ZExtOp::create(rewriter, loc, resultType, vl);
     } else if (resultBitwidth < vlBitwidth) {
-      vl = rewriter.create<LLVM::TruncOp>(loc, resultType, vl);
+      vl = LLVM::TruncOp::create(rewriter, loc, resultType, vl);
     }
 
     rewriter.replaceOp(op, vl);

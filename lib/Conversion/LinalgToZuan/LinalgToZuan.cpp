@@ -61,7 +61,7 @@ static Value getOrSplat(OpBuilder &builder, Value value,
     // non-broadcasted op, if such op exists. The most conservative approach is
     // adopted here, which is to create a splat op each time we need a
     // broadcasted value and rely on CSE to clean up.
-    return builder.create<zuan::SplatOp>(value.getLoc(), lookup,
+    return zuan::SplatOp::create(builder, value.getLoc(), lookup,
                                          state.ofrShape);
   }
   return lookup;
@@ -94,11 +94,11 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
       Value linalgInitMemref = initOpOperand->get();
       if (indexingMap.isProjectedPermutation()) {
         Value dynamicInitMemref = state.transformedMemRefs[linalgInitMemref];
-        builder.create<zuan::StoreOp>(loc, mappedOpd, dynamicInitMemref);
+        zuan::StoreOp::create(builder, loc, mappedOpd, dynamicInitMemref);
       } else {
         // Handle the non-projected permutation operands.
         auto indices = state.nonProjectedPermutationIndices[initOpOperand];
-        builder.create<zuan::ScatterOp>(loc, mappedOpd, linalgInitMemref,
+        zuan::ScatterOp::create(builder, loc, mappedOpd, linalgInitMemref,
                                         indices);
       }
     }
@@ -135,7 +135,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto resultType = zuan::TileType::get(state.staticShape, resultElementType);
 
     Operation *cast =
-        builder.create<zuan::CastOp>(loc, resultType, castKind, source);
+        zuan::CastOp::create(builder, loc, resultType, castKind, source);
     if (auto mask = state.getMask()) {
       cast = zuan::maskOperation(builder, loc, cast, *mask);
     }
@@ -149,10 +149,10 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
 
   if (auto indexOp = dyn_cast<linalg::IndexOp>(op)) {
     // Index op corresponds to a step op on the given index, with start value 0.
-    auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
     int64_t dim = indexOp.getDim();
     Operation *steps =
-        builder.create<zuan::StepOp>(loc, zero, dim, state.ofrShape);
+        zuan::StepOp::create(builder, loc, zero, dim, state.ofrShape);
     if (auto mask = state.getMask()) {
       steps = zuan::maskOperation(builder, loc, steps, *mask);
     }
@@ -168,7 +168,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto lhs = getOrSplat(builder, op->getOperand(0), state);
     auto rhs = getOrSplat(builder, op->getOperand(1), state);
     Operation *newOp =
-        builder.create<arith::CmpFOp>(loc, cmpfOp.getPredicate(), lhs, rhs);
+        arith::CmpFOp::create(builder, loc, cmpfOp.getPredicate(), lhs, rhs);
     if (auto mask = state.getMask()) {
       newOp = zuan::maskOperation(builder, loc, newOp, *mask);
     }
@@ -180,7 +180,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto lhs = getOrSplat(builder, op->getOperand(0), state);
     auto rhs = getOrSplat(builder, op->getOperand(1), state);
     Operation *newOp =
-        builder.create<arith::CmpIOp>(loc, cmpiOp.getPredicate(), lhs, rhs);
+        arith::CmpIOp::create(builder, loc, cmpiOp.getPredicate(), lhs, rhs);
     if (auto mask = state.getMask()) {
       newOp = zuan::maskOperation(builder, loc, newOp, *mask);
     }
@@ -196,7 +196,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto cond = getOrSplat(builder, op->getOperand(0), state);
     auto lhs = getOrSplat(builder, op->getOperand(1), state);
     auto rhs = getOrSplat(builder, op->getOperand(2), state);
-    Operation *newOp = builder.create<zuan::SelectOp>(loc, cond, lhs, rhs);
+    Operation *newOp = zuan::SelectOp::create(builder, loc, cond, lhs, rhs);
     if (auto mask = state.getMask()) {
       newOp = zuan::maskOperation(builder, loc, newOp, *mask);
     }
@@ -215,7 +215,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     for (auto index : indices) {
       newIndices.push_back(getOrSplat(builder, index, state));
     }
-    Operation *newOp = builder.create<zuan::GatherOp>(loc, base, newIndices);
+    Operation *newOp = zuan::GatherOp::create(builder, loc, base, newIndices);
     if (auto mask = state.getMask()) {
       newOp = zuan::maskOperation(builder, loc, newOp, *mask);
     }
@@ -234,7 +234,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(state.yieldBlock);
     Operation *newOp =
-        builder.create<zuan::ScatterOp>(loc, value, memref, newIndices);
+        zuan::ScatterOp::create(builder, loc, value, memref, newIndices);
     if (auto mask = state.getMask()) {
       zuan::maskOperation(builder, loc, newOp, *mask);
     }
@@ -250,16 +250,16 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     auto cond = getOrSplat(builder, ifOp.getCondition(), state);
     // Negate the condition for the else branch.
     Value trueElem =
-        builder.create<arith::ConstantOp>(loc, builder.getI1Type(),
+        arith::ConstantOp::create(builder, loc, builder.getI1Type(),
                                           builder.getBoolAttr(true));
     Value trueValue =
-        builder.create<zuan::SplatOp>(loc, trueElem, state.ofrShape);
-    Value negCond = builder.create<arith::XOrIOp>(loc, cond, trueValue);
+        zuan::SplatOp::create(builder, loc, trueElem, state.ofrShape);
+    Value negCond = arith::XOrIOp::create(builder, loc, cond, trueValue);
 
     if (auto mask = state.getMask()) {
       // Elementwise and the mask.
-      cond = builder.create<arith::AndIOp>(loc, cond, *mask);
-      negCond = builder.create<arith::AndIOp>(loc, negCond, *mask);
+      cond = arith::AndIOp::create(builder, loc, cond, *mask);
+      negCond = arith::AndIOp::create(builder, loc, negCond, *mask);
     }
 
     state.pushMask(cond);
@@ -299,7 +299,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
       auto thenTile = getOrSplat(builder, then, state);
       auto elseTile = getOrSplat(builder, else_, state);
       Operation *op =
-          builder.create<zuan::SelectOp>(loc, cond, thenTile, elseTile);
+          zuan::SelectOp::create(builder, loc, cond, thenTile, elseTile);
       if (auto mask = state.getMask()) {
         op = zuan::maskOperation(builder, loc, op, *mask);
       }
@@ -355,7 +355,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
       return failure();
     }
     auto combiningKind = static_cast<zuan::CombiningKind>(*vectorCombiningKind);
-    auto multiReduction = builder.create<zuan::ReductionOp>(
+    auto multiReduction = zuan::ReductionOp::create(builder, 
         loc, combiningKind, reduceTile, dimsToReduce, initialTile);
     state.valueMap.map(op->getResult(0), multiReduction.getResult());
     return success();
@@ -389,13 +389,13 @@ static Value convertIndexingDim(OpBuilder &builder, AffineExpr currExpr,
   auto loc = builder.getUnknownLoc();
   if (auto constExpr = dyn_cast<AffineConstantExpr>(currExpr)) {
     auto cst =
-        builder.create<arith::ConstantIndexOp>(loc, constExpr.getValue());
-    return builder.create<zuan::SplatOp>(loc, cst, ofrShape);
+        arith::ConstantIndexOp::create(builder, loc, constExpr.getValue());
+    return zuan::SplatOp::create(builder, loc, cst, ofrShape);
   }
   if (auto dimExpr = dyn_cast<AffineDimExpr>(currExpr)) {
     int64_t pos = dimExpr.getPosition();
-    auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value step = builder.create<zuan::StepOp>(loc, zero, pos, ofrShape);
+    auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
+    Value step = zuan::StepOp::create(builder, loc, zero, pos, ofrShape);
     return step;
   }
   if (auto binExpr = dyn_cast<AffineBinaryOpExpr>(currExpr)) {
@@ -411,15 +411,15 @@ static Value convertIndexingDim(OpBuilder &builder, AffineExpr currExpr,
 
     switch (kind) {
     case mlir::AffineExprKind::Add:
-      return builder.create<arith::AddIOp>(loc, lhs, rhs);
+      return arith::AddIOp::create(builder, loc, lhs, rhs);
     case mlir::AffineExprKind::Mul:
-      return builder.create<arith::MulIOp>(loc, lhs, rhs);
+      return arith::MulIOp::create(builder, loc, lhs, rhs);
     case mlir::AffineExprKind::Mod:
-      return builder.create<arith::RemUIOp>(loc, lhs, rhs);
+      return arith::RemUIOp::create(builder, loc, lhs, rhs);
     case mlir::AffineExprKind::FloorDiv:
-      return builder.create<arith::FloorDivSIOp>(loc, lhs, rhs);
+      return arith::FloorDivSIOp::create(builder, loc, lhs, rhs);
     case mlir::AffineExprKind::CeilDiv:
-      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
+      return arith::CeilDivUIOp::create(builder, loc, lhs, rhs);
     default:
       llvm_unreachable("unexpected affine binary op");
     }
@@ -475,7 +475,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
           return rewriter.notifyMatchFailure(op,
                                              "unable to get the loop range");
         }
-        Value dim = rewriter.create<memref::DimOp>(loc, operand, operandDimPos);
+        Value dim = memref::DimOp::create(rewriter, loc, operand, operandDimPos);
         commonShape.push_back(dim);
       } else {
         commonShape.push_back(rewriter.getIndexAttr(staticSize));
@@ -569,7 +569,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
           resultShape.push_back(shapeVal);
           if (ShapedType::isDynamic(shapeVal)) {
             Value dim =
-                rewriter.create<memref::DimOp>(loc, opOperand->get(), i);
+                memref::DimOp::create(rewriter, loc, opOperand->get(), i);
             outputShape.push_back(dim);
           } else {
             outputShape.push_back(rewriter.getIndexAttr(shapeVal));
@@ -584,13 +584,13 @@ struct LinalgGenericToZuanPattern : RewritePattern {
         for (unsigned i = 1; i < indexingMap.getNumResults(); ++i) {
           reassociation.push_back({static_cast<int64_t>(numDimsToExpand + i)});
         }
-        Value expanded = rewriter.create<memref::ExpandShapeOp>(
+        Value expanded = memref::ExpandShapeOp::create(rewriter, 
             loc, resultShape, opOperand->get(), reassociation, outputShape);
 
         //----------------------------------------------------------------------
         // 3) Transpose it to make sure all the dims are at their right place.
         //----------------------------------------------------------------------
-        Value transposed = rewriter.create<memref::TransposeOp>(
+        Value transposed = memref::TransposeOp::create(rewriter, 
             loc, expanded, AffineMapAttr::get(permutationMap));
 
         //----------------------------------------------------------------------
@@ -613,7 +613,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
             strides.push_back(rewriter.getIndexAttr(0));
           }
         }
-        Value subview = rewriter.create<memref::SubViewOp>(
+        Value subview = memref::SubViewOp::create(rewriter, 
             loc, transposed, offsets, commonShape, strides);
         // Map the original memref to the valueMap.
         transformedMemRefs[opOperand->get()] = subview;
@@ -624,7 +624,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
         auto permutationMap =
             inversePermutation(reindexIndexingMap(indexingMap));
         // All the initial reads will be performed on this transposed memref.
-        auto transposed = rewriter.create<memref::TransposeOp>(
+        auto transposed = memref::TransposeOp::create(rewriter, 
             loc, opOperand->get(), AffineMapAttr::get(permutationMap));
         // Map the original and transposed memrefs.
         transformedMemRefs[opOperand->get()] = transposed;
@@ -649,7 +649,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
 
     zuan::YieldOp yieldOp;
 
-    auto dynamicOp = rewriter.create<zuan::DynamicOp>(
+    auto dynamicOp = zuan::DynamicOp::create(rewriter, 
         loc, initMemrefs, [&](OpBuilder &b, Location loc, ValueRange inits) {
           // The index into the bbArgs of the dynamic region.
           unsigned initIdx = 0;
@@ -669,7 +669,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
               // Get the mapped subview for the dps input operand.
               Value subview = transformedMemRefs[opOperand->get()];
               // Create a load op for the subview.
-              Value loaded = b.create<zuan::LoadOp>(loc, subview);
+              Value loaded = zuan::LoadOp::create(b, loc, subview);
               // Map the dps input bbarg to the loaded value.
               valueMap.map(bbArg, loaded);
             } else {
@@ -677,7 +677,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
               valueMap.map(bbArg, inits[initIdx++]);
             }
           }
-          yieldOp = b.create<zuan::YieldOp>(loc);
+          yieldOp = zuan::YieldOp::create(b, loc);
         });
 
     // This is the block to insert converted operations inside linalg op.
@@ -713,7 +713,7 @@ struct LinalgGenericToZuanPattern : RewritePattern {
       state.nonProjectedPermutationIndices[opOperand] = indices;
       // Gather the values from the memref.
       Value gathered =
-          rewriter.create<zuan::GatherOp>(loc, opOperand->get(), indices);
+          zuan::GatherOp::create(rewriter, loc, opOperand->get(), indices);
       // Map the dps init bbarg to the gathered value.
       valueMap.map(bbArg, gathered);
     }

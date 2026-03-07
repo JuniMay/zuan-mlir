@@ -100,18 +100,18 @@ createSCFIfOp(OpBuilder &builder, Location loc, Value mask, Value maskedoff,
               std::function<Value(OpBuilder &, Location)> thenBuilder,
               std::function<Value(OpBuilder &, Location)> fallbackBuilder) {
   if (mask) {
-    auto ifOp = builder.create<scf::IfOp>(
+    auto ifOp = scf::IfOp::create(builder, 
         loc, mask,
         [&](OpBuilder &b, Location loc) {
           auto res = thenBuilder(b, loc);
-          b.create<scf::YieldOp>(loc, res);
+          scf::YieldOp::create(b, loc, res);
         },
         [&](OpBuilder &b, Location loc) {
           if (maskedoff) {
-            b.create<scf::YieldOp>(loc, maskedoff);
+            scf::YieldOp::create(b, loc, maskedoff);
           } else {
             Value fallback = fallbackBuilder(b, loc);
-            b.create<scf::YieldOp>(loc, fallback);
+            scf::YieldOp::create(b, loc, fallback);
           }
         });
     return ifOp->getResult(0);
@@ -121,7 +121,7 @@ createSCFIfOp(OpBuilder &builder, Location loc, Value mask, Value maskedoff,
 }
 
 static Value buildZero(OpBuilder &builder, Location loc, Type type) {
-  return builder.create<arith::ConstantOp>(loc, type,
+  return arith::ConstantOp::create(builder, loc, type,
                                            builder.getZeroAttr(type));
 }
 
@@ -134,7 +134,7 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
   auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
 
   SmallVector<Value> vectors;
-  auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
 
   for (int64_t i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
@@ -154,12 +154,12 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
       sizes.push_back(*cols);
 
       Value subview =
-          builder.create<memref::SubViewOp>(loc, base, offsets, sizes, strides);
+          memref::SubViewOp::create(builder, loc, base, offsets, sizes, strides);
       // Reduce the rank for the first dimension.
       auto reducedSubview = memref::SubViewOp::rankReduceIfNeeded(
           builder, loc, subview, {ShapedType::kDynamic});
       auto vecType = getVectorType(elementType, state);
-      auto rowLoadOp = builder.create<vp::LoadOp>(loc, vecType, *reducedSubview,
+      auto rowLoadOp = vp::LoadOp::create(builder, loc, vecType, *reducedSubview,
                                                   ValueRange{zero});
 
       auto predOp = vp::predicateOperation(builder, rowLoadOp, *cols, mask,
@@ -167,31 +167,31 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
       vectors.push_back(predOp->getResult(0));
     } else {
       // scalar load
-      Value offset = builder.create<arith::ConstantIndexOp>(loc, i);
+      Value offset = arith::ConstantIndexOp::create(builder, loc, i);
       SmallVector<Value> offsets{};
       if (rank == 1) {
         offsets.push_back(offset);
       }
       if (mask) {
-        auto ifOp = builder.create<scf::IfOp>(
+        auto ifOp = scf::IfOp::create(builder, 
             loc, mask,
             [&](OpBuilder &b, Location loc) {
-              Value loaded = b.create<memref::LoadOp>(loc, base, offsets);
-              b.create<scf::YieldOp>(loc, loaded);
+              Value loaded = memref::LoadOp::create(b, loc, base, offsets);
+              scf::YieldOp::create(b, loc, loaded);
             },
             [&](OpBuilder &b, Location loc) {
               if (maskedoff) {
-                b.create<scf::YieldOp>(loc, maskedoff);
+                scf::YieldOp::create(b, loc, maskedoff);
               } else {
                 // Random value, default to 0
-                Value zero = b.create<arith::ConstantOp>(
+                Value zero = arith::ConstantOp::create(b, 
                     loc, elementType, builder.getZeroAttr(elementType));
-                b.create<scf::YieldOp>(loc, zero);
+                scf::YieldOp::create(b, loc, zero);
               }
             });
         vectors.push_back(ifOp->getResult(0));
       } else {
-        Value loaded = builder.create<memref::LoadOp>(loc, base, offsets);
+        Value loaded = memref::LoadOp::create(builder, loc, base, offsets);
         vectors.push_back(loaded);
       }
     }
@@ -207,7 +207,7 @@ static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
   auto base = state.valueMap.lookup(storeOp.getBase());
   auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
 
-  auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
   for (int64_t i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
@@ -227,35 +227,35 @@ static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
       sizes.push_back(*cols);
 
       Value subview =
-          builder.create<memref::SubViewOp>(loc, base, offsets, sizes, strides);
+          memref::SubViewOp::create(builder, loc, base, offsets, sizes, strides);
       // Reduce the rank for the first dimension.
       auto reducedSubview = memref::SubViewOp::rankReduceIfNeeded(
           builder, loc, subview, {ShapedType::kDynamic});
-      auto rowStoreOp = builder.create<vp::StoreOp>(loc, row, *reducedSubview,
+      auto rowStoreOp = vp::StoreOp::create(builder, loc, row, *reducedSubview,
                                                     ValueRange{zero});
       vp::predicateOperation(builder, rowStoreOp, *cols, mask, nullptr,
                              maskedoff);
     } else {
       // scalar store
-      Value offset = builder.create<arith::ConstantIndexOp>(loc, i);
+      Value offset = arith::ConstantIndexOp::create(builder, loc, i);
       SmallVector<Value> offsets{};
       if (rank == 1) {
         offsets.push_back(offset);
       }
       if (mask) {
-        builder.create<scf::IfOp>(
+        scf::IfOp::create(builder, 
             loc, mask,
             [&](OpBuilder &b, Location loc) {
-              b.create<memref::StoreOp>(loc, row, base, offsets);
+              memref::StoreOp::create(b, loc, row, base, offsets);
             },
             [&](OpBuilder &b, Location loc) {
               if (maskedoff) {
                 // TODO: Check if this is needed.
-                b.create<memref::StoreOp>(loc, maskedoff, base, offsets);
+                memref::StoreOp::create(b, loc, maskedoff, base, offsets);
               }
             });
       } else {
-        builder.create<memref::StoreOp>(loc, row, base, offsets);
+        memref::StoreOp::create(builder, loc, row, base, offsets);
       }
     }
   }
@@ -284,7 +284,7 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
       } else {
         auto vecType = getVectorType(result.getType().getElementType(), state);
         auto splatOp =
-            builder.create<vector::BroadcastOp>(loc, vecType, source);
+            vector::BroadcastOp::create(builder, loc, vecType, source);
         auto predOp = vp::predicateOperation(builder, splatOp, *cols, mask,
                                              nullptr, maskedoff);
         values.push_back(predOp->getResult(0));
@@ -294,20 +294,20 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
       // we can just splat the scalar.
       auto scalar = state.valueMap.lookup(source);
       if (mask) {
-        auto ifOp = builder.create<scf::IfOp>(
+        auto ifOp = scf::IfOp::create(builder, 
             loc, mask,
             [&](OpBuilder &b, Location loc) {
-              b.create<scf::YieldOp>(loc, scalar);
+              scf::YieldOp::create(b, loc, scalar);
             },
             [&](OpBuilder &b, Location loc) {
               if (maskedoff) {
-                b.create<scf::YieldOp>(loc, maskedoff);
+                scf::YieldOp::create(b, loc, maskedoff);
               } else {
                 // Random value, default to 0
                 auto type = result.getType().getElementType();
-                Value zero = b.create<arith::ConstantOp>(
+                Value zero = arith::ConstantOp::create(b, 
                     loc, type, builder.getZeroAttr(type));
-                b.create<scf::YieldOp>(loc, zero);
+                scf::YieldOp::create(b, loc, zero);
               }
             });
         values.push_back(ifOp->getResult(0));
@@ -339,7 +339,7 @@ static void handleElementwise(OpBuilder &builder, Operation *op,
     auto maskedoff = maskPair.second;
 
     if (cols.has_value()) {
-      auto elementwiseOp = builder.create<ElementwiseOp>(loc, operands);
+      auto elementwiseOp = ElementwiseOp::create(builder, loc, operands);
       auto predOp = vp::predicateOperation(builder, elementwiseOp, *cols, mask,
                                            nullptr, maskedoff);
       resultValues.push_back(predOp->getResult(0));
@@ -347,7 +347,7 @@ static void handleElementwise(OpBuilder &builder, Operation *op,
       auto val = createSCFIfOp(
           builder, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
-            Value res = b.create<ElementwiseOp>(loc, operands);
+            Value res = ElementwiseOp::create(b, loc, operands);
             return res;
           },
           [&](OpBuilder &b, Location loc) {
@@ -403,7 +403,7 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
     auto maskedoff = maskPair.second;
 
     if (cols.has_value()) {
-      auto arithOp = builder.create<ArithOp>(loc, lhs, rhs);
+      auto arithOp = ArithOp::create(builder, loc, lhs, rhs);
       auto predOp = vp::predicateOperation(builder, arithOp, *cols, mask,
                                            passthru, maskedoff);
       resultValues.push_back(predOp->getResult(0));
@@ -411,7 +411,7 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
       auto val = createSCFIfOp(
           builder, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
-            Value res = b.create<ArithOp>(loc, lhs, rhs);
+            Value res = ArithOp::create(b, loc, lhs, rhs);
             return res;
           },
           [&](OpBuilder &b, Location loc) {
@@ -452,7 +452,7 @@ static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
     auto maskedoff = maskPair.second;
 
     if (cols.has_value()) {
-      auto cmpOp = builder.create<CmpOp>(loc, op.getPredicate(), lhs, rhs);
+      auto cmpOp = CmpOp::create(builder, loc, op.getPredicate(), lhs, rhs);
       Operation *predOp = vp::predicateOperation(builder, cmpOp, *cols, mask,
                                                  nullptr, maskedoff);
       resultValues.push_back(predOp->getResult(0));
@@ -460,7 +460,7 @@ static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
       auto val = createSCFIfOp(
           builder, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
-            Value res = b.create<CmpOp>(loc, op.getPredicate(), lhs, rhs);
+            Value res = CmpOp::create(b, loc, op.getPredicate(), lhs, rhs);
             return res;
           },
           [&](OpBuilder &b, Location loc) {
@@ -491,7 +491,7 @@ static void handleReductionOp(OpBuilder &builder, ReductionOp reductionOp,
     init = state.tileMap[init][0];
   }
 
-  auto reduction = builder.create<vector::ReductionOp>(
+  auto reduction = vector::ReductionOp::create(builder, 
       loc, kind, vector, init, arith::FastMathFlags::reassoc);
   auto predOp = vp::predicateOperation(builder, reduction, *cols, mask, nullptr,
                                        maskedoff);
@@ -518,22 +518,22 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
     auto maskedoff = maskPair.second;
 
     if (dim == shape->size() - 1 && cols.has_value()) {
-      Operation *step = builder.create<vp::StepOp>(loc, vectorType);
+      Operation *step = vp::StepOp::create(builder, loc, vectorType);
       step = vp::predicateOperation(builder, step, *cols, mask, nullptr,
                                     maskedoff);
       auto startSplat =
-          builder.create<vector::BroadcastOp>(loc, vectorType, start);
+          vector::BroadcastOp::create(builder, loc, vectorType, start);
       Operation *add =
-          builder.create<arith::AddIOp>(loc, startSplat, step->getResult(0));
+          arith::AddIOp::create(builder, loc, startSplat, step->getResult(0));
       add =
           vp::predicateOperation(builder, add, *cols, mask, nullptr, maskedoff);
       values.push_back(add->getResult(0));
     } else if (cols.has_value()) {
-      auto increment = builder.create<arith::ConstantOp>(
+      auto increment = arith::ConstantOp::create(builder, 
           loc, start.getType(), builder.getIntegerAttr(start.getType(), i));
-      Value newStart = builder.create<arith::AddIOp>(loc, start, increment);
+      Value newStart = arith::AddIOp::create(builder, loc, start, increment);
       Operation *splat =
-          builder.create<vector::BroadcastOp>(loc, vectorType, newStart);
+          vector::BroadcastOp::create(builder, loc, vectorType, newStart);
       splat = vp::predicateOperation(builder, splat, *cols, mask, nullptr,
                                      maskedoff);
       values.push_back(splat->getResult(0));
@@ -541,9 +541,9 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
       auto val = createSCFIfOp(
           builder, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
-            Value increment = b.create<arith::ConstantOp>(
+            Value increment = arith::ConstantOp::create(b, 
                 loc, start.getType(), b.getIntegerAttr(start.getType(), i));
-            Value newStart = b.create<arith::AddIOp>(loc, start, increment);
+            Value newStart = arith::AddIOp::create(b, loc, start, increment);
             return newStart;
           },
           [&](OpBuilder &b, Location loc) {
@@ -561,40 +561,40 @@ Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
   Value casted;
   switch (kind) {
   case CastKind::BITCAST:
-    casted = b.create<arith::BitcastOp>(loc, outType, source);
+    casted = arith::BitcastOp::create(b, loc, outType, source);
     break;
   case CastKind::EXTF:
-    casted = b.create<arith::ExtFOp>(loc, outType, source);
+    casted = arith::ExtFOp::create(b, loc, outType, source);
     break;
   case CastKind::EXTSI:
-    casted = b.create<arith::ExtSIOp>(loc, outType, source);
+    casted = arith::ExtSIOp::create(b, loc, outType, source);
     break;
   case CastKind::EXTUI:
-    casted = b.create<arith::ExtUIOp>(loc, outType, source);
+    casted = arith::ExtUIOp::create(b, loc, outType, source);
     break;
   case CastKind::TRUNCI:
-    casted = b.create<arith::TruncIOp>(loc, outType, source);
+    casted = arith::TruncIOp::create(b, loc, outType, source);
     break;
   case CastKind::TRUNCF:
-    casted = b.create<arith::TruncFOp>(loc, outType, source);
+    casted = arith::TruncFOp::create(b, loc, outType, source);
     break;
   case CastKind::FPTOSI:
-    casted = b.create<arith::FPToSIOp>(loc, outType, source);
+    casted = arith::FPToSIOp::create(b, loc, outType, source);
     break;
   case CastKind::FPTOUI:
-    casted = b.create<arith::FPToUIOp>(loc, outType, source);
+    casted = arith::FPToUIOp::create(b, loc, outType, source);
     break;
   case CastKind::SITOFP:
-    casted = b.create<arith::SIToFPOp>(loc, outType, source);
+    casted = arith::SIToFPOp::create(b, loc, outType, source);
     break;
   case CastKind::UITOFP:
-    casted = b.create<arith::UIToFPOp>(loc, outType, source);
+    casted = arith::UIToFPOp::create(b, loc, outType, source);
     break;
   case CastKind::INDEXCAST:
-    casted = b.create<arith::IndexCastOp>(loc, outType, source);
+    casted = arith::IndexCastOp::create(b, loc, outType, source);
     break;
   case CastKind::INDEXCASTUI:
-    casted = b.create<arith::IndexCastOp>(loc, outType, source);
+    casted = arith::IndexCastOp::create(b, loc, outType, source);
     break;
   }
   return casted;
@@ -665,7 +665,7 @@ static void handleSelectOp(OpBuilder &b, SelectOp selectOp,
     Value rhsRow = state.tileMap[rhs][i];
 
     if (cols.has_value()) {
-      auto selectOp = b.create<arith::SelectOp>(loc, condRow, lhsRow, rhsRow);
+      auto selectOp = arith::SelectOp::create(b, loc, condRow, lhsRow, rhsRow);
       auto predOp =
           vp::predicateOperation(b, selectOp, *cols, mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
@@ -675,7 +675,7 @@ static void handleSelectOp(OpBuilder &b, SelectOp selectOp,
           b, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
             Value selectOp =
-                b.create<arith::SelectOp>(loc, condRow, lhsRow, rhsRow);
+                arith::SelectOp::create(b, loc, condRow, lhsRow, rhsRow);
             return selectOp;
           },
           [&](OpBuilder &b, Location loc) {
@@ -719,7 +719,7 @@ static void handleOuterOp(OpBuilder &b, OuterOp outerOp, ShapeInfo &shapeInfo,
       Value rhsRow = state.tileMap[rhs][0];
 
       Operation *lhsSplat =
-          b.create<vector::BroadcastOp>(loc, rhsRow.getType(), lhsRow);
+          vector::BroadcastOp::create(b, loc, rhsRow.getType(), lhsRow);
       lhsSplat = vp::predicateOperation(b, lhsSplat, *rhsCols, mask, nullptr,
                                         maskedoff);
       auto outer =
@@ -776,23 +776,23 @@ static void handleScatterOp(OpBuilder &b, ScatterOp scatterOp,
         indices, [&](Value idx) { return state.tileMap[idx][i]; });
 
     if (cols.has_value()) {
-      auto scatter = b.create<vp::ScatterOp>(loc, valueRow, base, indicesRow);
+      auto scatter = vp::ScatterOp::create(b, loc, valueRow, base, indicesRow);
       vp::predicateOperation(b, scatter, *cols, mask, nullptr, maskedoff);
     } else {
       if (mask) {
         // Scalar stores
-        b.create<scf::IfOp>(
+        scf::IfOp::create(b, 
             loc, mask,
             [&](OpBuilder &b, Location loc) {
-              b.create<memref::StoreOp>(loc, valueRow, base, indicesRow);
+              memref::StoreOp::create(b, loc, valueRow, base, indicesRow);
             },
             [&](OpBuilder &b, Location loc) {
               if (maskedoff) {
-                b.create<memref::StoreOp>(loc, maskedoff, base, indicesRow);
+                memref::StoreOp::create(b, loc, maskedoff, base, indicesRow);
               }
             });
       } else {
-        b.create<memref::StoreOp>(loc, valueRow, base, indicesRow);
+        memref::StoreOp::create(b, loc, valueRow, base, indicesRow);
       }
     }
   }
@@ -823,7 +823,7 @@ static void handleGatherOp(OpBuilder &b, GatherOp gatherOp,
 
     if (cols.has_value()) {
 
-      auto gather = b.create<vp::GatherOp>(loc, vectorType, base, indicesRow);
+      auto gather = vp::GatherOp::create(b, loc, vectorType, base, indicesRow);
       auto predOp =
           vp::predicateOperation(b, gather, *cols, mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
@@ -832,7 +832,7 @@ static void handleGatherOp(OpBuilder &b, GatherOp gatherOp,
       auto res = createSCFIfOp(
           b, loc, mask, maskedoff,
           [&](OpBuilder &b, Location loc) {
-            Value gather = b.create<memref::LoadOp>(loc, base, indicesRow);
+            Value gather = memref::LoadOp::create(b, loc, base, indicesRow);
             return gather;
           },
           [&](OpBuilder &b, Location loc) {
@@ -870,7 +870,7 @@ static void handleSCFForOp(RewriterBase &rewriter, scf::ForOp forOp,
   auto step = state.valueMap.lookup(forOp.getStep());
 
   auto newForOp =
-      rewriter.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, newInits);
+      scf::ForOp::create(rewriter, forOp.getLoc(), lb, ub, step, newInits);
 
   size_t newIdx = 0;
   for (auto [init, iterArg, result] : llvm::zip(inits, iterArgs, results)) {
@@ -926,7 +926,7 @@ static void handleSCFWhileOp(RewriterBase &rewriter, scf::WhileOp whileOp,
     newTypes.push_back(init.getType());
   }
 
-  auto newWhileOp = rewriter.create<scf::WhileOp>(
+  auto newWhileOp = scf::WhileOp::create(rewriter, 
       whileOp.getLoc(), newTypes, newInits,
       [&](OpBuilder &b, Location loc, ValueRange args) {},
       [&](OpBuilder &b, Location loc, ValueRange args) {});
@@ -1103,7 +1103,7 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
             newOperands.push_back(operand);
           }
         }
-        rewriter.create<scf::YieldOp>(op->getLoc(), newOperands);
+        scf::YieldOp::create(rewriter, op->getLoc(), newOperands);
       })
       .Case([&](scf::WhileOp whileOp) {
         handleSCFWhileOp(rewriter, whileOp, shapeInfo, state);
@@ -1119,7 +1119,7 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
             newOperands.push_back(operand);
           }
         }
-        rewriter.create<scf::ConditionOp>(op->getLoc(), op->getResultTypes(),
+        scf::ConditionOp::create(rewriter, op->getLoc(), op->getResultTypes(),
                                           newOperands);
       })
       .Case<math::RsqrtOp, math::ExpOp>([&](auto unaryOp) {
