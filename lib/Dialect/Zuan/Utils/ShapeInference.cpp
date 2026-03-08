@@ -26,6 +26,34 @@
 namespace mlir {
 namespace zuan {
 
+TileShape TileShape::dropDim(unsigned i) const {
+  TileShape result;
+  result.append(dims.begin(), dims.begin() + i);
+  result.append(dims.begin() + i + 1, dims.end());
+  return result;
+}
+
+TileShape TileShape::takeFront(unsigned n) const {
+  return TileShape(ArrayRef<DimSize>(dims).take_front(n));
+}
+
+TileShape TileShape::takeBack(unsigned n) const {
+  return TileShape(ArrayRef<DimSize>(dims).take_back(n));
+}
+
+SmallVector<OpFoldResult> TileShape::reify(OpBuilder &builder,
+                                           Location loc) const {
+  return llvm::map_to_vector(dims, [&](DimSize dim) {
+    return dim.getOrCreateOpFoldResult(builder, loc);
+  });
+}
+
+SmallVector<int64_t> TileShape::staticShape() const {
+  return llvm::map_to_vector(dims, [&](DimSize dim) {
+    return dim.getInteger().value_or(ShapedType::kDynamic);
+  });
+}
+
 std::optional<std::pair<Value, unsigned>> DimSize::getAsMemrefDim(Value value) {
   auto definingOp = value.getDefiningOp();
   if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
@@ -198,76 +226,88 @@ unsigned DimSize::getHashValue() const {
                                                   dim));
 }
 
-std::optional<ShapeRef> ShapeInfo::getShape(Value value) {
-  if (shapes.contains(value)) {
-    /// XXX: `lookup` leads to return from local reference.
-    return shapes[value];
+const TileShape *ShapeInfo::lookupShape(Value value) const {
+  auto it = shapes.find(value);
+  if (it == shapes.end()) {
+    return nullptr;
   }
-  return std::nullopt;
+  return it->second.get();
 }
 
-std::optional<ShapeVector> ShapeInfo::getShapeWithEquivalence(Value value) {
-  if (auto shape = getShape(value)) {
-    ShapeVector result = llvm::map_to_vector(*shape, [&](DimSize dim) {
+std::optional<TileShape> ShapeInfo::getShapeWithEquivalence(Value value) {
+  if (auto *shape = lookupShape(value)) {
+    ShapeVector result =
+        llvm::map_to_vector(shape->asArrayRef(), [&](const DimSize &dim) {
       return dimEquivalences.getOrInsertLeaderValue(dim);
     });
-    return result;
+    return TileShape(std::move(result));
   }
   return std::nullopt;
 }
 
-void ShapeInfo::markEquivalent(DimSize lhs, DimSize rhs) {
+void ShapeInfo::markDimEquivalent(DimSize lhs, DimSize rhs) {
   dimEquivalences.unionSets(lhs, rhs);
 }
 
-void ShapeInfo::markEquivalent(ShapeRef lhs, ShapeRef rhs) {
+void ShapeInfo::markShapeEquivalent(ArrayRef<DimSize> lhs,
+                                    ArrayRef<DimSize> rhs) {
   assert(lhs.size() == rhs.size() && "expected same rank");
   for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
-    markEquivalent(lhsDim, rhsDim);
+    markDimEquivalent(lhsDim, rhsDim);
   }
 }
 
-void ShapeInfo::markEquivalent(Value lhs, Value rhs) {
-  auto lhsShape = getShape(lhs);
-  auto rhsShape = getShape(rhs);
+void ShapeInfo::markShapeEquivalent(Value lhs, Value rhs) {
+  auto *lhsShape = lookupShape(lhs);
+  auto *rhsShape = lookupShape(rhs);
   assert(lhsShape || rhsShape && "expected shapes to be present");
   if (!lhsShape) {
-    setShape(lhs, ShapeVector{*rhsShape});
+    setShape(lhs, TileShape(rhsShape->asArrayRef()));
     return;
   }
   if (!rhsShape) {
-    setShape(rhs, ShapeVector{*lhsShape});
+    setShape(rhs, TileShape(lhsShape->asArrayRef()));
     return;
   }
-  markEquivalent(*lhsShape, *rhsShape);
+  markShapeEquivalent(lhsShape->asArrayRef(), rhsShape->asArrayRef());
 }
 
-void ShapeInfo::markEquivalent(ValueRange lhs, ValueRange rhs) {
+void ShapeInfo::markShapeEquivalent(ValueRange lhs, ValueRange rhs) {
   assert(lhs.size() == rhs.size() && "expected same number of values");
   for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
-    markEquivalent(lhsDim, rhsDim);
+    markShapeEquivalent(lhsDim, rhsDim);
   }
 }
 
-void ShapeInfo::markEquivalent(Value val, ShapeRef shape) {
-  auto valShape = getShape(val);
+void ShapeInfo::markShapeEquivalent(Value val, ArrayRef<DimSize> shape) {
+  auto *valShape = lookupShape(val);
   if (valShape) {
-    markEquivalent(*valShape, shape);
+    markShapeEquivalent(valShape->asArrayRef(), shape);
   } else {
-    setShape(val, ShapeVector{shape});
+    setShape(val, TileShape(shape));
   }
 }
 
-void ShapeInfo::setShape(Value value, ShapeVector shape) {
-  shapes.insert({value, shape});
+bool ShapeInfo::setShapeIfAbsent(Value value, TileShape shape) {
+  if (lookupShape(value)) {
+    return false;
+  }
+  setShape(value, std::move(shape));
+  return true;
+}
+
+void ShapeInfo::setShape(Value value, TileShape shape) {
+  shapes.try_emplace(value, std::make_unique<TileShape>(std::move(shape)));
 }
 
 void ShapeInfo::dump(llvm::raw_ostream &os) {
   os << "ShapeInfo:\n";
-  for (auto [value, _] : shapes) {
+  for (auto &[value, _] : shapes) {
     auto shape = *getShapeWithEquivalence(value);
     os << "  " << value << " -> \n[\n";
-    llvm::interleaveComma(shape, os, [&](DimSize dim) { dim.dump(os); });
+    llvm::interleaveComma(shape.asArrayRef(), os, [&](DimSize dim) {
+      dim.dump(os);
+    });
     os << "\n]\n";
   }
 }
@@ -291,25 +331,21 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     if (auto idx =
             rootOp->getAttrOfType<IntegerAttr>("zuan_passthru_operand")) {
       auto opd = rootOp->getOperand(idx.getInt());
-      this->markEquivalent(rootOp->getResult(0), opd);
+      this->markShapeEquivalent(rootOp->getResult(0), opd);
       // This will be translated to tail-undisturbed manner in VP dialect.
     } else {
       auto opd = rootOp->getOperand(0);
-      this->markEquivalent(rootOp->getResult(0), opd);
+      this->markShapeEquivalent(rootOp->getResult(0), opd);
       for (auto opd : llvm::drop_begin(rootOp->getOperands(), 1)) {
-        this->markEquivalent(opd, rootOp->getOperand(0));
-      }
-      // Mark all operands shape equivalent if no passthru operand is specified.
-      for (auto opd : llvm::drop_begin(rootOp->getOperands(), 1)) {
-        this->markEquivalent(opd, rootOp->getOperand(0));
+        this->markShapeEquivalent(opd, rootOp->getOperand(0));
       }
     }
 
     if (auto maskPair = state.getMask()) {
       auto [mask, maskedoff] = *maskPair;
-      this->markEquivalent(rootOp->getResult(0), mask);
+      this->markShapeEquivalent(rootOp->getResult(0), mask);
       if (maskedoff) {
-        this->markEquivalent(rootOp->getResult(0), maskedoff);
+        this->markShapeEquivalent(rootOp->getResult(0), maskedoff);
       }
     }
 
@@ -323,13 +359,13 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     if (!isa<TileType>(lhs.getType())) {
       return;
     }
-    this->markEquivalent(rootOp->getResult(0), lhs);
-    this->markEquivalent(lhs, rhs);
+    this->markShapeEquivalent(rootOp->getResult(0), lhs);
+    this->markShapeEquivalent(lhs, rhs);
     if (auto maskPair = state.getMask()) {
       auto [mask, maskedoff] = *maskPair;
-      this->markEquivalent(rootOp->getResult(0), mask);
+      this->markShapeEquivalent(rootOp->getResult(0), mask);
       if (maskedoff) {
-        this->markEquivalent(rootOp->getResult(0), maskedoff);
+        this->markShapeEquivalent(rootOp->getResult(0), maskedoff);
       }
     }
     return;
@@ -342,7 +378,7 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     for (auto [init, args] :
          llvm::zip(whileOp.getInits(), beforeBlock->getArguments())) {
       if (isa<TileType>(init.getType())) {
-        this->markEquivalent(init, args);
+        this->markShapeEquivalent(init, args);
       }
     }
     for (auto &op : beforeBlock->getOperations()) {
@@ -353,8 +389,8 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     for (auto [passed, arg, result] : llvm::zip(
              conditionOp.getArgs(), afterBlock->getArguments(), results)) {
       if (isa<TileType>(passed.getType())) {
-        this->markEquivalent(passed, arg);
-        this->markEquivalent(passed, result);
+        this->markShapeEquivalent(passed, arg);
+        this->markShapeEquivalent(passed, result);
       }
     }
     for (auto &op : afterBlock->getOperations()) {
@@ -369,7 +405,7 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
     auto iterArgs = iface.getRegionIterArgs();
     for (auto [init, arg] : llvm::zip(inits, iterArgs)) {
       if (isa<TileType>(init.getType())) {
-        this->markEquivalent(init, arg);
+        this->markShapeEquivalent(init, arg);
       }
     }
 
@@ -383,7 +419,7 @@ void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
       auto yieldValues = iface.getYieldedValues();
       for (auto [result, yield] : llvm::zip(*results, yieldValues)) {
         if (isa<TileType>(result.getType())) {
-          this->markEquivalent(result, yield);
+          this->markShapeEquivalent(result, yield);
         }
       }
     }

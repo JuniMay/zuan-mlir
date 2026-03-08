@@ -40,6 +40,60 @@
 namespace mlir {
 namespace zuan {
 
+static TileShape getStoredShapeOrAssert(ShapeInfo &shapeInfo, Value value) {
+  auto *shape = shapeInfo.lookupShape(value);
+  assert(shape && "expected shape to be available");
+  return *shape;
+}
+
+static LogicalResult verifyDistinctInRangeDims(Operation *op, int64_t rank,
+                                               ArrayRef<int64_t> dims,
+                                               StringRef desc) {
+  llvm::SmallDenseSet<int64_t> seen;
+  for (int64_t dim : dims) {
+    if (dim < 0 || dim >= rank) {
+      return op->emitOpError() << "expected " << desc
+                               << " to be in range [0, " << rank << ")";
+    }
+    if (!seen.insert(dim).second) {
+      return op->emitOpError() << "expected " << desc << " to be unique";
+    }
+  }
+  return success();
+}
+
+static LogicalResult verifyGatherScatterIndexShapes(Operation *op,
+                                                    ValueRange indices,
+                                                    Type expectedType) {
+  if (indices.empty()) {
+    if (auto expectedTile = dyn_cast<TileType>(expectedType)) {
+      if (expectedTile.getRank() != 0) {
+        return op->emitOpError(
+            "expected scalar result/value when no index tiles are provided");
+      }
+    }
+    return success();
+  }
+
+  auto firstType = cast<TileType>(indices.front().getType());
+  auto indexShape = firstType.getShape();
+  for (Value index : llvm::drop_begin(indices)) {
+    auto indexType = cast<TileType>(index.getType());
+    if (!TileType::isShapeCompatible(indexShape, indexType.getShape())) {
+      return op->emitOpError("expected all index tile shapes to match");
+    }
+  }
+
+  if (auto expectedTile = dyn_cast<TileType>(expectedType)) {
+    if (!TileType::isShapeCompatible(indexShape, expectedTile.getShape())) {
+      return op->emitOpError(
+          "expected the result/value tile shape to match the index tile shape");
+    }
+  }
+
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // DynamicOp
 //===----------------------------------------------------------------------===//
@@ -114,7 +168,7 @@ void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   for (auto [bbArg, memref] :
        llvm::zip(bodyBlock->getArguments(), getDpsInits())) {
     auto memrefType = cast<MemRefType>(memref.getType());
-    ShapeVector shape;
+    TileShape shape;
     for (unsigned i = 0, e = memrefType.getRank(); i < e; ++i) {
       shape.push_back(DimSize(memref, i));
     }
@@ -156,7 +210,7 @@ Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
       });
 }
 
-std::optional<ShapeVector> DynamicOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> DynamicOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   return std::nullopt;
 }
 
@@ -435,6 +489,18 @@ LogicalResult MaskOp::verify() {
     return emitOpError(
         "expected only one operation and terminator inside the masked region");
   }
+  auto terminator = dyn_cast<MaskYieldOp>(bodyBlock->getTerminator());
+  if (!terminator) {
+    return emitOpError("expected a `zuan.mask_yield` terminator");
+  }
+  if (terminator.getNumOperands() != getNumResults()) {
+    return emitOpError("expected the masked region to yield one value per result");
+  }
+  for (auto [yielded, result] : llvm::zip(terminator.getOperands(), getResults())) {
+    if (!TileType::isCompatible(yielded.getType(), result.getType())) {
+      return emitOpError("expected yielded tile types to match mask result types");
+    }
+  }
 
   return success();
 }
@@ -446,13 +512,12 @@ void MaskOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
     // Mask and Maskedoff (passthru) are shape-equivalent.
     shapeInfo.markEquivalent(mask, maskedoff);
   }
-  state.setMask(mask);
+  ScopedMaskState scopedMask(state, mask, maskedoff);
   // Recursively infer the shape of the masked region.
   auto bodyBlock = &getBody().front();
   for (auto &op : bodyBlock->getOperations()) {
     shapeInfo.inferShape(&op, state);
   }
-  state.resetMask();
 }
 
 Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -485,7 +550,7 @@ Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 }
 
-std::optional<ShapeVector> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto mask = getMask();
   return shapeInfo.getShapeWithEquivalence(mask);
 }
@@ -579,6 +644,24 @@ LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult MatmulOp::verify() {
+  auto lhsType = getLhs().getType();
+  auto rhsType = getRhs().getType();
+  if (lhsType.getRank() < 1 || rhsType.getRank() < 1) {
+    return emitOpError("expected lhs and rhs to be at least rank-1 tiles");
+  }
+  if (std::max(lhsType.getRank(), rhsType.getRank()) < 2) {
+    return emitOpError("expected matmul operands to include an inner reduction dimension");
+  }
+  auto leadingSize = getLeadingSize();
+  if (!TileType::isShapeCompatible(lhsType.getShape().take_front(leadingSize),
+                                   rhsType.getShape().take_front(leadingSize))) {
+    return emitOpError(
+        "expected lhs and rhs leading dimensions to be compatible");
+  }
+  if (!TileType::isDimCompatible(lhsType.getShape().back(),
+                                 rhsType.getShape()[leadingSize])) {
+    return emitOpError("expected lhs/rhs contraction dimensions to be compatible");
+  }
   // The mask op is allowed to be inside the yield op. But only store is allowed
   // to be nested within the yield region.
   if ((*this)->getParentOfType<YieldOp>()) {
@@ -612,29 +695,30 @@ void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto rhs = getRhs();
   auto result = getResult();
 
-  auto lhsShape = *shapeInfo.getShape(lhs);
-  auto rhsShape = *shapeInfo.getShape(rhs);
+  auto lhsShape = getStoredShapeOrAssert(shapeInfo, lhs);
+  auto rhsShape = getStoredShapeOrAssert(shapeInfo, rhs);
 
   size_t leadingSize = getLeadingSize();
 
   auto lhsRank = lhs.getType().getRank();
   auto rhsRank = rhs.getType().getRank();
 
-  auto lhsK = lhsShape.back();
+  auto lhsK = lhsShape[lhsShape.rank() - 1];
   auto rhsK = rhsShape[leadingSize];
   shapeInfo.markEquivalent(lhsK, rhsK);
-  auto lhsLeadingDims = lhsShape.take_front(leadingSize);
-  auto rhsLeadingDims = rhsShape.take_front(leadingSize);
-  shapeInfo.markEquivalent(lhsLeadingDims, rhsLeadingDims);
+  auto lhsLeadingDims = lhsShape.takeFront(leadingSize);
+  auto rhsLeadingDims = rhsShape.takeFront(leadingSize);
+  shapeInfo.markEquivalent(lhsLeadingDims.asArrayRef(),
+                           rhsLeadingDims.asArrayRef());
 
-  ShapeVector resultShape(lhsLeadingDims.begin(), lhsLeadingDims.end());
+  TileShape resultShape(lhsLeadingDims.asArrayRef());
   if (lhsRank >= rhsRank) {
     // M, if exists.
-    resultShape.push_back(lhsShape[lhsShape.size() - 2]);
+    resultShape.push_back(lhsShape[lhsShape.rank() - 2]);
   }
   if (rhsRank >= lhsRank) {
     // N, if exists
-    resultShape.push_back(rhsShape.back());
+    resultShape.push_back(rhsShape[rhsShape.rank() - 1]);
   }
   shapeInfo.markEquivalent(result, resultShape);
   // if (auto mask = state.getMask()) {
@@ -715,7 +799,7 @@ Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 }
 
-std::optional<ShapeVector> MatmulOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> MatmulOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -747,6 +831,16 @@ LogicalResult ReductionOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult ReductionOp::verify() {
+  if (failed(verifyDistinctInRangeDims((*this), getTile().getType().getRank(),
+                                       getDims(), "reduction dims"))) {
+    return failure();
+  }
+  if (auto init = getInit()) {
+    if (!TileType::isCompatible(init.getType(), getResult().getType())) {
+      return emitOpError(
+          "expected init tile type to match the reduction result type");
+    }
+  }
   // The mask op is allowed to be inside the yield op. But only store is allowed
   // to be nested within the yield region.
   if ((*this)->getParentOfType<YieldOp>()) {
@@ -762,9 +856,9 @@ void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto dims = getDims();
   SetVector<int64_t> reductionDimSet(dims.begin(), dims.end());
 
-  auto tileShape = *shapeInfo.getShape(tile);
-  ShapeVector resultShape;
-  for (size_t i = 0, e = tileShape.size(); i < e; ++i) {
+  auto tileShape = getStoredShapeOrAssert(shapeInfo, tile);
+  TileShape resultShape;
+  for (size_t i = 0, e = tileShape.rank(); i < e; ++i) {
     if (!reductionDimSet.contains(i)) {
       resultShape.push_back(tileShape[i]);
     }
@@ -825,7 +919,7 @@ Operation *ReductionOp::unroll(OpBuilder &builder, UnrollOptions options,
   return reductionOp;
 }
 
-std::optional<ShapeVector> ReductionOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> ReductionOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -856,7 +950,7 @@ LogicalResult LoadOp::verify() {
 void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto base = getBase();
   auto result = getResult();
-  ShapeVector shape;
+  TileShape shape;
   for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
     shape.push_back(DimSize(base, i));
   }
@@ -877,7 +971,7 @@ Operation *LoadOp::unroll(OpBuilder &builder, UnrollOptions options,
   return loadOp;
 }
 
-std::optional<ShapeVector> LoadOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> LoadOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -890,7 +984,7 @@ void StoreOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto value = getValue();
   auto base = getBase();
 
-  ShapeVector shape;
+  TileShape shape;
   for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
     shape.push_back(DimSize(base, i));
   }
@@ -917,7 +1011,7 @@ Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
   return storeOp;
 }
 
-std::optional<ShapeVector> StoreOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> StoreOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto value = getValue();
   return shapeInfo.getShapeWithEquivalence(value);
 }
@@ -978,12 +1072,12 @@ void SplatOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto value = getValue();
   auto dims = getMixedDims();
 
-  ShapeVector shape =
-      llvm::map_to_vector(dims, [&](OpFoldResult ofr) { return DimSize(ofr); });
+  TileShape shape(
+      llvm::map_to_vector(dims, [&](OpFoldResult ofr) { return DimSize(ofr); }));
 
   if (auto tileType = dyn_cast<TileType>(value.getType())) {
-    auto tileShape = *shapeInfo.getShape(value);
-    shape.append(tileShape.begin(), tileShape.end());
+    auto tileShape = getStoredShapeOrAssert(shapeInfo, value);
+    shape.append(tileShape.asArrayRef());
   }
   auto result = getResult();
   shapeInfo.markEquivalent(result, shape);
@@ -1033,7 +1127,7 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
   return splatOp;
 }
 
-std::optional<ShapeVector> SplatOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> SplatOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1090,6 +1184,15 @@ LogicalResult OuterOp::verify() {
   if ((*this)->getParentOfType<YieldOp>()) {
     return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
   }
+  unsigned leadingRank = lhsRank;
+  if (lhsRank >= rhsRank) {
+    leadingRank -= 1;
+  }
+  if (!TileType::isShapeCompatible(getLhs().getType().getShape().take_front(leadingRank),
+                                   getRhs().getType().getShape().take_front(leadingRank))) {
+    return emitOpError(
+        "expected lhs and rhs leading dimensions to be compatible");
+  }
   return success();
 }
 
@@ -1098,21 +1201,21 @@ void OuterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto rhs = getRhs();
   auto result = getResult();
 
-  auto lhsShape = *shapeInfo.getShape(lhs);
-  auto rhsShape = *shapeInfo.getShape(rhs);
+  auto lhsShape = getStoredShapeOrAssert(shapeInfo, lhs);
+  auto rhsShape = getStoredShapeOrAssert(shapeInfo, rhs);
 
-  unsigned leadingRank = lhsShape.size();
-  if (lhsShape.size() >= rhsShape.size()) {
+  unsigned leadingRank = lhsShape.rank();
+  if (lhsShape.rank() >= rhsShape.rank()) {
     leadingRank -= 1; // Ignore the last dimension.
   }
 
-  ShapeVector resultShape(lhsShape.begin(), lhsShape.end());
-  if (lhsShape.size() <= rhsShape.size()) {
-    resultShape.push_back(rhsShape.back());
+  TileShape resultShape(lhsShape.asArrayRef());
+  if (lhsShape.rank() <= rhsShape.rank()) {
+    resultShape.push_back(rhsShape[rhsShape.rank() - 1]);
   }
   shapeInfo.markEquivalent(result, resultShape);
-  shapeInfo.markEquivalent(lhsShape.take_front(leadingRank),
-                           rhsShape.take_front(leadingRank));
+  shapeInfo.markEquivalent(lhsShape.takeFront(leadingRank).asArrayRef(),
+                           rhsShape.takeFront(leadingRank).asArrayRef());
   if (auto maskPair = state.getMask()) {
     auto [mask, maskedoff] = *maskPair;
     shapeInfo.markEquivalent(result, mask);
@@ -1171,7 +1274,7 @@ Operation *OuterOp::unroll(OpBuilder &builder, UnrollOptions options,
   return outerOp;
 }
 
-std::optional<ShapeVector> OuterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> OuterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1217,8 +1320,8 @@ void StepOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto sizes = getMixedSizes();
   auto result = getResult();
 
-  ShapeVector shape = llvm::map_to_vector(
-      sizes, [&](OpFoldResult ofr) { return DimSize(ofr); });
+  TileShape shape(llvm::map_to_vector(
+      sizes, [&](OpFoldResult ofr) { return DimSize(ofr); }));
 
   shapeInfo.markEquivalent(result, shape);
   if (auto maskPair = state.getMask()) {
@@ -1306,7 +1409,7 @@ Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 }
 
-std::optional<ShapeVector> StepOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> StepOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1346,7 +1449,7 @@ Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
   return castOp;
 }
 
-std::optional<ShapeVector> CastOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> CastOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1391,7 +1494,7 @@ Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
   return selectOp;
 }
 
-std::optional<ShapeVector> SelectOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> SelectOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1428,15 +1531,14 @@ LogicalResult GatherOp::verify() {
   if ((*this)->getParentOfType<YieldOp>()) {
     return emitOpError("`zuan.gather` cannot be nested inside a `zuan.yield`");
   }
-  // TODO: Verify index shapes.
-  return success();
+  return verifyGatherScatterIndexShapes((*this), indices, getResult().getType());
 }
 
 void GatherOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
   auto indices = getIndices();
   auto result = getResult();
   if (indices.empty()) {
-    shapeInfo.markEquivalent(result, ShapeVector{});
+    shapeInfo.markEquivalent(result, TileShape{});
     return;
   }
   shapeInfo.markEquivalent(indices[0], result);
@@ -1466,7 +1568,7 @@ Operation *GatherOp::unroll(OpBuilder &builder, UnrollOptions options,
   return gatherOp;
 }
 
-std::optional<ShapeVector> GatherOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> GatherOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto result = getResult();
   return shapeInfo.getShapeWithEquivalence(result);
 }
@@ -1482,8 +1584,7 @@ LogicalResult ScatterOp::verify() {
     return emitOpError("expected the number of indices to be the same as the "
                        "rank of the base memref");
   }
-  // TODO: Verify index shapes.
-  return success();
+  return verifyGatherScatterIndexShapes((*this), indices, getValue().getType());
 }
 
 void ScatterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
@@ -1527,7 +1628,7 @@ Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
   return scatterOp;
 }
 
-std::optional<ShapeVector> ScatterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
+std::optional<TileShape> ScatterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
   auto value = getValue();
   return shapeInfo.getShapeWithEquivalence(value);
 }

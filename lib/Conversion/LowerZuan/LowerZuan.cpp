@@ -47,6 +47,11 @@ struct ZuanUnrollLeadingDimPattern : OpRewritePattern<DynamicOp> {
           op, "empty yield region, other patterns are needed");
     }
 
+    // `LowerZuan` only ensures that tiles are reduced to at most `targetRank`.
+    // It does not guarantee that a remaining 2-D tile has a static outer
+    // dimension. The VP path relies on `-zuan-stripmining`/tiling to eliminate
+    // dynamic outer 2-D cases before `ConvertToVP`; otherwise the generic loop
+    // lowering in this pass is the fallback.
     if (isDynamicOpUnrolled(op, targetRank, shapeInfo)) {
       return rewriter.notifyMatchFailure(
           op, "expected all the shapes to be <= targetRank");
@@ -231,13 +236,10 @@ struct ZuanLowerReductionPattern : OpRewritePattern<ReductionOp> {
     }
 
     auto loc = op.getLoc();
-    auto sourceShapeRef = *shapeInfo.getShape(op.getTile());
-    auto resultShapeRef = *shapeInfo.getShape(op.getResult());
+    auto sourceShapeRef = *shapeInfo.lookupShape(op.getTile());
+    auto resultShapeRef = *shapeInfo.lookupShape(op.getResult());
 
-    SmallVector<OpFoldResult> resultShape =
-        llvm::map_to_vector(resultShapeRef, [&](DimSize dim) {
-          return dim.getOrCreateOpFoldResult(rewriter, loc);
-        });
+    SmallVector<OpFoldResult> resultShape = resultShapeRef.reify(rewriter, loc);
 
     auto zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     auto one = arith::ConstantIndexOp::create(rewriter, loc, 1);

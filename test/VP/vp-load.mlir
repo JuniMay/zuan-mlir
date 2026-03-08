@@ -19,3 +19,14 @@ func.func @vp_load_strided(%mem: memref<?x?xf32, strided<[?, 3]>>, %i: index, %j
   } : vector<[4]xf32>
   return %res : vector<[4]xf32>
 }
+
+// CHECK-LABEL: func.func @vp_load_masked_i1
+func.func @vp_load_masked_i1(%mem: memref<?xi1>, %i: index, %evl: index, %mask: vector<[8]xi1>) -> vector<[8]xi1> {
+  // CHECK: "llvm.intr.vp.load"
+  // CHECK-NOT: vp.rvv_intr.vlm
+  %res = vp.predicate %evl : index, mask = %mask : vector<[8]xi1>, passthru = none, maskedoff = none {
+    %vec = vp.load %mem[%i] : memref<?xi1>, vector<[8]xi1>
+    vector.yield %vec : vector<[8]xi1>
+  } : vector<[8]xi1>
+  return %res : vector<[8]xi1>
+}

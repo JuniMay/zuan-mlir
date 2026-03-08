@@ -11,6 +11,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/Debug.h"
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 
@@ -25,54 +26,94 @@
 namespace mlir {
 namespace zuan {
 
-static std::variant<int64_t, Value> getDim(OpFoldResult ofr) {
-  if (auto val = dyn_cast<Value>(ofr)) {
-    if (isa<vp::GetVLOp>(val.getDefiningOp())) {
-      // Only setvl is allowed to define the value in the RVV backend.
-      return val;
-    } else if (auto op = dyn_cast<arith::ConstantOp>(val.getDefiningOp())) {
-      // Canonicalize constant op to the corresponding integer value.
-      return cast<IntegerAttr>(op.getValue()).getInt();
-    }
-  } else if (auto attr = ofr.dyn_cast<Attribute>()) {
-    return cast<IntegerAttr>(attr).getInt();
+static FailureOr<Value> cloneMappedValue(OpBuilder &builder, Value value,
+                                         VPConversionState &state) {
+  if (state.valueMap.contains(value)) {
+    return state.valueMap.lookup(value);
   }
-  LLVM_DEBUG(DBGS() << "Invalid dim value." << ofr);
-  llvm_unreachable("Invalid dim value.");
+  auto result = dyn_cast<OpResult>(value);
+  if (!result) {
+    return failure();
+  }
+  Operation *cloned = builder.clone(*result.getOwner(), state.valueMap);
+  return cloned->getResult(result.getResultNumber());
 }
 
-/// Major Dim, Minor Dim, Rank
-static std::tuple<int64_t, std::optional<Value>, int64_t>
-getRankedShape(OpBuilder &builder, Location loc, ArrayRef<DimSize> shape,
-               VPConversionState &state) {
-  if (shape.size() == 2) {
-    auto dim0 = getDim(shape[0].getOrCreateOpFoldResult(builder, loc));
-    auto dim1 = getDim(shape[1].getOrCreateOpFoldResult(builder, loc));
-
-    auto dim1Val = std::get<Value>(dim1);
-    Value cloned = builder.clone(*dim1Val.getDefiningOp(), state.valueMap)
-                       ->getResult(0); // XXX: idx 0 is not always correct
-
-    return {std::get<int64_t>(dim0), cloned, 2};
-  } else if (shape.size() == 1) {
-    auto dim = getDim(shape[0].getOrCreateOpFoldResult(builder, loc));
-    if (auto val = std::get_if<int64_t>(&dim)) {
-      return {*val, std::nullopt, 1};
-    } else if (auto val = std::get_if<Value>(&dim)) {
-      Value cloned = builder.clone(*val->getDefiningOp(), state.valueMap)
-                         ->getResult(0); // XXX: idx 0 is not always correct
-      return {1, cloned, 1};
-    } else {
-      // unreachable
-      llvm_unreachable("Invalid dim value.");
-    }
-  } else if (shape.empty()) {
-    // 0-D Vector, this is just a scalar.
-    return {1, std::nullopt, 0};
-  } else {
-    LLVM_DEBUG(DBGS() << "Invalid shape size." << shape.size());
-    llvm_unreachable("Invalid shape size.");
+static FailureOr<Value> materializeDimValue(OpBuilder &builder, Location loc,
+                                            DimSize dim,
+                                            VPConversionState &state) {
+  if (auto value = dim.getValue()) {
+    return cloneMappedValue(builder, *value, state);
   }
+  return dim.getOrCreateValue(builder, loc);
+}
+
+static FailureOr<VPShapePlan> planVPShape(OpBuilder &builder, Location loc,
+                                          const TileShape &shape,
+                                          VPConversionState &state) {
+  VPShapePlan plan;
+  plan.rank = shape.rank();
+  if (shape.empty()) {
+    plan.kind = VPShapePlan::Kind::Scalar;
+    return plan;
+  }
+  if (shape.rank() == 1) {
+    auto evl = materializeDimValue(builder, loc, shape[0], state);
+    if (failed(evl)) {
+      return failure();
+    }
+    plan.kind = VPShapePlan::Kind::Vector1D;
+    plan.evl = *evl;
+    return plan;
+  }
+  if (shape.rank() == 2) {
+    if (auto rows = shape[0].getInteger()) {
+      // A static outer dimension is represented as a row-pack in the current
+      // emitter. This is a legality classification, not a profitability model:
+      // cost control is expected to happen earlier via tiling/unrolling.
+      auto evl = materializeDimValue(builder, loc, shape[1], state);
+      if (failed(evl)) {
+        return failure();
+      }
+      plan.kind = VPShapePlan::Kind::RowPack2D;
+      plan.staticRows = *rows;
+      plan.evl = *evl;
+      return plan;
+    }
+    auto dynamicRows = materializeDimValue(builder, loc, shape[0], state);
+    auto evl = materializeDimValue(builder, loc, shape[1], state);
+    if (failed(dynamicRows) || failed(evl)) {
+      return failure();
+    }
+    plan.kind = VPShapePlan::Kind::DynamicOuterLoopAndVector;
+    plan.dynamicRows = *dynamicRows;
+    plan.evl = *evl;
+    return plan;
+  }
+  return failure();
+}
+
+static FailureOr<unsigned> getStaticRowCount(const VPShapePlan &plan) {
+  if (!plan.hasStaticRows()) {
+    return failure();
+  }
+  return static_cast<unsigned>(plan.staticRows);
+}
+
+static Value lookupTileComponent(Value value, unsigned rowIdx,
+                                 VPConversionState &state) {
+  return state.tileMap.lookup(value)[rowIdx];
+}
+
+static FailureOr<Value> lookupScalarValue(OpBuilder &builder, Value value,
+                                          VPConversionState &state) {
+  if (state.valueMap.contains(value)) {
+    return state.valueMap.lookup(value);
+  }
+  if (!value.getDefiningOp()) {
+    return failure();
+  }
+  return cloneMappedValue(builder, value, state);
 }
 
 /// Get the mapped mask and maskedoff values.
@@ -80,10 +121,10 @@ static std::pair<Value, Value> getMaskPair(VPConversionState &state,
                                            unsigned idx) {
   if (auto pair = state.getMasks()) {
     auto [mask, maskedoff] = *pair;
-    Value mappedMask = state.tileMap[mask][idx];
+    Value mappedMask = lookupTileComponent(mask, idx, state);
     Value mappedMaskedoff = nullptr;
     if (maskedoff) {
-      mappedMaskedoff = state.tileMap[maskedoff][idx];
+      mappedMaskedoff = lookupTileComponent(maskedoff, idx, state);
     }
     return std::make_pair(mappedMask, mappedMaskedoff);
   }
@@ -125,23 +166,39 @@ static Value buildZero(OpBuilder &builder, Location loc, Type type) {
                                            builder.getZeroAttr(type));
 }
 
-static void handleLoad(OpBuilder &builder, Location loc, Value result,
-                       Value base, ShapeInfo &shapeInfo,
-                       VPConversionState &state) {
+static LogicalResult handleLoad(OpBuilder &builder, Location loc, Value result,
+                                Value base, ShapeInfo &shapeInfo,
+                                VPConversionState &state) {
   auto elementType = cast<MemRefType>(base.getType()).getElementType();
 
-  auto shape = shapeInfo.getShape(result);
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(result);
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    // The current VP emitter stores tiles as a statically-sized row vector list
+    // in `VPConversionState::tileMap`. A 2-D tile with a dynamic outer
+    // dimension must therefore be removed earlier by `-zuan-stripmining`
+    // and `ZuanTilingPattern`, or lowered through the loop-based path instead of
+    // the VP path.
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
+  auto rank = shape->rank();
 
   SmallVector<Value> vectors;
   auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       SmallVector<OpFoldResult> offsets;
       SmallVector<OpFoldResult> sizes;
       SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
@@ -151,7 +208,7 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
         sizes.push_back(builder.getIndexAttr(1));
       }
       offsets.push_back(builder.getIndexAttr(0));
-      sizes.push_back(*cols);
+      sizes.push_back(plan->evl);
 
       Value subview =
           memref::SubViewOp::create(builder, loc, base, offsets, sizes, strides);
@@ -162,7 +219,7 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
       auto rowLoadOp = vp::LoadOp::create(builder, loc, vecType, *reducedSubview,
                                                   ValueRange{zero});
 
-      auto predOp = vp::predicateOperation(builder, rowLoadOp, *cols, mask,
+      auto predOp = vp::predicateOperation(builder, rowLoadOp, plan->evl, mask,
                                            nullptr, maskedoff);
       vectors.push_back(predOp->getResult(0));
     } else {
@@ -198,23 +255,38 @@ static void handleLoad(OpBuilder &builder, Location loc, Value result,
   }
   // Map the generated values.
   state.tileMap[result] = vectors;
+  return success();
 }
 
-static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
-                          ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleStoreOp(OpBuilder &builder, StoreOp storeOp,
+                                   ShapeInfo &shapeInfo,
+                                   VPConversionState &state) {
   auto loc = storeOp.getLoc();
-  auto shape = shapeInfo.getShape(storeOp.getValue());
+  auto *shape = shapeInfo.lookupShape(storeOp.getValue());
+  if (!shape) {
+    return failure();
+  }
   auto base = state.valueMap.lookup(storeOp.getBase());
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    // See `handleLoad`: the current VP tile representation cannot materialize a
+    // runtime-sized row list.
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
+  auto rank = shape->rank();
 
   auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    auto row = state.tileMap[storeOp.getValue()][i];
-    if (cols.has_value()) {
+    auto row = lookupTileComponent(storeOp.getValue(), i, state);
+    if (plan->hasVector()) {
       SmallVector<OpFoldResult> offsets;
       SmallVector<OpFoldResult> sizes;
       SmallVector<OpFoldResult> strides(rank, builder.getIndexAttr(1));
@@ -224,7 +296,7 @@ static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
         sizes.push_back(builder.getIndexAttr(1));
       }
       offsets.push_back(builder.getIndexAttr(0));
-      sizes.push_back(*cols);
+      sizes.push_back(plan->evl);
 
       Value subview =
           memref::SubViewOp::create(builder, loc, base, offsets, sizes, strides);
@@ -233,7 +305,7 @@ static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
           builder, loc, subview, {ShapedType::kDynamic});
       auto rowStoreOp = vp::StoreOp::create(builder, loc, row, *reducedSubview,
                                                     ValueRange{zero});
-      vp::predicateOperation(builder, rowStoreOp, *cols, mask, nullptr,
+      vp::predicateOperation(builder, rowStoreOp, plan->evl, mask, nullptr,
                              maskedoff);
     } else {
       // scalar store
@@ -259,40 +331,73 @@ static void handleStoreOp(OpBuilder &builder, StoreOp storeOp,
       }
     }
   }
+  return success();
 }
 
-static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
-                          ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleSplatOp(OpBuilder &builder, SplatOp splatOp,
+                                   ShapeInfo &shapeInfo,
+                                   VPConversionState &state) {
 
   auto loc = splatOp->getLoc();
 
   auto result = splatOp.getResult();
-  auto shape = shapeInfo.getShape(result);
-  auto source = state.valueMap.lookup(splatOp.getValue());
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(result);
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
+  Value source = splatOp.getValue();
+  bool sourceIsTile = isa<TileType>(source.getType());
 
   SmallVector<Value> values;
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
-      if (isa<TileType>(source.getType())) {
-        values.push_back(state.tileMap[source][0]);
+    if (plan->hasVector()) {
+      if (sourceIsTile) {
+        auto &sourceRows = state.tileMap[source];
+        Value sourceRow = sourceRows[std::min<size_t>(i, sourceRows.size() - 1)];
+        if (isa<VectorType>(sourceRow.getType())) {
+          values.push_back(sourceRow);
+        } else {
+          auto vecType = getVectorType(result.getType().getElementType(), state);
+          auto splat = vector::BroadcastOp::create(builder, loc, vecType, sourceRow);
+          auto predOp = vp::predicateOperation(builder, splat, plan->evl, mask,
+                                               nullptr, maskedoff);
+          values.push_back(predOp->getResult(0));
+        }
       } else {
+        auto scalar = lookupScalarValue(builder, source, state);
+        if (failed(scalar)) {
+          return failure();
+        }
         auto vecType = getVectorType(result.getType().getElementType(), state);
-        auto splatOp =
-            vector::BroadcastOp::create(builder, loc, vecType, source);
-        auto predOp = vp::predicateOperation(builder, splatOp, *cols, mask,
+        auto splat = vector::BroadcastOp::create(builder, loc, vecType, *scalar);
+        auto predOp = vp::predicateOperation(builder, splat, plan->evl, mask,
                                              nullptr, maskedoff);
         values.push_back(predOp->getResult(0));
       }
     } else {
-      // The source is a scalar, and the length is a constant (rows), so
-      // we can just splat the scalar.
-      auto scalar = state.valueMap.lookup(source);
+      Value scalar = nullptr;
+      if (sourceIsTile) {
+        scalar = lookupTileComponent(source, 0, state);
+      } else {
+        auto mappedScalar = lookupScalarValue(builder, source, state);
+        if (failed(mappedScalar)) {
+          return failure();
+        }
+        scalar = *mappedScalar;
+      }
       if (mask) {
         auto ifOp = scf::IfOp::create(builder, 
             loc, mask,
@@ -317,30 +422,42 @@ static void handleSplatOp(OpBuilder &builder, SplatOp splatOp,
     }
   }
   state.tileMap[result] = values;
+  return success();
 }
 
 template <typename ElementwiseOp>
-static void handleElementwise(OpBuilder &builder, Operation *op,
-                              ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleElementwise(OpBuilder &builder, Operation *op,
+                                       ShapeInfo &shapeInfo,
+                                       VPConversionState &state) {
   auto loc = op->getLoc();
-  auto shape = shapeInfo.getShape(op->getResult(0));
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(op->getResult(0));
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   SmallVector<Value> resultValues;
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     SmallVector<Value> operands;
 
     for (auto operand : op->getOperands()) {
-      operands.push_back(state.tileMap[operand][i]);
+      operands.push_back(lookupTileComponent(operand, i, state));
     }
 
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto elementwiseOp = ElementwiseOp::create(builder, loc, operands);
-      auto predOp = vp::predicateOperation(builder, elementwiseOp, *cols, mask,
+      auto predOp = vp::predicateOperation(builder, elementwiseOp, plan->evl, mask,
                                            nullptr, maskedoff);
       resultValues.push_back(predOp->getResult(0));
     } else {
@@ -358,17 +475,19 @@ static void handleElementwise(OpBuilder &builder, Operation *op,
   }
 
   state.tileMap[op->getResult(0)] = resultValues;
+  return success();
 }
 
 template <typename ArithOp>
-static void handleArithOp(OpBuilder &builder, Operation *op,
-                          ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
+                                   ShapeInfo &shapeInfo,
+                                   VPConversionState &state) {
   LLVM_DEBUG(DBGS() << "Handling arith op: " << *op << "\n");
 
   if (!isa<TileType>(op->getResult(0).getType())) {
     LLVM_DEBUG(DBGS() << "Result is not a tile type, cloning op\n");
     builder.clone(*op, state.valueMap);
-    return;
+    return success();
   }
 
   Type elementType =
@@ -381,15 +500,25 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
 
   auto loc = op->getLoc();
 
-  auto shape = shapeInfo.getShape(op->getOperand(passthruIdx));
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(op->getOperand(passthruIdx));
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   auto lhsValues = state.tileMap[op->getOperand(0)];
   auto rhsValues = state.tileMap[op->getOperand(1)];
 
   SmallVector<Value> resultValues;
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     Value lhs = lhsValues[i];
     Value rhs = rhsValues[i];
 
@@ -402,9 +531,9 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto arithOp = ArithOp::create(builder, loc, lhs, rhs);
-      auto predOp = vp::predicateOperation(builder, arithOp, *cols, mask,
+      auto predOp = vp::predicateOperation(builder, arithOp, plan->evl, mask,
                                            passthru, maskedoff);
       resultValues.push_back(predOp->getResult(0));
     } else {
@@ -421,29 +550,41 @@ static void handleArithOp(OpBuilder &builder, Operation *op,
     }
   }
   state.tileMap[op->getResult(0)] = resultValues;
+  return success();
 }
 
 template <typename CmpOp>
-static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
-                        VPConversionState &state) {
+static LogicalResult handleCmpOp(OpBuilder &builder, CmpOp op,
+                                 ShapeInfo &shapeInfo,
+                                 VPConversionState &state) {
   LLVM_DEBUG(DBGS() << "Handling cmp op: " << *op << "\n");
 
   if (!isa<TileType>(op->getResult(0).getType())) {
     LLVM_DEBUG(DBGS() << "Result is not a tile type, cloning op\n");
     builder.clone(*op, state.valueMap);
-    return;
+    return success();
   }
 
   Location loc = op->getLoc();
-  auto shape = shapeInfo.getShape(op->getOperand(0));
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(op->getOperand(0));
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   auto lhsValues = state.tileMap[op->getOperand(0)];
   auto rhsValues = state.tileMap[op->getOperand(1)];
 
   SmallVector<Value> resultValues;
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     Value lhs = lhsValues[i];
     Value rhs = rhsValues[i];
 
@@ -451,9 +592,9 @@ static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto cmpOp = CmpOp::create(builder, loc, op.getPredicate(), lhs, rhs);
-      Operation *predOp = vp::predicateOperation(builder, cmpOp, *cols, mask,
+      Operation *predOp = vp::predicateOperation(builder, cmpOp, plan->evl, mask,
                                                  nullptr, maskedoff);
       resultValues.push_back(predOp->getResult(0));
     } else {
@@ -470,71 +611,109 @@ static void handleCmpOp(OpBuilder &builder, CmpOp op, ShapeInfo shapeInfo,
     }
   }
   state.tileMap[op->getResult(0)] = resultValues;
+  return success();
 }
 
-static void handleReductionOp(OpBuilder &builder, ReductionOp reductionOp,
-                              ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleReductionOp(OpBuilder &builder, ReductionOp reductionOp,
+                                       ShapeInfo &shapeInfo,
+                                       VPConversionState &state) {
   auto loc = reductionOp->getLoc();
-  auto shape = shapeInfo.getShape(reductionOp.getTile());
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
-
-  assert(rows == 1 && "ReductionOp only supports 1 row.");
+  auto *shape = shapeInfo.lookupShape(reductionOp.getTile());
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan)) {
+    return failure();
+  }
+  if (plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector ||
+      plan->kind == VPShapePlan::Kind::RowPack2D) {
+    return failure();
+  }
 
   auto maskPair = getMaskPair(state, 0);
   auto mask = maskPair.first;
   auto maskedoff = maskPair.second;
 
-  auto vector = state.tileMap[reductionOp.getTile()][0];
   auto kind = static_cast<vector::CombiningKind>(reductionOp.getKind());
   Value init = reductionOp.getInit();
   if (init) {
-    init = state.tileMap[init][0];
+    init = lookupTileComponent(init, 0, state);
   }
 
-  auto reduction = vector::ReductionOp::create(builder, 
-      loc, kind, vector, init, arith::FastMathFlags::reassoc);
-  auto predOp = vp::predicateOperation(builder, reduction, *cols, mask, nullptr,
-                                       maskedoff);
-  /// The old reduction generates a tile, so map in tileMap.
+  if (plan->kind == VPShapePlan::Kind::Scalar) {
+    Value scalar = lookupTileComponent(reductionOp.getTile(), 0, state);
+    Value reduced = init ? createCombiningOp(builder, loc, reductionOp.getKind(),
+                                             scalar, init)
+                         : scalar;
+    if (mask) {
+      reduced = createSCFIfOp(builder, loc, mask, maskedoff,
+                              [&](OpBuilder &, Location) { return reduced; },
+                              [&](OpBuilder &b, Location scalarLoc) {
+                                return maskedoff ? maskedoff
+                                                 : buildZero(b, scalarLoc,
+                                                             reduced.getType());
+                              });
+    }
+    state.tileMap[reductionOp.getResult()] = {reduced};
+    return success();
+  }
+
+  auto vector = lookupTileComponent(reductionOp.getTile(), 0, state);
+  auto reduction = vector::ReductionOp::create(builder, loc, kind, vector, init,
+                                               arith::FastMathFlags::reassoc);
+  auto predOp = vp::predicateOperation(builder, reduction, plan->evl, mask,
+                                       nullptr, maskedoff);
   state.tileMap[reductionOp.getResult()] = {predOp->getResult(0)};
-  // TODO: what if this is a col vector.
+  return success();
 }
 
-static void handleStepOp(OpBuilder &builder, StepOp stepOp,
-                         ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleStepOp(OpBuilder &builder, StepOp stepOp,
+                                  ShapeInfo &shapeInfo,
+                                  VPConversionState &state) {
   auto loc = stepOp->getLoc();
   auto dim = stepOp.getDim().getZExtValue();
   auto start = state.valueMap.lookup(stepOp.getStart());
-  auto shape = shapeInfo.getShape(stepOp.getResult());
-  auto [rows, cols, rank] = getRankedShape(builder, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(stepOp.getResult());
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   SmallVector<Value> values;
   auto elementType = stepOp.getResult().getType().getElementType();
   auto vectorType = getVectorType(elementType, state);
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (dim == shape->size() - 1 && cols.has_value()) {
+    if (plan->hasVector() && dim == shape->size() - 1) {
       Operation *step = vp::StepOp::create(builder, loc, vectorType);
-      step = vp::predicateOperation(builder, step, *cols, mask, nullptr,
+      step = vp::predicateOperation(builder, step, plan->evl, mask, nullptr,
                                     maskedoff);
       auto startSplat =
           vector::BroadcastOp::create(builder, loc, vectorType, start);
       Operation *add =
           arith::AddIOp::create(builder, loc, startSplat, step->getResult(0));
       add =
-          vp::predicateOperation(builder, add, *cols, mask, nullptr, maskedoff);
+          vp::predicateOperation(builder, add, plan->evl, mask, nullptr, maskedoff);
       values.push_back(add->getResult(0));
-    } else if (cols.has_value()) {
+    } else if (plan->hasVector()) {
       auto increment = arith::ConstantOp::create(builder, 
           loc, start.getType(), builder.getIntegerAttr(start.getType(), i));
       Value newStart = arith::AddIOp::create(builder, loc, start, increment);
       Operation *splat =
           vector::BroadcastOp::create(builder, loc, vectorType, newStart);
-      splat = vp::predicateOperation(builder, splat, *cols, mask, nullptr,
+      splat = vp::predicateOperation(builder, splat, plan->evl, mask, nullptr,
                                      maskedoff);
       values.push_back(splat->getResult(0));
     } else {
@@ -554,6 +733,7 @@ static void handleStepOp(OpBuilder &builder, StepOp stepOp,
   }
 
   state.tileMap[stepOp.getResult()] = values;
+  return success();
 }
 
 Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
@@ -600,29 +780,40 @@ Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
   return casted;
 }
 
-static void handleCastOp(OpBuilder &b, CastOp castOp, ShapeInfo &shapeInfo,
-                         VPConversionState &state) {
+static LogicalResult handleCastOp(OpBuilder &b, CastOp castOp,
+                                  ShapeInfo &shapeInfo,
+                                  VPConversionState &state) {
   auto loc = castOp->getLoc();
   auto source = castOp.getTile();
   auto result = castOp.getResult();
   auto outType = result.getType().getElementType();
   auto kind = castOp.getKind();
 
-  auto shape = shapeInfo.getShape(result);
-  auto [rows, cols, rank] = getRankedShape(b, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(result);
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(b, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   SmallVector<Value> values;
 
-  for (int64_t i = 0; i < rows; ++i) {
-    Value sourceRow = state.tileMap[source][i];
+  for (unsigned i = 0; i < *rows; ++i) {
+    Value sourceRow = lookupTileComponent(source, i, state);
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto outVectorType = getVectorType(outType, state);
       auto casted = createCastOp(b, loc, kind, outVectorType, sourceRow);
-      auto predOp = vp::predicateOperation(b, casted.getDefiningOp(), *cols,
+      auto predOp = vp::predicateOperation(b, casted.getDefiningOp(), plan->evl,
                                            mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
     } else {
@@ -640,34 +831,46 @@ static void handleCastOp(OpBuilder &b, CastOp castOp, ShapeInfo &shapeInfo,
   }
 
   state.tileMap[result] = values;
+  return success();
 }
 
-static void handleSelectOp(OpBuilder &b, SelectOp selectOp,
-                           ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleSelectOp(OpBuilder &b, SelectOp selectOp,
+                                    ShapeInfo &shapeInfo,
+                                    VPConversionState &state) {
   auto loc = selectOp->getLoc();
 
   auto cond = selectOp.getCond();
   auto lhs = selectOp.getLhs();
   auto rhs = selectOp.getRhs();
 
-  auto shape = shapeInfo.getShape(selectOp.getResult());
-  auto [rows, cols, rank] = getRankedShape(b, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(selectOp.getResult());
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(b, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   SmallVector<Value> values;
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    Value condRow = state.tileMap[cond][i];
-    Value lhsRow = state.tileMap[lhs][i];
-    Value rhsRow = state.tileMap[rhs][i];
+    Value condRow = lookupTileComponent(cond, i, state);
+    Value lhsRow = lookupTileComponent(lhs, i, state);
+    Value rhsRow = lookupTileComponent(rhs, i, state);
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto selectOp = arith::SelectOp::create(b, loc, condRow, lhsRow, rhsRow);
       auto predOp =
-          vp::predicateOperation(b, selectOp, *cols, mask, nullptr, maskedoff);
+          vp::predicateOperation(b, selectOp, plan->evl, mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
     } else {
       // Scalar select
@@ -685,20 +888,38 @@ static void handleSelectOp(OpBuilder &b, SelectOp selectOp,
     }
   }
   state.tileMap[selectOp.getResult()] = values;
+  return success();
 }
 
-static void handleOuterOp(OpBuilder &b, OuterOp outerOp, ShapeInfo &shapeInfo,
-                          VPConversionState &state) {
+static LogicalResult handleOuterOp(OpBuilder &b, OuterOp outerOp,
+                                   ShapeInfo &shapeInfo,
+                                   VPConversionState &state) {
   auto loc = outerOp->getLoc();
 
   auto lhs = outerOp.getLhs();
   auto rhs = outerOp.getRhs();
 
-  auto lhsShape = shapeInfo.getShape(lhs);
-  auto rhsShape = shapeInfo.getShape(rhs);
+  auto *lhsShape = shapeInfo.lookupShape(lhs);
+  auto *rhsShape = shapeInfo.lookupShape(rhs);
+  if (!lhsShape || !rhsShape) {
+    return failure();
+  }
 
-  auto [lhsRows, lhsCols, lhsRank] = getRankedShape(b, loc, *lhsShape, state);
-  auto [rhsRows, rhsCols, rhsRank] = getRankedShape(b, loc, *rhsShape, state);
+  auto lhsPlan = planVPShape(b, loc, *lhsShape, state);
+  auto rhsPlan = planVPShape(b, loc, *rhsShape, state);
+  if (failed(lhsPlan) || failed(rhsPlan) ||
+      lhsPlan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector ||
+      rhsPlan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto lhsRows = getStaticRowCount(*lhsPlan);
+  auto rhsRows = getStaticRowCount(*rhsPlan);
+  if (failed(lhsRows) || failed(rhsRows)) {
+    return failure();
+  }
+  if (*rhsRows != 1) {
+    return failure();
+  }
 
   auto kind = outerOp.getKind();
 
@@ -709,34 +930,34 @@ static void handleOuterOp(OpBuilder &b, OuterOp outerOp, ShapeInfo &shapeInfo,
 
   SmallVector<Value> values;
 
-  if (rhsCols.has_value()) {
-    for (int64_t i = 0; i < lhsRows; ++i) {
+  if (rhsPlan->hasVector()) {
+    for (unsigned i = 0; i < *lhsRows; ++i) {
       auto maskPair = getMaskPair(state, i);
       auto mask = maskPair.first;
       auto maskedoff = maskPair.second;
 
-      Value lhsRow = state.tileMap[lhs][i];
-      Value rhsRow = state.tileMap[rhs][0];
+      Value lhsRow = lookupTileComponent(lhs, i, state);
+      Value rhsRow = lookupTileComponent(rhs, 0, state);
 
       Operation *lhsSplat =
           vector::BroadcastOp::create(b, loc, rhsRow.getType(), lhsRow);
-      lhsSplat = vp::predicateOperation(b, lhsSplat, *rhsCols, mask, nullptr,
+      lhsSplat = vp::predicateOperation(b, lhsSplat, rhsPlan->evl, mask, nullptr,
                                         maskedoff);
       auto outer =
           createCombiningOp(b, loc, kind, lhsSplat->getResult(0), rhsRow);
-      auto predOp = vp::predicateOperation(b, outer.getDefiningOp(), *rhsCols,
+      auto predOp = vp::predicateOperation(b, outer.getDefiningOp(), rhsPlan->evl,
                                            mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
     }
   } else {
     // 1-D x 0-D
-    for (int64_t i = 0; i < lhsRows; ++i) {
+    for (unsigned i = 0; i < *lhsRows; ++i) {
       auto maskPair = getMaskPair(state, i);
       auto mask = maskPair.first;
       auto maskedoff = maskPair.second;
 
-      Value lhsRow = state.tileMap[lhs][i];
-      Value rhsRow = state.tileMap[rhs][0];
+      Value lhsRow = lookupTileComponent(lhs, i, state);
+      Value rhsRow = lookupTileComponent(rhs, 0, state);
 
       auto res = createSCFIfOp(
           b, loc, mask, maskedoff,
@@ -753,31 +974,43 @@ static void handleOuterOp(OpBuilder &b, OuterOp outerOp, ShapeInfo &shapeInfo,
   }
 
   state.tileMap[outerOp.getResult()] = values;
+  return success();
 }
 
-static void handleScatterOp(OpBuilder &b, ScatterOp scatterOp,
-                            ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleScatterOp(OpBuilder &b, ScatterOp scatterOp,
+                                     ShapeInfo &shapeInfo,
+                                     VPConversionState &state) {
   auto loc = scatterOp->getLoc();
   auto base = state.valueMap.lookup(scatterOp.getBase());
 
   auto value = scatterOp.getValue();
   auto indices = scatterOp.getIndices();
 
-  auto shape = shapeInfo.getShape(value);
-  auto [rows, cols, rank] = getRankedShape(b, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(value);
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(b, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
-    Value valueRow = state.tileMap[value][i];
+    Value valueRow = lookupTileComponent(value, i, state);
     SmallVector<Value> indicesRow = llvm::map_to_vector(
-        indices, [&](Value idx) { return state.tileMap[idx][i]; });
+        indices, [&](Value idx) { return lookupTileComponent(idx, i, state); });
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
       auto scatter = vp::ScatterOp::create(b, loc, valueRow, base, indicesRow);
-      vp::predicateOperation(b, scatter, *cols, mask, nullptr, maskedoff);
+      vp::predicateOperation(b, scatter, plan->evl, mask, nullptr, maskedoff);
     } else {
       if (mask) {
         // Scalar stores
@@ -796,10 +1029,12 @@ static void handleScatterOp(OpBuilder &b, ScatterOp scatterOp,
       }
     }
   }
+  return success();
 }
 
-static void handleGatherOp(OpBuilder &b, GatherOp gatherOp,
-                           ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleGatherOp(OpBuilder &b, GatherOp gatherOp,
+                                    ShapeInfo &shapeInfo,
+                                    VPConversionState &state) {
   auto loc = gatherOp->getLoc();
   auto base = state.valueMap.lookup(gatherOp.getBase());
 
@@ -808,24 +1043,34 @@ static void handleGatherOp(OpBuilder &b, GatherOp gatherOp,
 
   auto vectorType = getVectorType(result.getType().getElementType(), state);
 
-  auto shape = shapeInfo.getShape(result);
-  auto [rows, cols, rank] = getRankedShape(b, loc, *shape, state);
+  auto *shape = shapeInfo.lookupShape(result);
+  if (!shape) {
+    return failure();
+  }
+  auto plan = planVPShape(b, loc, *shape, state);
+  if (failed(plan) || plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+    return failure();
+  }
+  auto rows = getStaticRowCount(*plan);
+  if (failed(rows)) {
+    return failure();
+  }
 
   SmallVector<Value> values;
 
-  for (int64_t i = 0; i < rows; ++i) {
+  for (unsigned i = 0; i < *rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
 
     SmallVector<Value> indicesRow = llvm::map_to_vector(
-        indices, [&](Value idx) { return state.tileMap[idx][i]; });
+        indices, [&](Value idx) { return lookupTileComponent(idx, i, state); });
 
-    if (cols.has_value()) {
+    if (plan->hasVector()) {
 
       auto gather = vp::GatherOp::create(b, loc, vectorType, base, indicesRow);
       auto predOp =
-          vp::predicateOperation(b, gather, *cols, mask, nullptr, maskedoff);
+          vp::predicateOperation(b, gather, plan->evl, mask, nullptr, maskedoff);
       values.push_back(predOp->getResult(0));
     } else {
       // Scalar loads
@@ -843,10 +1088,12 @@ static void handleGatherOp(OpBuilder &b, GatherOp gatherOp,
   }
 
   state.tileMap[result] = values;
+  return success();
 }
 
-static void handleSCFForOp(RewriterBase &rewriter, scf::ForOp forOp,
-                           ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleSCFForOp(RewriterBase &rewriter, scf::ForOp forOp,
+                                    ShapeInfo &shapeInfo,
+                                    VPConversionState &state) {
   OpBuilder::InsertionGuard g(rewriter);
 
   auto inits = forOp.getInitArgs();
@@ -899,12 +1146,16 @@ static void handleSCFForOp(RewriterBase &rewriter, scf::ForOp forOp,
   rewriter.setInsertionPointToStart(newForOp.getBody());
 
   for (auto &op : forOp.getBodyRegion(0).getOps()) {
-    convertToVP(rewriter, &op, shapeInfo, state);
+    if (failed(convertToVP(rewriter, &op, shapeInfo, state))) {
+      return failure();
+    }
   }
+  return success();
 }
 
-static void handleSCFWhileOp(RewriterBase &rewriter, scf::WhileOp whileOp,
-                             ShapeInfo &shapeInfo, VPConversionState &state) {
+static LogicalResult handleSCFWhileOp(RewriterBase &rewriter, scf::WhileOp whileOp,
+                                      ShapeInfo &shapeInfo,
+                                      VPConversionState &state) {
   OpBuilder::InsertionGuard g(rewriter);
 
   auto inits = whileOp.getInits();
@@ -954,7 +1205,9 @@ static void handleSCFWhileOp(RewriterBase &rewriter, scf::WhileOp whileOp,
     }
 
     for (auto &op : whileOp.getBefore().getOps()) {
-      convertToVP(rewriter, &op, shapeInfo, state);
+      if (failed(convertToVP(rewriter, &op, shapeInfo, state))) {
+        return failure();
+      }
     }
   }
 
@@ -989,14 +1242,17 @@ static void handleSCFWhileOp(RewriterBase &rewriter, scf::WhileOp whileOp,
     }
 
     for (auto &op : whileOp.getAfter().getOps()) {
-      convertToVP(rewriter, &op, shapeInfo, state);
+      if (failed(convertToVP(rewriter, &op, shapeInfo, state))) {
+        return failure();
+      }
     }
   }
+  return success();
 }
 
-void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
-                 VPConversionState &state) {
-  TypeSwitch<Operation *, void>(op)
+LogicalResult convertToVP(RewriterBase &rewriter, Operation *op,
+                          ShapeInfo &shapeInfo, VPConversionState &state) {
+  return TypeSwitch<Operation *, LogicalResult>(op)
       .Case([&](DynamicOp dynamicOp) {
         auto inits = dynamicOp.getInits();
         state.valueMap.map(inits, inits);
@@ -1004,26 +1260,48 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         for (auto [init, arg] : llvm::zip(inits, args)) {
           if (cast<TileType>(arg.getType()).getRank() > 2) {
             // This is something not canonicalized, no need to handle.
-            assert(arg.getUses().empty() &&
-                   "Unexpected no uses for rank > 2 args.");
-            continue;
+            if (!arg.getUses().empty()) {
+              return rewriter.notifyMatchFailure(
+                  dynamicOp,
+                  "rank > 2 dynamic arguments must be dead before VP lowering");
+            }
+            return success();
           }
-          handleLoad(rewriter, arg.getLoc(), arg, state.valueMap.lookup(init),
-                     shapeInfo, state);
+          if (failed(handleLoad(rewriter, arg.getLoc(), arg,
+                                state.valueMap.lookup(init), shapeInfo,
+                                state))) {
+            return rewriter.notifyMatchFailure(dynamicOp,
+                                               "failed to lower dynamic init");
+          }
         }
         for (auto &op : dynamicOp.getBody().getOps()) {
-          convertToVP(rewriter, &op, shapeInfo, state);
+          if (failed(convertToVP(rewriter, &op, shapeInfo, state))) {
+            return failure();
+          }
         }
+        return success();
       })
       .Case([&](LoadOp loadOp) {
-        handleLoad(rewriter, loadOp->getLoc(), loadOp.getResult(),
-                   state.valueMap.lookup(loadOp.getBase()), shapeInfo, state);
+        if (failed(handleLoad(rewriter, loadOp->getLoc(), loadOp.getResult(),
+                              state.valueMap.lookup(loadOp.getBase()), shapeInfo,
+                              state))) {
+          return rewriter.notifyMatchFailure(loadOp, "failed to lower load to VP");
+        }
+        return success();
       })
       .Case([&](StoreOp storeOp) {
-        handleStoreOp(rewriter, storeOp, shapeInfo, state);
+        if (failed(handleStoreOp(rewriter, storeOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(storeOp,
+                                             "failed to lower store to VP");
+        }
+        return success();
       })
       .Case([&](SplatOp splatOp) {
-        handleSplatOp(rewriter, splatOp, shapeInfo, state);
+        if (failed(handleSplatOp(rewriter, splatOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(splatOp,
+                                             "failed to lower splat to VP");
+        }
+        return success();
       })
       .Case([&](YieldOp yieldOp) {
         auto operands = yieldOp.getOperands();
@@ -1036,8 +1314,11 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         }
         auto region = &yieldOp.getBody();
         for (auto &op : region->getOps()) {
-          convertToVP(rewriter, &op, shapeInfo, state);
+          if (failed(convertToVP(rewriter, &op, shapeInfo, state))) {
+            return failure();
+          }
         }
+        return success();
       })
       .Case<arith::AddIOp, arith::AddFOp, arith::MulIOp, arith::MulFOp,
             arith::DivSIOp, arith::DivUIOp, arith::DivFOp, arith::SubIOp,
@@ -1045,27 +1326,50 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
             arith::ShLIOp, arith::ShRUIOp, arith::ShRSIOp, arith::MaxSIOp,
             arith::MaxUIOp, arith::MaximumFOp, arith::MinimumFOp,
             arith::MaxNumFOp, arith::MinNumFOp, arith::MinSIOp, arith::MinUIOp>(
-          [&](auto arithOp) {
-            handleArithOp<decltype(arithOp)>(rewriter, op, shapeInfo, state);
+          [&](auto arithOp) -> LogicalResult {
+            if (failed(handleArithOp<decltype(arithOp)>(rewriter, op, shapeInfo,
+                                                        state))) {
+              return rewriter.notifyMatchFailure(op,
+                                                 "failed to lower arith op to VP");
+            }
+            return success();
           })
       .Case<arith::CmpIOp, arith::CmpFOp>(
-          [&](auto cmpOp) { handleCmpOp(rewriter, cmpOp, shapeInfo, state); })
+          [&](auto cmpOp) -> LogicalResult {
+            if (failed(handleCmpOp(rewriter, cmpOp, shapeInfo, state))) {
+              return rewriter.notifyMatchFailure(op,
+                                                 "failed to lower cmp op to VP");
+            }
+            return success();
+          })
       .Case([&](ReductionOp reductionOp) {
-        handleReductionOp(rewriter, reductionOp, shapeInfo, state);
+        if (failed(handleReductionOp(rewriter, reductionOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(
+              reductionOp, "only scalar and 1-D vector reductions are supported");
+        }
+        return success();
       })
       .Case([&](StepOp stepOp) {
-        handleStepOp(rewriter, stepOp, shapeInfo, state);
+        if (failed(handleStepOp(rewriter, stepOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(stepOp, "failed to lower step to VP");
+        }
+        return success();
       })
       .Case([&](CastOp castOp) {
-        handleCastOp(rewriter, castOp, shapeInfo, state);
+        if (failed(handleCastOp(rewriter, castOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(castOp, "failed to lower cast to VP");
+        }
+        return success();
       })
       .Case([&](MaskOp maskOp) {
         auto mask = maskOp.getMask();
         auto maskedoff = maskOp.getMaskedoff();
-        state.setMasks(mask, maskedoff);
+        ScopedVPMaskState scopedMask(state, mask, maskedoff);
         auto maskedOp = maskOp.getMaskedOp();
         if (maskedOp) {
-          convertToVP(rewriter, maskedOp, shapeInfo, state);
+          if (failed(convertToVP(rewriter, maskedOp, shapeInfo, state))) {
+            return failure();
+          }
         }
         auto yieldOp =
             cast<MaskYieldOp>(maskOp.getBody().front().getTerminator());
@@ -1074,23 +1378,38 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         for (auto [opd, result] : llvm::zip(operands, results)) {
           state.tileMap[result] = state.tileMap[opd];
         }
-
-        state.resetMasks();
+        return success();
       })
       .Case([&](SelectOp selectOp) {
-        handleSelectOp(rewriter, selectOp, shapeInfo, state);
+        if (failed(handleSelectOp(rewriter, selectOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(selectOp,
+                                             "failed to lower select to VP");
+        }
+        return success();
       })
       .Case([&](OuterOp outerOp) {
-        handleOuterOp(rewriter, outerOp, shapeInfo, state);
+        if (failed(handleOuterOp(rewriter, outerOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(outerOp,
+                                             "failed to lower outer op to VP");
+        }
+        return success();
       })
       .Case([&](ScatterOp scatterOp) {
-        handleScatterOp(rewriter, scatterOp, shapeInfo, state);
+        if (failed(handleScatterOp(rewriter, scatterOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(
+              scatterOp, "failed to lower scatter to VP");
+        }
+        return success();
       })
       .Case([&](GatherOp gatherOp) {
-        handleGatherOp(rewriter, gatherOp, shapeInfo, state);
+        if (failed(handleGatherOp(rewriter, gatherOp, shapeInfo, state))) {
+          return rewriter.notifyMatchFailure(gatherOp,
+                                             "failed to lower gather to VP");
+        }
+        return success();
       })
       .Case([&](scf::ForOp forOp) {
-        handleSCFForOp(rewriter, forOp, shapeInfo, state);
+        return handleSCFForOp(rewriter, forOp, shapeInfo, state);
       })
       .Case([&](scf::YieldOp yieldOp) {
         SmallVector<Value> newOperands;
@@ -1104,9 +1423,10 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
           }
         }
         scf::YieldOp::create(rewriter, op->getLoc(), newOperands);
+        return success();
       })
       .Case([&](scf::WhileOp whileOp) {
-        handleSCFWhileOp(rewriter, whileOp, shapeInfo, state);
+        return handleSCFWhileOp(rewriter, whileOp, shapeInfo, state);
       })
       .Case([&](scf::ConditionOp) {
         SmallVector<Value> newOperands;
@@ -1121,13 +1441,20 @@ void convertToVP(RewriterBase &rewriter, Operation *op, ShapeInfo &shapeInfo,
         }
         scf::ConditionOp::create(rewriter, op->getLoc(), op->getResultTypes(),
                                           newOperands);
+        return success();
       })
-      .Case<math::RsqrtOp, math::ExpOp>([&](auto unaryOp) {
-        handleElementwise<decltype(unaryOp)>(rewriter, op, shapeInfo, state);
+      .Case<math::RsqrtOp, math::ExpOp>([&](auto unaryOp) -> LogicalResult {
+        if (failed(handleElementwise<decltype(unaryOp)>(rewriter, op, shapeInfo,
+                                                        state))) {
+          return rewriter.notifyMatchFailure(op,
+                                             "failed to lower unary op to VP");
+        }
+        return success();
       })
-      .Default([&](Operation *op) {
+      .Default([&](Operation *op) -> LogicalResult {
         LLVM_DEBUG(DBGS() << "Fallback to clone: " << op->getName() << "\n");
         rewriter.clone(*op, state.valueMap);
+        return success();
       });
 }
 

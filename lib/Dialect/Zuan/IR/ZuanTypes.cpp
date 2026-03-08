@@ -86,6 +86,9 @@ SmallVector<int64_t> TileType::selectStaticShape(ArrayRef<int64_t> lhs,
       result.push_back(rhsSize);
     } else if (ShapedType::isDynamic(rhsSize)) {
       result.push_back(lhsSize);
+    } else {
+      assert(lhsSize == rhsSize && "expected compatible static sizes");
+      result.push_back(lhsSize);
     }
   }
   return result;

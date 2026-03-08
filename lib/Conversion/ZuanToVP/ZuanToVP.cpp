@@ -71,7 +71,7 @@ struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
 
     // shapeInfo.dump(llvm::dbgs());
 
-    auto tileShape = *shapeInfo.getShape(tile);
+    auto tileShape = *shapeInfo.lookupShape(tile);
     if (auto val = tileShape[0].getValue()) {
       if (isa<vp::GetVLOp>(val->getDefiningOp())) {
         return rewriter.notifyMatchFailure(op, "already stripmined");
@@ -200,6 +200,9 @@ struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
       }
     }
 
+    // Strip-mining introduces EVL on the minor dimension. This pattern is not
+    // responsible for eliminating a dynamic outer dimension in a 2-D tile; that
+    // is handled by `ZuanTilingPattern` below.
     auto unrollIdx = shape->size() - 1;
 
     auto type = getProcessingType(op);
@@ -297,8 +300,14 @@ struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
       }
     }
 
-    // All shapes are now the same and >= target-rank, so should be safe
-    // to access the first.
+    // This is the pass that is expected to eliminate a dynamic outer dimension
+    // before the VP conversion path. After tiling, the main loop sees a static
+    // outer chunk of size `uf`, and the tail loop sees a static outer size of 1.
+    // `ConvertToVP` still checks for any leftover `DynamicOuterLoopAndVector`
+    // plans and rejects them explicitly instead of assuming this pass always ran.
+    //
+    // All shapes are now the same and >= target-rank, so should be safe to
+    // access the first.
     auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
 
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
@@ -366,7 +375,9 @@ struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
     state.scalable = scalable;
     state.initialize(op);
 
-    convertToVP(rewriter, op, shapeInfo, state);
+    if (failed(convertToVP(rewriter, op, shapeInfo, state))) {
+      return rewriter.notifyMatchFailure(op, "failed to convert dynamic op to VP");
+    }
 
     // op->getParentOfType<func::FuncOp>().dump();
     rewriter.eraseOp(op);

@@ -15,6 +15,7 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/Hashing.h"
+#include <memory>
 #include <utility>
 #include <variant>
 
@@ -79,7 +80,48 @@ private:
 };
 
 using ShapeVector = SmallVector<DimSize>;
-using ShapeRef = ArrayRef<DimSize>;
+
+struct TileShape {
+  TileShape() = default;
+  TileShape(ArrayRef<DimSize> dims) : dims(dims.begin(), dims.end()) {}
+  TileShape(ShapeVector dims) : dims(std::move(dims)) {}
+
+  size_t size() const { return dims.size(); }
+  size_t rank() const { return dims.size(); }
+  bool empty() const { return dims.empty(); }
+  DimSize dim(unsigned i) const { return dims[i]; }
+  DimSize front() const { return dims.front(); }
+  DimSize back() const { return dims.back(); }
+  ArrayRef<DimSize> asArrayRef() const { return dims; }
+
+  auto begin() const { return dims.begin(); }
+  auto end() const { return dims.end(); }
+  auto begin() { return dims.begin(); }
+  auto end() { return dims.end(); }
+
+  DimSize operator[](size_t i) const { return dims[i]; }
+  DimSize &operator[](size_t i) { return dims[i]; }
+
+  void push_back(DimSize dim) { dims.push_back(dim); }
+  void append(ArrayRef<DimSize> newDims) {
+    dims.append(newDims.begin(), newDims.end());
+  }
+
+  template <typename IteratorT>
+  void append(IteratorT beginIt, IteratorT endIt) {
+    dims.append(beginIt, endIt);
+  }
+
+  TileShape dropDim(unsigned i) const;
+  TileShape takeFront(unsigned n) const;
+  TileShape takeBack(unsigned n) const;
+
+  SmallVector<OpFoldResult> reify(OpBuilder &builder, Location loc) const;
+  SmallVector<int64_t> staticShape() const;
+
+private:
+  ShapeVector dims;
+};
 
 /// Stateful information for shape inference.
 struct ShapeInferenceState {
@@ -87,45 +129,86 @@ struct ShapeInferenceState {
 
   /// Get the top mask in the stack.
   std::optional<std::pair<Value, Value>> getMask() const {
-    return maskPair;
+    if (maskStack.empty()) {
+      return std::nullopt;
+    }
+    return maskStack.back();
   }
   void setMask(Value mask, Value maskedoff = nullptr) {
-    maskPair = std::make_pair(mask, maskedoff);
+    maskStack.emplace_back(mask, maskedoff);
   }
   std::optional<std::pair<Value, Value>> resetMask() {
-    auto pair = maskPair;
-    maskPair = std::nullopt;
+    if (maskStack.empty()) {
+      return std::nullopt;
+    }
+    auto pair = maskStack.pop_back_val();
     return pair;
   }
 
 private:
-  /// The stack of masks.
-  std::optional<std::pair<Value, Value>> maskPair;
+  SmallVector<std::pair<Value, Value>> maskStack;
+};
+
+class ScopedMaskState {
+public:
+  ScopedMaskState(ShapeInferenceState &state, Value mask, Value maskedoff)
+      : state(state), active(mask != nullptr) {
+    if (active) {
+      state.setMask(mask, maskedoff);
+    }
+  }
+
+  ~ScopedMaskState() {
+    if (active) {
+      state.resetMask();
+    }
+  }
+
+private:
+  ShapeInferenceState &state;
+  bool active;
 };
 
 struct ShapeInfo {
   ShapeInfo() = default;
 
   /// Get the stored shape for a value.
-  std::optional<ShapeRef> getShape(Value value);
+  const TileShape *lookupShape(Value value) const;
   /// Get the stored shape, and map each dim into the leader of the equivalence
   /// class, and return the mapped shape.
-  std::optional<ShapeVector> getShapeWithEquivalence(Value value);
+  std::optional<TileShape> getShapeWithEquivalence(Value value);
 
   /// Mark two dims as equivalent.
-  void markEquivalent(DimSize lhs, DimSize rhs);
-  void markEquivalent(ShapeRef lhs, ShapeRef rhs);
+  void markDimEquivalent(DimSize lhs, DimSize rhs);
+  void markShapeEquivalent(ArrayRef<DimSize> lhs, ArrayRef<DimSize> rhs);
   /// Mark two values as shape-equivalent.
   ///
   /// If two shapes are already present, this will mark all corresponding dims
   /// into the equivalence class. Otherwise, propagate the shape from the
   /// present one to the absent one.
-  void markEquivalent(Value lhs, Value rhs);
-  void markEquivalent(ValueRange lhs, ValueRange rhs);
+  void markShapeEquivalent(Value lhs, Value rhs);
+  void markShapeEquivalent(ValueRange lhs, ValueRange rhs);
   /// Mark the shape of a value equivalent to another shape. If the value is
   /// already computed, just mark two shapes as equivalent. Otherwise set the
   /// shape.
-  void markEquivalent(Value val, ShapeRef shape);
+  void markShapeEquivalent(Value val, ArrayRef<DimSize> shape);
+
+  bool setShapeIfAbsent(Value value, TileShape shape);
+
+  void markEquivalent(DimSize lhs, DimSize rhs) { markDimEquivalent(lhs, rhs); }
+  void markEquivalent(ArrayRef<DimSize> lhs, ArrayRef<DimSize> rhs) {
+    markShapeEquivalent(lhs, rhs);
+  }
+  void markEquivalent(Value lhs, Value rhs) { markShapeEquivalent(lhs, rhs); }
+  void markEquivalent(ValueRange lhs, ValueRange rhs) {
+    markShapeEquivalent(lhs, rhs);
+  }
+  void markEquivalent(Value val, ArrayRef<DimSize> shape) {
+    markShapeEquivalent(val, shape);
+  }
+  void markEquivalent(Value val, const TileShape &shape) {
+    markShapeEquivalent(val, shape.asArrayRef());
+  }
 
   /// Entry function for shape inference.
   void inferShape(Operation *rootOp, ShapeInferenceState &state);
@@ -134,7 +217,7 @@ struct ShapeInfo {
 
 private:
   /// The value shapes.
-  DenseMap<Value, ShapeVector> shapes;
+  DenseMap<Value, std::unique_ptr<TileShape>> shapes;
   /// The equivalence relationship of dim sizes.
   llvm::EquivalenceClasses<DimSize> dimEquivalences;
 
@@ -144,7 +227,7 @@ private:
   /// be overwritten when traversing the IR. That is, no matter how the
   /// traversing order is, all shape information are kept in a non-decreasing
   /// manner.
-  void setShape(Value value, ShapeVector shape);
+  void setShape(Value value, TileShape shape);
 };
 
 unsigned computeUnreducedIdx(unsigned idx, size_t rank,

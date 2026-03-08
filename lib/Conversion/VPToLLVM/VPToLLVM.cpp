@@ -639,8 +639,9 @@ public:
               loweredOp = intrOp.getOperation();
             }
           } else {
-            if (vectorType.getElementType().isInteger(1) && enableRVV) {
-              // XXX: Ignore mask here
+            if (vectorType.getElementType().isInteger(1) && enableRVV && !mask) {
+              // Only use `vlm` for the unmasked case. The intrinsic cannot
+              // encode the predicate semantics required by masked VP loads.
               // XXX: RISC-V intrinsic only support xlen vl
               auto intrOp = vp::RVVIntrVlmOp::create(rewriter, 
                   loc, vectorType, dataPtrCasted, evlxlen);
@@ -695,8 +696,9 @@ public:
             loweredOp = intrOp.getOperation();
           } else {
             if (storeOp.getVectorType().getElementType().isInteger(1) &&
-                enableRVV) {
-              // XXX: Ignore mask here
+                enableRVV && !mask) {
+              // Only use `vsm` for the unmasked case. Masked stores must take
+              // the generic VP path to preserve predicate semantics.
               // XXX: RISC-V intrinsic only support xlen vl
               auto intrOp = vp::RVVIntrVsmOp::create(rewriter, 
                   loc, value, dataPtrCasted, evlxlen);

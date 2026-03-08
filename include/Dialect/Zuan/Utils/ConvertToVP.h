@@ -9,6 +9,26 @@
 namespace mlir {
 namespace zuan {
 
+struct VPShapePlan {
+  enum class Kind {
+    Scalar,
+    Vector1D,
+    RowPack2D,
+    DynamicOuterLoopAndVector
+  };
+
+  Kind kind = Kind::Scalar;
+  int64_t staticRows = 1;
+  Value dynamicRows = nullptr;
+  Value evl = nullptr;
+  unsigned rank = 0;
+
+  bool hasStaticRows() const { return dynamicRows == nullptr; }
+  bool hasVector() const {
+    return kind != Kind::Scalar;
+  }
+};
+
 struct VPConversionState {
   unsigned vf;
   bool scalable;
@@ -19,30 +39,55 @@ struct VPConversionState {
 
   VPConversionState() = default;
 
-  std::optional<std::pair<Value, Value>> getMasks() const { return maskPair; }
+  std::optional<std::pair<Value, Value>> getMasks() const {
+    if (maskStack.empty()) {
+      return std::nullopt;
+    }
+    return maskStack.back();
+  }
 
   void setMasks(Value mask, Value maskedoff) {
-    maskPair = std::make_pair(mask, maskedoff);
+    maskStack.emplace_back(mask, maskedoff);
   }
 
   std::optional<std::pair<Value, Value>> resetMasks() {
-    auto pair = maskPair;
-    maskPair = std::nullopt;
-    return pair;
+    if (maskStack.empty()) {
+      return std::nullopt;
+    }
+    return maskStack.pop_back_val();
   }
 
   void initialize(DynamicOp op);
 
 private:
-  /// The current mask and maskedoff values.
-  std::optional<std::pair<Value, Value>> maskPair;
+  SmallVector<std::pair<Value, Value>> maskStack;
+};
+
+class ScopedVPMaskState {
+public:
+  ScopedVPMaskState(VPConversionState &state, Value mask, Value maskedoff)
+      : state(state), active(mask != nullptr) {
+    if (active) {
+      state.setMasks(mask, maskedoff);
+    }
+  }
+
+  ~ScopedVPMaskState() {
+    if (active) {
+      state.resetMasks();
+    }
+  }
+
+private:
+  VPConversionState &state;
+  bool active;
 };
 
 Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
   Type outType, Value source);
 
-void convertToVP(RewriterBase &rewriter, Operation* op, ShapeInfo &shapeInfo,
-                 VPConversionState &state);
+LogicalResult convertToVP(RewriterBase &rewriter, Operation *op,
+                          ShapeInfo &shapeInfo, VPConversionState &state);
 
 } // namespace zuan
 } // namespace mlir

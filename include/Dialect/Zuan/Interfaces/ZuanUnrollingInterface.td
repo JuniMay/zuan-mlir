@@ -29,7 +29,7 @@ def ZuanUnrollingInterface : OpInterface<"ZuanUnrollingInterface"> {
         a shape semantics, e.g., it is a scalar operation, or it is the dynamic
         op, return `std::nullopt`.
       }],
-      /*retTy=*/"::std::optional<::mlir::zuan::ShapeVector>",
+      /*retTy=*/"::std::optional<::mlir::zuan::TileShape>",
       /*methodName=*/"getShapeToUnroll",
       /*args=*/(ins "::mlir::zuan::ShapeInfo &":$shapeInfo)>
   ];
