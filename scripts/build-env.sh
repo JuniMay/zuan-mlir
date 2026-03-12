@@ -11,12 +11,16 @@ export RISCV_ZUAN_BUILD_DIR=${ZUAN_SOURCE_DIR}/build-riscv
 
 export QEMU_LD_PREFIX=${RISCV_GNU_TOOLCHAIN_SYSROOT_DIR}
 
-export TRITON_CPU_DIR=${HOME}/triton-cpu
-export TRITON_SHARED_DIR=${HOME}/triton_shared
+export TRITON_SOURCE_DIR=${ZUAN_SOURCE_DIR}/third_party/triton
+export TRITON_CPU_SOURCE_DIR=${ZUAN_SOURCE_DIR}/third_party/triton-cpu
+export TRITON_SHARED_SOURCE_DIR=${ZUAN_SOURCE_DIR}/third_party/triton_shared
 
-export TRITON_CPU_OPT=${TRITON_CPU_DIR}/triton-opt
-export TRITON_SHARED_OPT=${TRITON_SHARED_DIR}/triton-shared-opt
+export TRITON_BUILD_ROOT=${RISCV_ZUAN_BUILD_DIR}/third_party/triton
+export ZUAN_TRITON_PYTHON_EXECUTABLE=${TRITON_BUILD_ROOT}/shared/venv/bin/python
+export ZUAN_TRITON_SHARED_OPT=${TRITON_BUILD_ROOT}/shared/build/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt
+export ZUAN_TRITON_LLVM_BINARY_DIR=${TRITON_BUILD_ROOT}/shared/llvm/bin
+export ZUAN_TRITON_CPU_OPT=${TRITON_BUILD_ROOT}/cpu/build/bin/triton-opt
+export ZUAN_TRITON_CPU_LLVM_BINARY_DIR=${TRITON_BUILD_ROOT}/cpu/llvm/bin
 
-# For triton-shared
-export LLVM_BINARY_DIR=${HOST_LLVM_BUILD_DIR}/bin
-export TRITON_SHARED_OPT_PATH=${TRITON_SHARED_OPT}
+export TRITON_CPU_OPT=${ZUAN_TRITON_CPU_OPT}
+export TRITON_SHARED_OPT=${ZUAN_TRITON_SHARED_OPT}

@@ -5,6 +5,10 @@ set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
 
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
+option(ENABLE_RISCV_GNU_TOOLCHAIN "Build the RISC-V GNU toolchain" OFF)
+option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
+option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
+
 #-------------------------------------------------------------------------------
 # Options and settings
 #-------------------------------------------------------------------------------
@@ -35,6 +39,8 @@ set(ZUAN_BINARY_DIR ${PROJECT_BINARY_DIR})
 
 message(STATUS "Zuan source dir: ${ZUAN_SOURCE_DIR}")
 message(STATUS "Zuan binary dir: ${ZUAN_BINARY_DIR}")
+
+list(APPEND CMAKE_MODULE_PATH "${ZUAN_SOURCE_DIR}/cmake")
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})

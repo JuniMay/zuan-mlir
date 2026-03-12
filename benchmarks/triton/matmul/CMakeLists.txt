@@ -7,6 +7,6 @@ target_link_libraries(
   PRIVATE
   OpenMP::OpenMP_CXX
   GoogleBenchmark
-  triton_vector_add_kernels
+  triton_matmul_kernels
   mlir_c_runner_utils
 )

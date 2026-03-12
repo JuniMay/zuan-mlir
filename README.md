@@ -12,7 +12,7 @@ dynamic sized vector architectures.
 ```bash
 git clone https://github.com/JuniMay/zuan-mlir
 cd zuan-mlir
-git submodule update --init
+git submodule update --init --recursive
 ```
 
 2. Install dependencies:
@@ -45,13 +45,49 @@ longer to build.
 ./scripts/build-zuan.sh
 ```
 
-5. To build the benchmarks for RISC-V platforms, cross-compile the project.
+## Local Development
+
+For normal host-side development, the existing LLVM and Zuan build flow is
+unchanged:
+
+```bash
+./scripts/build-llvm.sh
+./scripts/build-zuan.sh
+```
+
+If you also want the optional Triton benchmarks on the host, bootstrap the
+split Triton toolchain into your host build tree and configure with
+`ENABLE_TRITON_BENCHMARKS=ON`:
+
+```bash
+./scripts/setup-triton.sh build
+cmake -S . -B build -DENABLE_BENCHMARKS=ON -DENABLE_TRITON_BENCHMARKS=ON
+ninja -C build triton-vector-add-benchmark triton-vector-mul-benchmark triton-saxpy-benchmark triton-matmul-benchmark
+```
+
+## RISC-V Benchmarking
+
+To build the benchmarks for RISC-V platforms, cross-compile the project.
 
 ```bash
 source ./scripts/build-env.sh
 ./scripts/build-riscv-llvm.sh
+./scripts/setup-triton.sh build-riscv
 ./scripts/build-riscv-zuan.sh
 ```
+
+Set `ENABLE_TRITON_BENCHMARKS=OFF` before `./scripts/build-riscv-zuan.sh` if you
+want to skip the Triton benchmarks entirely.
+
+The Triton setup is split on purpose:
+
+- `third_party/triton` is pinned to the commit required by `third_party/triton_shared`
+- `third_party/triton_shared` provides the shared lowering and Python backend
+- `third_party/triton-cpu` is kept on its own head and is only used for
+  `triton-opt`
+
+This avoids having to patch any Triton source tree locally just to make the
+benchmarks compile.
 
 ## How it works
 

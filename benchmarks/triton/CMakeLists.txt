@@ -1,9 +1,3 @@
-#-------------------------------------------------------------------------------
-# Helper CMake Functions
-#-------------------------------------------------------------------------------
-
-set(LLVM_BINARY_DIR ${ZUAN_SOURCE_DIR}/llvm-project/build/bin)
-
 # This function defines triton_`benchmark_name`_kernels library, which includes
 # the generated object files for the Zuan and Triton CPU kernels.
 # 
@@ -32,10 +26,17 @@ function(add_triton_benchmark benchmark_name python_args)
   #-----------------------------------------------------------------------------
   add_custom_command(
     OUTPUT ${ttir_file} ${launcher_header}
-    COMMAND 
-      PYTHONPATH=$ENV{PYTHONPATH}:${CMAKE_CURRENT_SOURCE_DIR}/..
-      ${Python3_EXECUTABLE} ${python_file} -o ${ttir_file} ${python_args}
-    DEPENDS ${python_file}
+    COMMAND
+      ${CMAKE_COMMAND} -E env
+      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/..:$ENV{PYTHONPATH}"
+      "TRITON_PLUGIN_DIRS=${ZUAN_TRITON_SHARED_SOURCE_DIR}"
+      "TRITON_SHARED_OPT_PATH=${ZUAN_TRITON_SHARED_OPT}"
+      "LLVM_BINARY_DIR=${ZUAN_TRITON_LLVM_BINARY_DIR}"
+      ${ZUAN_TRITON_PYTHON_EXECUTABLE} ${python_file} -o ${ttir_file} ${python_args}
+    DEPENDS
+      ${python_file}
+      ${CMAKE_CURRENT_SOURCE_DIR}/../wrappergen.py
+      ${ZUAN_TRITON_SHARED_OPT}
   )
 
   #-----------------------------------------------------------------------------
@@ -44,7 +45,7 @@ function(add_triton_benchmark benchmark_name python_args)
   add_custom_command(
     OUTPUT ${mlir_file}
     COMMAND 
-      ${TRITON_SHARED_OPT}
+      ${ZUAN_TRITON_SHARED_OPT}
       # -triton-to-linalg-experimental 
       -triton-to-structured
       -cse
@@ -99,9 +100,13 @@ function(add_triton_benchmark benchmark_name python_args)
     COMMAND
       ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
     COMMAND
-      ${LLVM_BINARY_DIR}/clang 
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
         -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}
-    DEPENDS ${mlir_file} zuan-opt zuan-translate
+    DEPENDS
+      ${mlir_file}
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
+      zuan-opt
+      zuan-translate
   )
 
   #-----------------------------------------------------------------------------
@@ -112,7 +117,7 @@ function(add_triton_benchmark benchmark_name python_args)
     COMMAND
       cat ${ttir_file} |
       sed "'s/kernel(/kernel_triton_cpu(/'" |
-      ${TRITON_CPU_OPT}
+      ${ZUAN_TRITON_CPU_OPT}
         -triton-combine
         -canonicalize
         -triton-reorder-broadcast
@@ -169,11 +174,15 @@ function(add_triton_benchmark benchmark_name python_args)
         -cse
         -symbol-dce -o ${triton_cpu_mlir}
     COMMAND
-      ${LLVM_BINARY_DIR}/mlir-translate ${triton_cpu_mlir} -mlir-to-llvmir -o ${triton_cpu_llvm}
+      ${ZUAN_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate ${triton_cpu_mlir} -mlir-to-llvmir -o ${triton_cpu_llvm}
     COMMAND
-      ${LLVM_BINARY_DIR}/clang 
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
         -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${triton_cpu_llvm} -o ${triton_cpu_obj}
-    DEPENDS ${mlir_file} zuan-translate
+    DEPENDS
+      ${ttir_file}
+      ${ZUAN_TRITON_CPU_OPT}
+      ${ZUAN_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
   )
 
   add_library(triton_${benchmark_name}_kernels STATIC ${zuan_obj} ${triton_cpu_obj})
@@ -181,4 +190,7 @@ function(add_triton_benchmark benchmark_name python_args)
 endfunction()
 
 add_subdirectory(matmul)
+add_subdirectory(attention)
+add_subdirectory(saxpy)
 add_subdirectory(vector_add)
+add_subdirectory(vector_mul)
