@@ -1,2 +1,1 @@
-add_mlir_interface(ZuanInferShapeInterface)
 add_mlir_interface(ZuanUnrollingInterface)

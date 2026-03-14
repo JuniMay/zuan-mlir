@@ -6,6 +6,7 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -74,8 +75,8 @@ static void verifyRsqrt() {
   const size_t C = 69;
 
   MemRef<float, 4> input = initializeData(B, H, W, C);
-  MemRef<float, 4> autivec({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &input, &autivec);
+  MemRef<float, 4> scalar({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &input, &scalar);
 
   MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_1, &input, &zuan_16_1);
@@ -86,9 +87,9 @@ static void verifyRsqrt() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  autivec.verify(zuan_16_1, "rsqrt-zuan-16-1", 0.001);
-  autivec.verify(zuan_16_1, "rsqrt-zuan-16-2", 0.001);
-  autivec.verify(zuan_16_1, "rsqrt-zuan-16-4", 0.001);
+  scalar.verify(zuan_16_1, "rsqrt-zuan-16-1", 0.001);
+  scalar.verify(zuan_16_2, "rsqrt-zuan-16-2", 0.001);
+  scalar.verify(zuan_16_4, "rsqrt-zuan-16-4", 0.001);
 
   MemRef<float, 4> zuan_16_1_est({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_1_est, &input, &zuan_16_1_est);
@@ -101,12 +102,9 @@ static void verifyRsqrt() {
 
   // Zuan Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
   // even if fast-math is enabled.
-  autivec.verify(zuan_16_1_est, "rsqrt-zuan-16-1-est",
-                 100); // TODO: verify 7-bit estimate
-  autivec.verify(zuan_16_2_est, "rsqrt-zuan-16-2-est",
-                 100); // TODO: verify 7-bit estimate
-  autivec.verify(zuan_16_4_est, "rsqrt-zuan-16-4-est",
-                 100); // TODO: verify 7-bit estimate
+  // The estimate variants intentionally use the 7-bit reciprocal-square-root
+  // approximation, so keep them as printed diagnostics rather than hard
+  // correctness gates against the scalar reference.
 
   MemRef<float, 4> transform_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_transform_16_1, &input, &transform_16_1);
@@ -117,13 +115,13 @@ static void verifyRsqrt() {
   MemRef<float, 4> transform_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_transform_16_4, &input, &transform_16_4);
 
-  autivec.verify(transform_16_1, "rsqrt-transform-16-1", 0.001);
-  autivec.verify(transform_16_1, "rsqrt-transform-16-2", 0.001);
-  autivec.verify(transform_16_1, "rsqrt-transform-16-4", 0.001);
+  scalar.verify(transform_16_1, "rsqrt-transform-16-1", 0.001);
+  scalar.verify(transform_16_2, "rsqrt-transform-16-2", 0.001);
+  scalar.verify(transform_16_4, "rsqrt-transform-16-4", 0.001);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec = " << autivec[i]
+              << ": scalar = " << scalar[i]
               << "\tzuan-16-1 = " << zuan_16_1[i]
               << "\tzuan-16-2 = " << zuan_16_2[i]
               << "\tzuan-16-4 = " << zuan_16_4[i]

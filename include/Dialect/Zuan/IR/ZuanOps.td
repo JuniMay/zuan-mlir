@@ -10,112 +10,17 @@
 include "Zuan/IR/ZuanAttributes.td"
 include "Zuan/IR/ZuanDialect.td"
 include "Zuan/IR/ZuanTypes.td"
-include "Zuan/IR/ZuanAttributes.td"
-include "Zuan/Interfaces/ZuanInferShapeInterface.td"
 include "Zuan/Interfaces/ZuanUnrollingInterface.td"
 
 include "mlir/Interfaces/ControlFlowInterfaces.td"
-include "mlir/Interfaces/DestinationStyleOpInterface.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 //===----------------------------------------------------------------------===//
-// Dynamic and Yield operations
+// General region operations
 //===----------------------------------------------------------------------===//
 
-def Zuan_YieldOp : Zuan_Op<"yield", [
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  // The yield op is the terminator of the dynamic region.
-  ReturnLike, Terminator,
-  // There might be memory effects in the store region.
-  RecursiveMemoryEffects,
-  // The store region does not have any arguments, nor terminators.
-  NoRegionArguments, NoTerminator,
-  HasParent<"zuan::DynamicOp">,
-]> {
-  let summary = "Yield operation in Zuan dialect";
-  let description = [{
-    `zuan.yield` operation brings the computed value out of the dynamic region.
-    The scalars will be yielded as results. And all the stores should be done in
-    the yield region.
-
-    The yielded values corresponds to the results of the dynamic region. 0-D
-    tiles can also be yielded as scalars.
-  }];
-
-  let arguments = (ins Variadic<AnyTypeOf<[ZuanTileElement, ZuanTileOfRank<[0]>]>>:$scalars);
-  let regions = (region AnyRegion:$body);
-
-  let builders = [
-    OpBuilder<(ins)>,
-    OpBuilder<(ins "ValueRange":$scalars,
-                   CArg<"function_ref<void(OpBuilder &, Location)>">:$bodyBuilder)>
-  ];
-
-  let assemblyFormat = [{
-    ($scalars^ `:` type($scalars))? $body attr-dict
-  }];
-  let hasVerifier = 1;
-  let skipDefaultBuilders = 1;
-}
-
-def Zuan_DynamicOp : Zuan_Op<"dynamic", [
-  DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DestinationStyleOpInterface,
-  RecursiveMemoryEffects // The memory effects are in the yield op region.
-]> {
-  let summary = "A region that contains size-agnostic tile operations.";
-  let description = [{
-    The `zuan.dynamic` operation is a region that contains size-agnostic tile
-    operations. MemRefs that will be written should be provided as dps inits.
-
-    The memory writing semantics are similar to `vector.transfer_write`. The
-    elements of tiles are written with 1:1 correspondence to the memref
-    positions. Memory readings are not restricted and are not presented in the
-    operands, `memref.subview` can be used to slicing or broadcasting the
-    memrefs. Note that if there are aliasing memrefs between the inits (i.e., 
-    writes) and the reads, the behavior is undefined.
-
-    Scalars produced with reduction can be yielded as results. To lower this
-    operation, the reductions and stores will be separate first. And then the
-    leading dimensions will be expanded into loops. If any init memrefs differ
-    in the dimension, the dynamic region will be duplicated with each of their
-    dependencies. The shape differences are computed by a shape inference.
-
-    The dynamic regions cannot be nested.
-  }];
-
-  let arguments = (ins Variadic<AnyMemRef>:$inits);
-  let regions = (region SizedRegion<1>:$body);
-  let results = (outs Variadic<ZuanTileElement>:$results);
-
-  let assemblyFormat = [{
-    (`(` $inits^ `:` type($inits) `)`)? $body attr-dict (`:` type($results)^)?
-  }];
-
-  let extraClassDeclaration = [{
-    MutableOperandRange getDpsInitsMutable() { return getInitsMutable(); }
-
-    zuan::YieldOp getYieldOp();
-  }];
-
-  let builders = [
-    OpBuilder<(ins "TypeRange":$resultTypes,
-                   "ValueRange":$inits,
-                   CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>">:$bodyBuilder)>,
-    OpBuilder<(ins "ValueRange":$inits,
-                   CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>">:$bodyBuilder)>
-  ];
-
-  let skipDefaultBuilders = 1;
-  let hasCanonicalizer = 1;
-  let hasVerifier = 1;
-}
-
 def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, ReturnLike, Terminator, HasParent<"zuan::MaskOp">,
 ]> {
   let summary = "Terminator for the mask region";
@@ -134,7 +39,6 @@ def Zuan_MaskYieldOp : Zuan_Op<"mask_yield", [
 
 def Zuan_MaskOp : Zuan_Op<"mask", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   RecursiveMemoryEffects,
   SingleBlockImplicitTerminator<"zuan::MaskYieldOp">
 ]> {
@@ -142,28 +46,26 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   let description = [{
     `zuan.mask` operation is a region that contains conditional tile operations.
     Only the elements whose corresponding mask is true will be computed. An
-    Optional passthru tile `maskedoff` can be provided to fill the masked-off
+    optional passthru tile `maskedoff` can be provided to fill the masked-off
     elements.
 
-    If no passthru provided, using the masked-off values is undefined, the
-    result can be arbitrary. 
+    If no passthru is provided, using the masked-off values is undefined and
+    the result can be arbitrary.
 
     The passthru and mask are up to operations to decide their semantics. The
     mask regions cannot be nested.
 
-    The mask op can also be used inside the yield op to implement masked stores.
-
-    At most one operation can be inside the mask operation, and the result must
-    be tile type.
+    At most one operation can be inside the mask operation, and the yielded
+    value must have tile type.
   }];
   let arguments = (ins ZuanTileOfType<[I1]>:$mask,
                        Optional<Zuan_TileType>:$maskedoff);
   let regions = (region SizedRegion<1>:$body);
   let results = (outs Variadic<Zuan_TileType>:$results);
-  
+
   let assemblyFormat = [{
-    $mask `:` type($mask) 
-    (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict 
+    $mask `:` type($mask)
+    (`,` $maskedoff^ `:` type($maskedoff))? $body attr-dict
     (`:` type($results)^)?
   }];
 
@@ -181,7 +83,7 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
   let hasCanonicalizer = 1;
 
   let extraClassDeclaration = [{
-    Operation* getMaskedOp();
+    Operation *getMaskedOp();
   }];
 }
 
@@ -191,7 +93,6 @@ def Zuan_MaskOp : Zuan_Op<"mask", [
 
 def Zuan_MatmulOp : Zuan_Op<"matmul", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor,
   AllRanksMatch<["lhs", "rhs", "result"]>,
 ]> {
@@ -219,7 +120,6 @@ def Zuan_MatmulOp : Zuan_Op<"matmul", [
 
 def Zuan_ReductionOp : Zuan_Op<"reduction", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
@@ -239,7 +139,7 @@ def Zuan_ReductionOp : Zuan_Op<"reduction", [
   let results = (outs Zuan_TileType:$result);
 
   let assemblyFormat = [{
-    $kind $tile $dims (`,` $init^)? attr-dict 
+    $kind $tile $dims (`,` $init^)? attr-dict
     `:` qualified(type($tile)) (`,` qualified(type($init))^)?
   }];
 
@@ -247,12 +147,11 @@ def Zuan_ReductionOp : Zuan_Op<"reduction", [
 }
 
 //===----------------------------------------------------------------------===//
-// General Operations
+// General tile operations
 //===----------------------------------------------------------------------===//
 
 def Zuan_LoadOp : Zuan_Op<"load", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   InferTypeOpAdaptor,
   AllShapesMatch<["base", "result"]>,
   AllElementTypesMatch<["base", "result"]>
@@ -271,7 +170,6 @@ def Zuan_LoadOp : Zuan_Op<"load", [
 
 def Zuan_StoreOp : Zuan_Op<"store", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Store a tile to a memref";
@@ -282,16 +180,56 @@ def Zuan_StoreOp : Zuan_Op<"store", [
 
   let arguments = (ins Zuan_TileType:$value,
                        Arg<AnyMemRef, "the reference to store to", [MemWrite]>:$base);
-  let assemblyFormat = [{ 
+  let assemblyFormat = [{
     $value `,` $base attr-dict `:` type($value) `,` type($base)
   }];
 }
 
+def Zuan_DimOp : Zuan_Op<"dim", [Pure]> {
+  let summary = "Query the runtime extent of a tile dimension";
+  let description = [{
+    `zuan.dim` materializes the extent of a tile value at a constant dimension
+    index. Static dimensions fold to constants. Dynamic dimensions are forwarded
+    through the producer semantics when possible.
+  }];
+
+  let arguments = (ins Zuan_TileType:$tile, I64Attr:$dim);
+  let results = (outs Index:$result);
+
+  let builders = [
+    OpBuilder<(ins "Value":$tile, "int64_t":$dim)>
+  ];
+
+  let assemblyFormat = [{
+    $tile `,` $dim attr-dict `:` qualified(type($tile))
+  }];
+
+  let hasVerifier = 1;
+  let hasFolder = 1;
+  let hasCanonicalizer = 1;
+}
+
+def Zuan_ExtractOp : Zuan_Op<"extract", [Pure, InferTypeOpAdaptor]> {
+  let summary = "Extract the scalar element from a rank-0 tile";
+  let description = [{
+    `zuan.extract` converts a rank-0 tile into its scalar element.
+  }];
+
+  let arguments = (ins ZuanTileOfRank<[0]>:$tile);
+  let results = (outs ZuanTileElement:$result);
+
+  let assemblyFormat = [{
+    $tile attr-dict `:` qualified(type($tile))
+  }];
+
+  let hasVerifier = 1;
+  let hasFolder = 1;
+}
+
 def Zuan_SplatOp : Zuan_Op<"splat", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor,
-  AllElementTypesMatch<["value", "result"]>  
+  AllElementTypesMatch<["value", "result"]>
 ]> {
   let summary = "Extend the leading dimensions of a vector or scalar";
   let description = [{
@@ -306,7 +244,7 @@ def Zuan_SplatOp : Zuan_Op<"splat", [
   let assemblyFormat = [{
     $value custom<DynamicIndexList>($dims, $staticDims) attr-dict `:` type($value)
   }];
-  
+
   let builders = [
     OpBuilder<(ins "Value":$value, "ArrayRef<int64_t>":$dims)>,
     OpBuilder<(ins "Value":$value, "ArrayRef<OpFoldResult>":$dims)>
@@ -320,29 +258,18 @@ def Zuan_SplatOp : Zuan_Op<"splat", [
 
 def Zuan_OuterOp : Zuan_Op<"outer", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["lhs", "rhs", "result"]>
 ]> {
   let summary = "Outer operation";
   let description = [{
     `zuan.outer` operation computes the outer product/sum/... of two tiles.
-    The result equals to broadcasting and applying the element-wise operation
-    to the two tiles.
+    The result equals broadcasting and applying the element-wise operation to
+    the two tiles.
 
-    The leading dims of two tiles should be compatible. If the rank of one
-    of the tiles is less than the other by 1, this equals to a vector-scalar
-    operation at the most minor dimension:
-
-    ```
-    // Semantic: [m, n] op [m, k] -> [m, n, k]
-    %res = zuan.outer <op> %a, %b : !zuan.tile<?x?xf32>, !zuan.tile<?x?xf32>
-    ```
-
-    ```
-    // Semantic: [m, n] op [m, _] -> [m, n]
-    %res = zuan.outer <op> %a, %b : !zuan.tile<?x?xf32>, !zuan.tile<?xf32>
-    ```
+    The leading dims of two tiles should be compatible. If the rank of one of
+    the tiles is less than the other by 1, this equals a vector-scalar
+    operation at the most minor dimension.
   }];
 
   let arguments = (ins Zuan_CombiningKindAttr:$kind,
@@ -357,14 +284,13 @@ def Zuan_OuterOp : Zuan_Op<"outer", [
 
 def Zuan_CastOp : Zuan_Op<"cast", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, AllShapesMatch<["tile", "result"]>
 ]> {
   let summary = "Cast all elements of a tile to another type";
   let description = [{
-    `zuan.cast` operation casts all elements of a tile to another type. The cast
-    ops in arith dialect only support `vector` and `tensor` types, other types
-    are regarded as cast-incompatible. So here is a dedicated cast op for
+    `zuan.cast` operation casts all elements of a tile to another type. The
+    cast ops in arith dialect only support `vector` and `tensor` types, other
+    types are regarded as cast-incompatible. So here is a dedicated cast op for
     `zuan.tile`, implemented with `CastKind` for simplicity.
   }];
   let arguments = (ins Zuan_CastKindAttr:$kind, Zuan_TileType:$tile);
@@ -377,7 +303,6 @@ def Zuan_CastOp : Zuan_Op<"cast", [
 
 def Zuan_StepOp : Zuan_Op<"step", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["result", "start"]>
 ]> {
@@ -410,7 +335,6 @@ def Zuan_StepOp : Zuan_Op<"step", [
 
 def Zuan_SelectOp : Zuan_Op<"select", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   Pure, AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
   AllTypesMatch<["lhs", "rhs", "result"]>
 ]> {
@@ -432,16 +356,15 @@ def Zuan_SelectOp : Zuan_Op<"select", [
 
 def Zuan_GatherOp : Zuan_Op<"gather", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   InferTypeOpAdaptor, AllElementTypesMatch<["base", "result"]>
 ]> {
   let summary = "Memory gather operation";
   let description = [{
-    Given the source memref and indices, `zuan.gather` loads the values
-    from the source with the following behavior:
+    Given the source memref and indices, `zuan.gather` loads the values from
+    the source with the following behavior:
 
     ```
-    res[i_0, i_1, ... i_n] = source[indices_0[i_0, i_1, ... i_n], 
+    res[i_0, i_1, ... i_n] = source[indices_0[i_0, i_1, ... i_n],
                                     indices_1[i_0, i_1, ... i_n],
                                     ...
                                     indices_k[i_0, i_1, ... i_n]]
@@ -461,7 +384,6 @@ def Zuan_GatherOp : Zuan_Op<"gather", [
 
 def Zuan_ScatterOp : Zuan_Op<"scatter", [
   DeclareOpInterfaceMethods<ZuanUnrollingInterface>,
-  DeclareOpInterfaceMethods<ZuanInferShapeInterface>,
   AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Memory scatter operation";
@@ -470,7 +392,7 @@ def Zuan_ScatterOp : Zuan_Op<"scatter", [
     writes the values to the destination with the following behavior:
 
     ```
-    dest[indices_0[i_0, i_1, ... i_n], 
+    dest[indices_0[i_0, i_1, ... i_n],
          indices_1[i_0, i_1, ... i_n],
          ...
          indices_k[i_0, i_1, ... i_n]] = source[i_0, i_1, ... i_n]

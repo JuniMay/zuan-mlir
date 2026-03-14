@@ -1,6 +1,8 @@
 add_executable(linalg-exp-benchmark launcher.cpp)
 target_link_libraries(linalg-exp-benchmark PRIVATE GoogleBenchmark)
 
+add_linalg_scalar_kernel(exp)
+
 add_linalg_zuan_kernel(exp 16 1)
 add_linalg_zuan_kernel(exp 16 2)
 add_linalg_zuan_kernel(exp 16 4)
@@ -37,6 +39,7 @@ target_link_libraries(
   linalg_exp_transform_16_2
   linalg_exp_transform_16_4
 
+  linalg_exp_scalar
 
   linalg_exp_autovec_8
   linalg_exp_autovec_16

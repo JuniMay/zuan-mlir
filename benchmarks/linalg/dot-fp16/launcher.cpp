@@ -6,6 +6,8 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
+                                MemRef<float, 0> *);
 
 void _mlir_ciface_kernel_autovec_8(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
                                    MemRef<float, 0> *);
@@ -65,8 +67,8 @@ static void verifyDotFp16() {
   const size_t N = 1397;
   auto [vec_a, vec_b] = initializeData(N);
 
-  MemRef<float, 0> output0({}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &vec_a, &vec_b, &output0);
+  MemRef<float, 0> scalar({}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &vec_a, &vec_b, &scalar);
 
   MemRef<float, 0> output_16_2({}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &vec_a, &vec_b, &output_16_2);
@@ -78,10 +80,10 @@ static void verifyDotFp16() {
   // The clang auto-vectorization generates ordered reduce, while in zuan it
   // uses unordered reduce. The difference in the order of reduction can lead to
   // different results.
-  output0.verify(output_16_2, "dot-fp16-zuan-16-2", 10);
-  output0.verify(output_transform_16_1, "dot-fp16-transform-16-1", 10);
+  scalar.verify(output_16_2, "dot-fp16-zuan-16-2", 10);
+  scalar.verify(output_transform_16_1, "dot-fp16-transform-16-1", 10);
 
-  std::cerr << "autovec = " << std::setprecision(10) << output0[0]
+  std::cerr << "scalar = " << std::setprecision(10) << scalar[0]
             << "\tzuan_16_2 = " << output_16_2[0]
             << "\ttransform_16_1 = " << output_transform_16_1[0] << std::endl;
 }

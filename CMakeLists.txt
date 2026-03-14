@@ -8,6 +8,9 @@ set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 option(ENABLE_RISCV_GNU_TOOLCHAIN "Build the RISC-V GNU toolchain" OFF)
 option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
 option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
+option(ZUAN_BENCHMARK_DUMP_IR
+       "Dump benchmark MLIR after every pass with -mlir-print-ir-after-all"
+       OFF)
 
 #-------------------------------------------------------------------------------
 # Options and settings

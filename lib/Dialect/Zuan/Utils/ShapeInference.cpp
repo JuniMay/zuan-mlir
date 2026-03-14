@@ -1,429 +1,398 @@
-//===- ShapeInference.cpp - Shape Inference for Zuan ops --------*- C++ -*-===//
+//===- ShapeInference.cpp - Local shape reification for Zuan ---*- C++ -*-===//
 //
-// This file implements the shape inference for Zuan operations.
+// This file implements local, demand-driven shape reification helpers for
+// Zuan operations.
 //
 //===----------------------------------------------------------------------===//
 
+#include "Zuan/Utils/ShapeInference.h"
+
+#include "Zuan/IR/Zuan.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/OpDefinition.h"
-#include "mlir/Interfaces/LoopLikeInterface.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/Support/Debug.h"
-#include <variant>
-
-#include "Zuan/IR/Zuan.h"
-#include "Zuan/Interfaces/ZuanInferShapeInterface.h"
-#include "Zuan/Utils/ShapeInference.h"
-#include "mlir/Support/LLVM.h"
+#include "mlir/IR/PatternMatch.h"
 
 namespace mlir {
 namespace zuan {
 
-TileShape TileShape::dropDim(unsigned i) const {
-  TileShape result;
-  result.append(dims.begin(), dims.begin() + i);
-  result.append(dims.begin() + i + 1, dims.end());
+namespace {
+
+static SmallVector<OpFoldResult> getStaticShape(Builder &builder,
+                                                TileType tileType) {
+  SmallVector<OpFoldResult> shape;
+  for (int64_t dim : tileType.getShape()) {
+    if (ShapedType::isDynamic(dim)) {
+      shape.push_back(OpFoldResult());
+      continue;
+    }
+    shape.push_back(builder.getIndexAttr(dim));
+  }
+  return shape;
+}
+
+static void overlayStaticShape(Builder &builder, TileType tileType,
+                               SmallVector<OpFoldResult> &shape) {
+  assert(shape.size() == tileType.getRank() && "expected matching ranks");
+  for (auto [idx, dim] : llvm::enumerate(tileType.getShape())) {
+    if (!ShapedType::isDynamic(dim)) {
+      shape[idx] = builder.getIndexAttr(dim);
+    }
+  }
+}
+
+static FailureOr<Value> getForwardedShapeOperand(Operation *op) {
+  if (auto passthru =
+          op->getAttrOfType<IntegerAttr>("zuan_passthru_operand")) {
+    int64_t index = passthru.getInt();
+    if (index < 0 || index >= static_cast<int64_t>(op->getNumOperands())) {
+      return failure();
+    }
+    Value operand = op->getOperand(index);
+    if (!isa<TileType>(operand.getType())) {
+      return failure();
+    }
+    return operand;
+  }
+
+  if (op->getNumResults() != 1 || op->getNumRegions() != 0 ||
+      !isa<TileType>(op->getResult(0).getType())) {
+    return failure();
+  }
+
+  if (op->hasTrait<OpTrait::Elementwise>() &&
+      op->hasTrait<OpTrait::SameOperandsAndResultType>()) {
+    if (!op->getOperands().empty() && isa<TileType>(op->getOperand(0).getType())) {
+      return op->getOperand(0);
+    }
+  }
+
+  if (isa<arith::CmpIOp, arith::CmpFOp>(op) &&
+      !op->getOperands().empty() && isa<TileType>(op->getOperand(0).getType())) {
+    return op->getOperand(0);
+  }
+
+  return failure();
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyBlockArgumentShape(OpBuilder &builder, BlockArgument arg) {
+  auto tileType = dyn_cast<TileType>(arg.getType());
+  if (!tileType) {
+    return failure();
+  }
+
+  if (auto forOp = dyn_cast<scf::ForOp>(arg.getOwner()->getParentOp())) {
+    if (arg.getArgNumber() == 0) {
+      return failure();
+    }
+    return reifyZuanShape(builder, forOp.getInitArgs()[arg.getArgNumber() - 1]);
+  }
+
+  if (auto whileOp = dyn_cast<scf::WhileOp>(arg.getOwner()->getParentOp())) {
+    return reifyZuanShape(builder, whileOp.getInits()[arg.getArgNumber()]);
+  }
+
+  auto shape = getStaticShape(builder, tileType);
+  if (llvm::all_of(shape, [](OpFoldResult ofr) { return static_cast<bool>(ofr); })) {
+    return shape;
+  }
+  return failure();
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyLoadShape(OpBuilder &builder, LoadOp loadOp) {
+  if (auto subview = loadOp.getBase().getDefiningOp<memref::SubViewOp>()) {
+    SmallVector<OpFoldResult> shape;
+    auto droppedDims = subview.getDroppedDims();
+    auto sizes = subview.getMixedSizes();
+    // Preserve the subview's mixed sizes directly so downstream rewrites see
+    // the exact chunking values, e.g. a stripmined `vp.getvl`, instead of
+    // re-materializing generic memref.dim queries on the subview result.
+    for (unsigned idx = 0, e = loadOp.getResult().getType().getRank(); idx < e;
+         ++idx) {
+      OpFoldResult size = computeUnreducedDim<OpFoldResult>(
+          idx, sizes, [&](unsigned dim) { return droppedDims.test(dim); });
+      if (auto attr = size.dyn_cast<Attribute>()) {
+        shape.push_back(
+            builder.getIndexAttr(cast<IntegerAttr>(attr).getInt()));
+      } else {
+        shape.push_back(size.dyn_cast<Value>());
+      }
+    }
+    overlayStaticShape(builder, loadOp.getResult().getType(), shape);
+    return shape;
+  }
+
+  auto baseType = cast<MemRefType>(loadOp.getBase().getType());
+  auto loc = loadOp.getLoc();
+  SmallVector<OpFoldResult> shape;
+  for (auto [idx, dim] : llvm::enumerate(baseType.getShape())) {
+    if (!ShapedType::isDynamic(dim)) {
+      shape.push_back(builder.getIndexAttr(dim));
+      continue;
+    }
+    shape.push_back(
+        memref::DimOp::create(builder, loc, loadOp.getBase(), idx).getResult());
+  }
+  return shape;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifySplatShape(OpBuilder &builder, SplatOp splatOp) {
+  SmallVector<OpFoldResult> mixedDims = splatOp.getMixedDims();
+  SmallVector<OpFoldResult> shape(mixedDims.begin(), mixedDims.end());
+  if (isa<TileType>(splatOp.getValue().getType())) {
+    auto sourceShape = reifyZuanShape(builder, splatOp.getValue());
+    if (failed(sourceShape)) {
+      return failure();
+    }
+    shape.append(sourceShape->begin(), sourceShape->end());
+  }
+  overlayStaticShape(builder, splatOp.getResult().getType(), shape);
+  return shape;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyStepShape(OpBuilder &builder, StepOp stepOp) {
+  SmallVector<OpFoldResult> mixedSizes = stepOp.getMixedSizes();
+  SmallVector<OpFoldResult> shape(mixedSizes.begin(), mixedSizes.end());
+  overlayStaticShape(builder, stepOp.getResult().getType(), shape);
+  return shape;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyMatmulShape(OpBuilder &builder, MatmulOp matmulOp) {
+  auto lhsShape = reifyZuanShape(builder, matmulOp.getLhs());
+  auto rhsShape = reifyZuanShape(builder, matmulOp.getRhs());
+  if (failed(lhsShape) || failed(rhsShape)) {
+    return failure();
+  }
+
+  auto resultType = matmulOp.getResult().getType();
+  SmallVector<OpFoldResult> result;
+  unsigned leadingSize = matmulOp.getLeadingSize();
+  for (unsigned i = 0; i < leadingSize; ++i) {
+    result.push_back((*lhsShape)[i]);
+  }
+
+  auto lhsRank = matmulOp.getLhs().getType().getRank();
+  auto rhsRank = matmulOp.getRhs().getType().getRank();
+  if (lhsRank >= rhsRank) {
+    result.push_back((*lhsShape)[lhsShape->size() - 2]);
+  }
+  if (rhsRank >= lhsRank) {
+    result.push_back((*rhsShape)[rhsShape->size() - 1]);
+  }
+
+  overlayStaticShape(builder, resultType, result);
   return result;
 }
 
-TileShape TileShape::takeFront(unsigned n) const {
-  return TileShape(ArrayRef<DimSize>(dims).take_front(n));
-}
+static FailureOr<SmallVector<OpFoldResult>>
+reifyReductionShape(OpBuilder &builder, ReductionOp reductionOp) {
+  auto sourceShape = reifyZuanShape(builder, reductionOp.getTile());
+  if (failed(sourceShape)) {
+    return failure();
+  }
 
-TileShape TileShape::takeBack(unsigned n) const {
-  return TileShape(ArrayRef<DimSize>(dims).take_back(n));
-}
-
-SmallVector<OpFoldResult> TileShape::reify(OpBuilder &builder,
-                                           Location loc) const {
-  return llvm::map_to_vector(dims, [&](DimSize dim) {
-    return dim.getOrCreateOpFoldResult(builder, loc);
-  });
-}
-
-SmallVector<int64_t> TileShape::staticShape() const {
-  return llvm::map_to_vector(dims, [&](DimSize dim) {
-    return dim.getInteger().value_or(ShapedType::kDynamic);
-  });
-}
-
-std::optional<std::pair<Value, unsigned>> DimSize::getAsMemrefDim(Value value) {
-  auto definingOp = value.getDefiningOp();
-  if (auto dimOp = dyn_cast_if_present<memref::DimOp>(definingOp)) {
-    auto memref = dimOp.getSource();
-    auto index = dimOp.getIndex();
-    if (auto constantOp = index.getDefiningOp<arith::ConstantOp>()) {
-      auto indexInteger = cast<IntegerAttr>(constantOp.getValue()).getInt();
-      return std::make_pair(memref, indexInteger);
+  SetVector<int64_t> reducedDims(reductionOp.getDims().begin(),
+                                 reductionOp.getDims().end());
+  SmallVector<OpFoldResult> result;
+  for (auto [idx, dim] : llvm::enumerate(*sourceShape)) {
+    if (!reducedDims.contains(idx)) {
+      result.push_back(dim);
     }
   }
-  return std::nullopt;
+  overlayStaticShape(builder, reductionOp.getResult().getType(), result);
+  return result;
 }
 
-DimSize::DimSize(Value memref, unsigned dim) {
-  auto memrefType = dyn_cast<MemRefType>(memref.getType());
-  if (!memrefType) {
-    llvm_unreachable("expected memref type");
+static FailureOr<SmallVector<OpFoldResult>>
+reifyOuterShape(OpBuilder &builder, OuterOp outerOp) {
+  auto lhsShape = reifyZuanShape(builder, outerOp.getLhs());
+  auto rhsShape = reifyZuanShape(builder, outerOp.getRhs());
+  if (failed(lhsShape) || failed(rhsShape)) {
+    return failure();
   }
-  if (dim >= memrefType.getRank()) {
-    llvm_unreachable("invalid dimension");
+
+  SmallVector<OpFoldResult> result(lhsShape->begin(), lhsShape->end());
+  if (outerOp.getLhs().getType().getRank() <= outerOp.getRhs().getType().getRank()) {
+    result.push_back(rhsShape->back());
   }
-  auto shape = memrefType.getShape();
-  if (!ShapedType::isDynamic(shape[dim])) {
-    dimsize = shape[dim];
-    return;
+  overlayStaticShape(builder, outerOp.getResult().getType(), result);
+  return result;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyMaskShape(OpBuilder &builder, MaskOp maskOp, unsigned resultNumber) {
+  if (auto *maskedOp = maskOp.getMaskedOp()) {
+    return reifyZuanShape(builder, maskedOp->getResult(resultNumber));
   }
-  if (auto definingOp = memref.getDefiningOp()) {
-    if (auto subviewOp = dyn_cast<memref::SubViewOp>(definingOp)) {
-      auto droppedDims = subviewOp.getDroppedDims();
-      auto subviewSizes = subviewOp.getMixedSizes();
-      auto unreducedDim = computeUnreducedDim<OpFoldResult>(
-          dim, subviewSizes,
-          [&](unsigned idx) { return droppedDims.test(idx); });
-      if (auto value = unreducedDim.dyn_cast<Value>()) {
-        if (auto pair = getAsMemrefDim(value)) {
-          dimsize = *pair;
-        } else {
-          dimsize = value;
+  if (auto maskedoff = maskOp.getMaskedoff()) {
+    return reifyZuanShape(builder, maskedoff);
+  }
+  return reifyZuanShape(builder, maskOp.getMask());
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyGatherShape(OpBuilder &builder, GatherOp gatherOp) {
+  if (gatherOp.getIndices().empty()) {
+    return SmallVector<OpFoldResult>{};
+  }
+  auto shape = reifyZuanShape(builder, gatherOp.getIndices().front());
+  if (failed(shape)) {
+    return failure();
+  }
+  overlayStaticShape(builder, gatherOp.getResult().getType(), *shape);
+  return *shape;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifySCFForResultShape(OpBuilder &builder, OpResult result) {
+  auto forOp = cast<scf::ForOp>(result.getOwner());
+  return reifyZuanShape(builder, forOp.getInitArgs()[result.getResultNumber()]);
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifySCFWhileResultShape(OpBuilder &builder, OpResult result) {
+  auto whileOp = cast<scf::WhileOp>(result.getOwner());
+  return reifyZuanShape(builder, whileOp.getInits()[result.getResultNumber()]);
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
+reifyOpResultShape(OpBuilder &builder, OpResult result) {
+  if (!isa<TileType>(result.getType())) {
+    return failure();
+  }
+
+  Operation *op = result.getOwner();
+  return TypeSwitch<Operation *, FailureOr<SmallVector<OpFoldResult>>>(op)
+      .Case<LoadOp>([&](LoadOp loadOp) { return reifyLoadShape(builder, loadOp); })
+      .Case<SplatOp>([&](SplatOp splatOp) { return reifySplatShape(builder, splatOp); })
+      .Case<StepOp>([&](StepOp stepOp) { return reifyStepShape(builder, stepOp); })
+      .Case<MatmulOp>([&](MatmulOp matmulOp) { return reifyMatmulShape(builder, matmulOp); })
+      .Case<ReductionOp>(
+          [&](ReductionOp reductionOp) { return reifyReductionShape(builder, reductionOp); })
+      .Case<OuterOp>([&](OuterOp outerOp) { return reifyOuterShape(builder, outerOp); })
+      .Case<CastOp, SelectOp>(
+          [&](auto shapePreservingOp) -> FailureOr<SmallVector<OpFoldResult>> {
+        auto shape = reifyZuanShape(builder, shapePreservingOp->getOperand(0));
+        if (failed(shape)) {
+          return FailureOr<SmallVector<OpFoldResult>>(failure());
         }
-      } else {
-        auto attr = cast<IntegerAttr>(unreducedDim.dyn_cast<Attribute>());
-        dimsize = attr.getInt();
-      }
-      return;
-    }
-  }
-  // Fallback.
-  dimsize = std::make_pair(memref, dim);
-}
-
-DimSize::DimSize(OpFoldResult ofr) {
-  if (auto value = ofr.dyn_cast<Value>()) {
-    if (auto pair = getAsMemrefDim(value)) {
-      dimsize = *pair;
-    } else {
-      dimsize = value;
-    }
-  } else {
-    auto attr = cast<IntegerAttr>(ofr.dyn_cast<Attribute>());
-    dimsize = attr.getInt();
-  }
-}
-
-bool DimSize::operator<(const DimSize &rhs) const {
-  if (dimsize.index() != rhs.dimsize.index()) {
-    return dimsize.index() < rhs.dimsize.index();
-  } else if (auto lhsSpecial = std::get_if<SpecialKey>(&dimsize)) {
-    return static_cast<unsigned>(*lhsSpecial) <
-           static_cast<unsigned>(*std::get_if<SpecialKey>(&rhs.dimsize));
-  } else if (auto lhsDim = std::get_if<int64_t>(&dimsize)) {
-    return *lhsDim < *std::get_if<int64_t>(&rhs.dimsize);
-  } else if (auto lhsValue = std::get_if<Value>(&dimsize)) {
-    return (*lhsValue).getAsOpaquePointer() <
-           (*std::get_if<Value>(&rhs.dimsize)).getAsOpaquePointer();
-  } else {
-    auto [lhsMemref, lhsDim] = std::get<std::pair<Value, unsigned>>(dimsize);
-    auto [rhsMemref, rhsDim] =
-        std::get<std::pair<Value, unsigned>>(rhs.dimsize);
-    if (lhsMemref != rhsMemref) {
-      return lhsMemref.getAsOpaquePointer() < rhsMemref.getAsOpaquePointer();
-    }
-    return lhsDim < rhsDim;
-  }
-}
-
-void DimSize::dump(llvm::raw_ostream &os) const {
-  if (auto special = std::get_if<SpecialKey>(&dimsize)) {
-    os << (*special == SpecialKey::Empty ? "<empty>" : "<tombstone>");
-    return;
-  }
-  if (auto value = std::get_if<Value>(&dimsize)) {
-    os << *value;
-    return;
-  }
-  if (auto constant = std::get_if<int64_t>(&dimsize)) {
-    os << *constant;
-    return;
-  }
-  auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-  os << "memref(" << memref << ", " << dim << ")";
-}
-
-Value DimSize::getOrCreateValue(OpBuilder &builder, Location loc) const {
-  if (std::holds_alternative<SpecialKey>(dimsize)) {
-    llvm_unreachable("dense map sentinel does not have a value");
-  } else if (auto val = std::get_if<Value>(&dimsize)) {
-    return *val;
-  } else if (auto val = std::get_if<int64_t>(&dimsize)) {
-    return arith::ConstantIndexOp::create(builder, loc, *val);
-  } else {
-    auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-    return memref::DimOp::create(builder, loc, memref, dim);
-  }
-}
-
-OpFoldResult DimSize::getOrCreateOpFoldResult(OpBuilder &builder,
-                                              Location loc) const {
-  if (std::holds_alternative<SpecialKey>(dimsize)) {
-    llvm_unreachable("dense map sentinel does not have an OpFoldResult");
-  } else if (auto val = std::get_if<Value>(&dimsize)) {
-    return *val;
-  } else if (auto val = std::get_if<int64_t>(&dimsize)) {
-    return builder.getIndexAttr(*val);
-  } else {
-    auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-    Value dimVal = memref::DimOp::create(builder, loc, memref, dim);
-    return dimVal;
-  }
-}
-
-std::optional<Value> DimSize::getValue() const {
-  if (std::holds_alternative<SpecialKey>(dimsize)) {
-    return std::nullopt;
-  }
-  if (auto value = std::get_if<Value>(&dimsize)) {
-    return *value;
-  }
-  return std::nullopt;
-}
-
-std::optional<int64_t> DimSize::getInteger() const {
-  if (std::holds_alternative<SpecialKey>(dimsize)) {
-    return std::nullopt;
-  }
-  if (auto integer = std::get_if<int64_t>(&dimsize)) {
-    return *integer;
-  }
-  return std::nullopt;
-}
-
-DimSize DimSize::getDenseMapEmptyKey() { return DimSize(SpecialKey::Empty); }
-
-DimSize DimSize::getDenseMapTombstoneKey() {
-  return DimSize(SpecialKey::Tombstone);
-}
-
-unsigned DimSize::getHashValue() const {
-  if (auto special = std::get_if<SpecialKey>(&dimsize)) {
-    return llvm::DenseMapInfo<unsigned>::getHashValue(
-        static_cast<unsigned>(*special));
-  }
-  if (auto integer = std::get_if<int64_t>(&dimsize)) {
-    return llvm::DenseMapInfo<int64_t>::getHashValue(*integer);
-  }
-  if (auto value = std::get_if<Value>(&dimsize)) {
-    return llvm::DenseMapInfo<Value>::getHashValue(*value);
-  }
-  auto [memref, dim] = std::get<std::pair<Value, unsigned>>(dimsize);
-  return static_cast<unsigned>(llvm::hash_combine(memref.getAsOpaquePointer(),
-                                                  dim));
-}
-
-const TileShape *ShapeInfo::lookupShape(Value value) const {
-  auto it = shapes.find(value);
-  if (it == shapes.end()) {
-    return nullptr;
-  }
-  return it->second.get();
-}
-
-std::optional<TileShape> ShapeInfo::getShapeWithEquivalence(Value value) {
-  if (auto *shape = lookupShape(value)) {
-    ShapeVector result =
-        llvm::map_to_vector(shape->asArrayRef(), [&](const DimSize &dim) {
-      return dimEquivalences.getOrInsertLeaderValue(dim);
-    });
-    return TileShape(std::move(result));
-  }
-  return std::nullopt;
-}
-
-void ShapeInfo::markDimEquivalent(DimSize lhs, DimSize rhs) {
-  dimEquivalences.unionSets(lhs, rhs);
-}
-
-void ShapeInfo::markShapeEquivalent(ArrayRef<DimSize> lhs,
-                                    ArrayRef<DimSize> rhs) {
-  assert(lhs.size() == rhs.size() && "expected same rank");
-  for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
-    markDimEquivalent(lhsDim, rhsDim);
-  }
-}
-
-void ShapeInfo::markShapeEquivalent(Value lhs, Value rhs) {
-  auto *lhsShape = lookupShape(lhs);
-  auto *rhsShape = lookupShape(rhs);
-  assert(lhsShape || rhsShape && "expected shapes to be present");
-  if (!lhsShape) {
-    setShape(lhs, TileShape(rhsShape->asArrayRef()));
-    return;
-  }
-  if (!rhsShape) {
-    setShape(rhs, TileShape(lhsShape->asArrayRef()));
-    return;
-  }
-  markShapeEquivalent(lhsShape->asArrayRef(), rhsShape->asArrayRef());
-}
-
-void ShapeInfo::markShapeEquivalent(ValueRange lhs, ValueRange rhs) {
-  assert(lhs.size() == rhs.size() && "expected same number of values");
-  for (auto [lhsDim, rhsDim] : llvm::zip(lhs, rhs)) {
-    markShapeEquivalent(lhsDim, rhsDim);
-  }
-}
-
-void ShapeInfo::markShapeEquivalent(Value val, ArrayRef<DimSize> shape) {
-  auto *valShape = lookupShape(val);
-  if (valShape) {
-    markShapeEquivalent(valShape->asArrayRef(), shape);
-  } else {
-    setShape(val, TileShape(shape));
-  }
-}
-
-bool ShapeInfo::setShapeIfAbsent(Value value, TileShape shape) {
-  if (lookupShape(value)) {
-    return false;
-  }
-  setShape(value, std::move(shape));
-  return true;
-}
-
-void ShapeInfo::setShape(Value value, TileShape shape) {
-  shapes.try_emplace(value, std::make_unique<TileShape>(std::move(shape)));
-}
-
-void ShapeInfo::dump(llvm::raw_ostream &os) {
-  os << "ShapeInfo:\n";
-  for (auto &[value, _] : shapes) {
-    auto shape = *getShapeWithEquivalence(value);
-    os << "  " << value << " -> \n[\n";
-    llvm::interleaveComma(shape.asArrayRef(), os, [&](DimSize dim) {
-      dim.dump(os);
-    });
-    os << "\n]\n";
-  }
-}
-
-void ShapeInfo::inferShape(Operation *rootOp, ShapeInferenceState &state) {
-  if (auto shapedOp = dyn_cast<ZuanInferShapeInterface>(rootOp)) {
-    shapedOp.inferShape(*this, state);
-    return;
-  }
-
-  // This should cover most operations in `arith` and `math` dialects.
-  if (rootOp->hasTrait<OpTrait::Elementwise>() &&
-      rootOp->hasTrait<OpTrait::SameOperandsAndResultType>() &&
-      rootOp->hasTrait<OpTrait::OneResult>() &&
-      rootOp->hasTrait<OpTrait::ZeroRegions>()) {
-    if (!isa<TileType>(rootOp->getResult(0).getType())) {
-      return;
-    }
-
-    /// Get the specified operand index that is shape-equivalent to the result.
-    if (auto idx =
-            rootOp->getAttrOfType<IntegerAttr>("zuan_passthru_operand")) {
-      auto opd = rootOp->getOperand(idx.getInt());
-      this->markShapeEquivalent(rootOp->getResult(0), opd);
-      // This will be translated to tail-undisturbed manner in VP dialect.
-    } else {
-      auto opd = rootOp->getOperand(0);
-      this->markShapeEquivalent(rootOp->getResult(0), opd);
-      for (auto opd : llvm::drop_begin(rootOp->getOperands(), 1)) {
-        this->markShapeEquivalent(opd, rootOp->getOperand(0));
-      }
-    }
-
-    if (auto maskPair = state.getMask()) {
-      auto [mask, maskedoff] = *maskPair;
-      this->markShapeEquivalent(rootOp->getResult(0), mask);
-      if (maskedoff) {
-        this->markShapeEquivalent(rootOp->getResult(0), maskedoff);
-      }
-    }
-
-    return;
-  }
-
-  // Compare operations.
-  if (isa<arith::CmpIOp, arith::CmpFOp>(rootOp)) {
-    Value lhs = rootOp->getOperand(0);
-    Value rhs = rootOp->getOperand(1);
-    if (!isa<TileType>(lhs.getType())) {
-      return;
-    }
-    this->markShapeEquivalent(rootOp->getResult(0), lhs);
-    this->markShapeEquivalent(lhs, rhs);
-    if (auto maskPair = state.getMask()) {
-      auto [mask, maskedoff] = *maskPair;
-      this->markShapeEquivalent(rootOp->getResult(0), mask);
-      if (maskedoff) {
-        this->markShapeEquivalent(rootOp->getResult(0), maskedoff);
-      }
-    }
-    return;
-  }
-
-  // While op.
-  if (auto whileOp = dyn_cast<scf::WhileOp>(rootOp)) {
-    auto beforeBlock = whileOp.getBeforeBody();
-    auto afterBlock = whileOp.getAfterBody();
-    for (auto [init, args] :
-         llvm::zip(whileOp.getInits(), beforeBlock->getArguments())) {
-      if (isa<TileType>(init.getType())) {
-        this->markShapeEquivalent(init, args);
-      }
-    }
-    for (auto &op : beforeBlock->getOperations()) {
-      inferShape(&op, state);
-    }
-    auto conditionOp = whileOp.getConditionOp();
-    auto results = whileOp->getResults();
-    for (auto [passed, arg, result] : llvm::zip(
-             conditionOp.getArgs(), afterBlock->getArguments(), results)) {
-      if (isa<TileType>(passed.getType())) {
-        this->markShapeEquivalent(passed, arg);
-        this->markShapeEquivalent(passed, result);
-      }
-    }
-    for (auto &op : afterBlock->getOperations()) {
-      inferShape(&op, state);
-    }
-  }
-
-  // Genral loops. This is made for `scf.for`, not sure if applicable to others.
-  if (auto iface = dyn_cast<LoopLikeOpInterface>(rootOp)) {
-    // If this is a iterative accumulation operation.
-    auto inits = iface.getInits();
-    auto iterArgs = iface.getRegionIterArgs();
-    for (auto [init, arg] : llvm::zip(inits, iterArgs)) {
-      if (isa<TileType>(init.getType())) {
-        this->markShapeEquivalent(init, arg);
-      }
-    }
-
-    for (auto &region : iface.getLoopRegions()) {
-      for (auto &op : region->getOps()) {
-        inferShape(&op, state);
-      }
-    }
-
-    if (auto results = iface.getLoopResults()) {
-      auto yieldValues = iface.getYieldedValues();
-      for (auto [result, yield] : llvm::zip(*results, yieldValues)) {
-        if (isa<TileType>(result.getType())) {
-          this->markShapeEquivalent(result, yield);
+        overlayStaticShape(builder, cast<TileType>(result.getType()), *shape);
+        return *shape;
+      })
+      .Case<MaskOp>([&](MaskOp maskOp) {
+        return reifyMaskShape(builder, maskOp, result.getResultNumber());
+      })
+      .Case<GatherOp>([&](GatherOp gatherOp) { return reifyGatherShape(builder, gatherOp); })
+      .Case<scf::ForOp>(
+          [&](scf::ForOp) { return reifySCFForResultShape(builder, result); })
+      .Case<scf::WhileOp>(
+          [&](scf::WhileOp) { return reifySCFWhileResultShape(builder, result); })
+      .Default([&](Operation *unknownOp) -> FailureOr<SmallVector<OpFoldResult>> {
+        auto forwarded = getForwardedShapeOperand(unknownOp);
+        if (failed(forwarded)) {
+          return failure();
         }
-      }
+        auto shape = reifyZuanShape(builder, *forwarded);
+        if (failed(shape)) {
+          return failure();
+        }
+        overlayStaticShape(builder, cast<TileType>(result.getType()), *shape);
+        return *shape;
+      });
+}
+
+} // namespace
+
+FailureOr<SmallVector<OpFoldResult>> reifyZuanShape(OpBuilder &builder,
+                                                    Value value) {
+  auto tileType = dyn_cast<TileType>(value.getType());
+  if (!tileType) {
+    return failure();
+  }
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    return reifyBlockArgumentShape(builder, blockArg);
+  }
+  if (auto result = dyn_cast<OpResult>(value)) {
+    return reifyOpResultShape(builder, result);
+  }
+
+  auto shape = getStaticShape(builder, tileType);
+  if (llvm::all_of(shape, [](OpFoldResult ofr) { return static_cast<bool>(ofr); })) {
+    return shape;
+  }
+  return failure();
+}
+
+FailureOr<OpFoldResult> reifyZuanDim(OpBuilder &builder, Value value,
+                                     unsigned dim) {
+  auto tileType = dyn_cast<TileType>(value.getType());
+  if (!tileType || dim >= tileType.getRank()) {
+    return failure();
+  }
+  int64_t staticDim = tileType.getShape()[dim];
+  if (!ShapedType::isDynamic(staticDim)) {
+    return OpFoldResult(builder.getIndexAttr(staticDim));
+  }
+
+  auto shape = reifyZuanShape(builder, value);
+  if (failed(shape) || dim >= shape->size() || !(*shape)[dim]) {
+    return failure();
+  }
+  return (*shape)[dim];
+}
+
+LogicalResult resolveDimUsersOfResult(OpResult result,
+                                      PatternRewriter &rewriter) {
+  if (!isa<TileType>(result.getType())) {
+    return success();
+  }
+
+  for (OpOperand &use : llvm::make_early_inc_range(result.getUses())) {
+    // Only direct `zuan.dim` users need special handling here. Any other live
+    // use still needs the tile result itself, so the producer cannot be
+    // destructively erased yet.
+    auto dimOp = dyn_cast<DimOp>(use.getOwner());
+    if (!dimOp || use.getOperandNumber() != 0) {
+      continue;
+    }
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(dimOp);
+    // Destructive rewrites use this helper before erasing a tile producer so
+    // direct `zuan.dim` users are rewritten while the original tile semantics
+    // are still available.
+    auto reified = reifyZuanDim(rewriter, result, dimOp.getDim());
+    if (failed(reified)) {
+      return dimOp.emitOpError("failed to reify queried dimension");
+    }
+    rewriter.replaceOp(dimOp,
+                       getOrCreateIndexValue(rewriter, *reified, dimOp.getLoc()));
+  }
+
+  return success();
+}
+
+LogicalResult resolveDimUsersOfOp(Operation *op, PatternRewriter &rewriter) {
+  for (OpResult result : op->getResults()) {
+    if (failed(resolveDimUsersOfResult(result, rewriter))) {
+      return failure();
     }
   }
+  return success();
+}
+
+std::optional<int64_t> getConstantZuanIntValue(OpFoldResult ofr) {
+  if (auto attr = ofr.dyn_cast<Attribute>()) {
+    return cast<IntegerAttr>(attr).getInt();
+  }
+  return std::nullopt;
 }
 
 unsigned computeUnreducedIdx(unsigned idx, size_t unreducedRank,

@@ -1,5 +1,6 @@
 # This function defines triton_`benchmark_name`_kernels library, which includes
-# the generated object files for the Zuan and Triton CPU kernels.
+# the generated object files for the scalar reference, Zuan, and Triton CPU
+# kernels.
 # 
 # The `xxx_kernel` names in IRs will be replaced with `kernel_zuan` and
 # `kernel_triton_cpu` respectively.
@@ -16,6 +17,11 @@ function(add_triton_benchmark benchmark_name python_args)
   set(zuan_llvm ${generated_file_prefix}_zuan.ll)
   set(zuan_debug_file ${generated_file_prefix}_zuan_debug.mlir)
   set(zuan_obj ${generated_file_prefix}_zuan.o)
+
+  set(scalar_mlir ${generated_file_prefix}_scalar.mlir)
+  set(scalar_llvm ${generated_file_prefix}_scalar.ll)
+  set(scalar_debug_file ${generated_file_prefix}_scalar_debug.mlir)
+  set(scalar_obj ${generated_file_prefix}_scalar.o)
 
   set(triton_cpu_mlir ${generated_file_prefix}_cpu.mlir)
   set(triton_cpu_llvm ${generated_file_prefix}_cpu.ll)
@@ -58,9 +64,48 @@ function(add_triton_benchmark benchmark_name python_args)
       -reconcile-unrealized-casts
       -cse
       -canonicalize
-      -mlir-print-ir-after-all
+      ${ZUAN_BENCHMARK_DUMP_IR_FLAG}
       -o ${mlir_file} ${ttir_file} 2> ${mlir_debug_file}
     DEPENDS ${ttir_file}
+  )
+
+  add_custom_command(
+    OUTPUT ${scalar_mlir} ${scalar_llvm} ${scalar_obj}
+    COMMAND
+      cat ${mlir_file} |
+      sed "'s/kernel(/kernel_scalar(/'" |
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-opt
+        -empty-tensor-to-alloc-tensor
+        -one-shot-bufferize="allow-return-allocs-from-loops=true"
+        -linalg-generalize-named-ops
+        -convert-linalg-to-affine-loops
+        -canonicalize
+        -cse
+        -lower-affine
+        -convert-scf-to-cf
+        -convert-cf-to-llvm
+        -convert-ub-to-llvm
+        -expand-strided-metadata
+        -lower-affine
+        -convert-math-to-llvm
+        -convert-math-to-libm
+        -convert-vector-to-llvm
+        -convert-arith-to-llvm
+        -finalize-memref-to-llvm
+        -convert-func-to-llvm
+        -reconcile-unrealized-casts
+        -canonicalize
+        -cse
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG} 2> ${scalar_debug_file} |
+        ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${scalar_llvm}
+    COMMAND
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
+        -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${scalar_llvm} -o ${scalar_obj}
+    DEPENDS
+      ${mlir_file}
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-opt
+      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-translate
   )
 
   add_custom_command(
@@ -78,6 +123,7 @@ function(add_triton_benchmark benchmark_name python_args)
         -canonicalize
         -cse
         -convert-zuan-to-vp="vf=16;scalable=true"
+        -fold-memref-alias-ops
         -convert-vp-to-llvm
         -canonicalize
         -cse
@@ -95,7 +141,7 @@ function(add_triton_benchmark benchmark_name python_args)
         -reconcile-unrealized-casts
         -canonicalize
         -cse
-        -mlir-print-ir-after-all
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG}
         -o ${zuan_mlir} 2> ${zuan_debug_file}
     COMMAND
       ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
@@ -185,7 +231,7 @@ function(add_triton_benchmark benchmark_name python_args)
       ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
   )
 
-  add_library(triton_${benchmark_name}_kernels STATIC ${zuan_obj} ${triton_cpu_obj})
+  add_library(triton_${benchmark_name}_kernels STATIC ${scalar_obj} ${zuan_obj} ${triton_cpu_obj})
   set_target_properties(triton_${benchmark_name}_kernels PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 

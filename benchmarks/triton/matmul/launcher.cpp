@@ -76,14 +76,19 @@ void verify() {
   const size_t K = 123;
 
   auto [input1, input2] = initializeData(M, N, K);
+  std::vector<float> output_scalar(M * N);
   std::vector<float> output_triton_cpu(M * N);
   std::vector<float> output_zuan(M * N);
+  runKernel(kernel_scalar_wrapper, M, N, K, input1.data(), input2.data(),
+            output_scalar.data());
   runKernel(kernel_triton_cpu, M, N, K, input1.data(), input2.data(),
             output_triton_cpu.data());
   runKernel(kernel_zuan_wrapper, M, N, K, input1.data(), input2.data(),
             output_zuan.data());
 
-  verify<float>(output_triton_cpu.data(), output_zuan.data(), M * N, "Matmul",
+  verify<float>(output_scalar.data(), output_triton_cpu.data(), M * N,
+                "Matmul Triton CPU", 0.0001);
+  verify<float>(output_scalar.data(), output_zuan.data(), M * N, "Matmul Zuan",
                 0.0001);
 }
 

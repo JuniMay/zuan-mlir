@@ -28,9 +28,6 @@ struct LinalgConversionState {
   SmallVector<OpFoldResult> ofrShape;
   SmallVector<int64_t> staticShape;
 
-  Block *dynamicBlock;
-  Block *yieldBlock;
-
   linalg::LinalgOp linalgOp;
 
   /// The converted values of scf if condition.
@@ -41,8 +38,8 @@ struct LinalgConversionState {
 
   LinalgConversionState() = default;
 
-  LinalgConversionState(SmallVector<OpFoldResult> ofrShape, Block *dynamicBlock,
-                        Block *yieldBlock, linalg::LinalgOp linalgOp);
+  LinalgConversionState(SmallVector<OpFoldResult> ofrShape,
+                        linalg::LinalgOp linalgOp);
 
   void pushMask(Value mask) { masks.push_back(mask); }
   void popMask() { masks.pop_back(); }

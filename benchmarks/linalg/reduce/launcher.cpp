@@ -5,6 +5,7 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 1> *, MemRef<float, 0> *);
@@ -51,15 +52,15 @@ static void runBenchmark(benchmark::State &state, KernelFunc kernel) {
 static void verifyReduce() {
   const size_t N = 1397;
   MemRef<float, 1> vec = initializeData(N);
-  MemRef<float, 0> autovec({}, 0);
+  MemRef<float, 0> scalar({}, 0);
   MemRef<float, 0> zuan_16_2({}, 0);
   MemRef<float, 0> transform_16_2({}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec_16, &vec, &autovec);
+  runKernel(_mlir_ciface_kernel_scalar, &vec, &scalar);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &zuan_16_2);
   runKernel(_mlir_ciface_kernel_transform_16_2, &vec, &transform_16_2);
 
-  std::cerr << "autovec:   " << autovec[0] << "\n";
+  std::cerr << "scalar:    " << scalar[0] << "\n";
   std::cerr << "zuan-16-2: " << zuan_16_2[0] << "\n";
   std::cerr << "transform-16-2: " << transform_16_2[0] << "\n";
 }

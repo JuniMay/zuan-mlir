@@ -5,6 +5,7 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 1> *);
@@ -65,9 +66,9 @@ static void verifyReduce() {
   const size_t M = 1573;
   const size_t N = 1397;
   MemRef<float, 2> tile = initializeData(M, N);
-  MemRef<float, 1> autovec({N}, 0);
+  MemRef<float, 1> scalar({N}, 0);
 
-  runKernel(_mlir_ciface_kernel_autovec_16, &tile, &autovec);
+  runKernel(_mlir_ciface_kernel_scalar, &tile, &scalar);
 
   MemRef<float, 1> zuan_8_2({N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_2, &tile, &zuan_8_2);
@@ -82,12 +83,12 @@ static void verifyReduce() {
   MemRef<float, 1> zuan_16_4({N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &tile, &zuan_16_4);
 
-  autovec.verify(zuan_8_2, "reduce-2d-zuan-8-2", 0.0001);
-  autovec.verify(zuan_8_4, "reduce-2d-zuan-8-4", 0.0001);
-  autovec.verify(zuan_8_8, "reduce-2d-zuan-8-8", 0.0001);
-  autovec.verify(zuan_16_1, "reduce-2d-zuan-16-1", 0.0001);
-  autovec.verify(zuan_16_2, "reduce-2d-zuan-16-2", 0.0001);
-  autovec.verify(zuan_16_4, "reduce-2d-zuan-16-4", 0.0001);
+  scalar.verify(zuan_8_2, "reduce-2d-zuan-8-2", 0.0001);
+  scalar.verify(zuan_8_4, "reduce-2d-zuan-8-4", 0.0001);
+  scalar.verify(zuan_8_8, "reduce-2d-zuan-8-8", 0.0001);
+  scalar.verify(zuan_16_1, "reduce-2d-zuan-16-1", 0.0001);
+  scalar.verify(zuan_16_2, "reduce-2d-zuan-16-2", 0.0001);
+  scalar.verify(zuan_16_4, "reduce-2d-zuan-16-4", 0.0001);
 
   MemRef<float, 1> transform_8_2({N}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_2, &tile, &transform_8_2);
@@ -102,16 +103,16 @@ static void verifyReduce() {
   MemRef<float, 1> transform_16_4({N}, 0);
   runKernel(_mlir_ciface_kernel_transform_16_4, &tile, &transform_16_4);
 
-  autovec.verify(transform_8_2, "reduce-2d-transform-8-2", 0.0001);
-  autovec.verify(transform_8_4, "reduce-2d-transform-8-4", 0.0001);
-  autovec.verify(transform_8_8, "reduce-2d-transform-8-8", 0.0001);
-  autovec.verify(transform_16_1, "reduce-2d-transform-16-1", 0.0001);
-  autovec.verify(transform_16_2, "reduce-2d-transform-16-2", 0.0001);
-  autovec.verify(transform_16_4, "reduce-2d-transform-16-4", 0.0001);
+  scalar.verify(transform_8_2, "reduce-2d-transform-8-2", 0.0001);
+  scalar.verify(transform_8_4, "reduce-2d-transform-8-4", 0.0001);
+  scalar.verify(transform_8_8, "reduce-2d-transform-8-8", 0.0001);
+  scalar.verify(transform_16_1, "reduce-2d-transform-16-1", 0.0001);
+  scalar.verify(transform_16_2, "reduce-2d-transform-16-2", 0.0001);
+  scalar.verify(transform_16_4, "reduce-2d-transform-16-4", 0.0001);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec=" << autovec[i]
+              << ": scalar=" << scalar[i]
 
               << "\tzuan-8-2=" << zuan_8_2[i] << "\tzuan-8-4=" << zuan_8_4[i]
               << "\tzuan-8-8=" << zuan_8_8[i] << "\tzuan-16-1=" << zuan_16_1[i]

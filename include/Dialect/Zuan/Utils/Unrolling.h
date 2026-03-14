@@ -20,7 +20,6 @@ namespace mlir {
 namespace zuan {
 
 class TileType;
-class DynamicOp;
 enum class CombiningKind : uint32_t;
 
 /// Options and parameters that controls the unrolling process.
@@ -71,18 +70,12 @@ struct UnrollState {
   UnrollState() = default;
   /// The valueMap stores the values defined above the operation, or operations
   /// that does not need to be unrolled and is cloned as is. The unrolling
-  /// process traverse the def-use from yielded scalars or memory write to their
-  /// dependencies. Operations-to-unroll are handled each time it is needed and
-  /// are not stored in the valueMap.
+  /// process traverses a backward slice rooted at a concrete operation. Values
+  /// outside that slice are mapped to themselves to avoid cloning unrelated IR.
   IRMapping valueMap;
-  /// The final yield block for store operations to insert.
-  Block *yieldBlock;
 
-  void initialize(DynamicOp op);
+  void initialize(Operation *root);
 };
-
-/// Check if a memref value is defined inside a dynamic op.
-bool isMemrefDefinedInsideDynamicOp(Value value);
 
 /// Entry function to unroll zuan operations.
 Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
@@ -107,16 +100,6 @@ TileType getUnrolledTileType(TileType tileType, UnrollOptions options);
 /// Create a combining operation with the given kind.
 Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
                         Value lhs, Value rhs);
-
-/// Split the dynamic op for unrolling. If the rank of store in yield op is
-/// larger than target stores, and the dimsize does not equivalent to the
-/// selected one, create a new dynamic op and move all the incompatible stores
-/// to the new dynamic op.
-void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
-                                unsigned unrollIdx, ShapeInfo &shapeInfo);
-
-bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank,
-                         ShapeInfo &shapeInfo);
 
 } // namespace zuan
 } // namespace mlir

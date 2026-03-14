@@ -1,17 +1,17 @@
 #include "Conversion/ZuanToVP.h"
+
 #include "VP/IR/VP.h"
 #include "Zuan/IR/Zuan.h"
 #include "Zuan/Utils/ConvertToVP.h"
+#include "Zuan/Utils/ShapeInference.h"
 #include "Zuan/Utils/Unrolling.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -20,135 +20,98 @@ namespace zuan {
 
 namespace {
 
-static Type getProcessingType(DynamicOp dynamicOp) {
-  // Find the max bitwidth type.
-  Type type = nullptr;
-  int64_t maxBitwidth = 0;
-  dynamicOp->walk([&](Operation *op) {
-    auto resultTypes = op->getResultTypes();
-    if (!resultTypes.empty()) {
-      for (auto resultType : resultTypes) {
-        if (auto tileType = dyn_cast<TileType>(resultType)) {
-          auto elemType = tileType.getElementType();
-          // FIXME: working around for index.
-          int64_t currBitwidth = 64;
-          if (elemType.isIntOrFloat()) {
-            currBitwidth = elemType.getIntOrFloatBitWidth();
-          }
-          if (currBitwidth > maxBitwidth) {
-            maxBitwidth = currBitwidth;
-            type = elemType;
-          }
-        }
-      }
-    }
-  });
-  return type;
-}
-
 struct ZuanStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
-  // Benefit is set to larger than any other stripmining pattern. So unrolled
-  // reduction will not be stripmined again.
-  explicit ZuanStripminingReduction1DPattern(MLIRContext *context, unsigned vf,
-                                             bool scalable)
-      : OpRewritePattern<ReductionOp>(context, 2), vf(vf), scalable(scalable) {}
+  ZuanStripminingReduction1DPattern(MLIRContext *context, unsigned vf,
+                                    bool scalable)
+      : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable) {}
 
-  LogicalResult matchAndRewrite(ReductionOp op,
-                                PatternRewriter &rewriter) const final {
+  static LogicalResult rewriteReduction(ReductionOp op, RewriterBase &rewriter,
+                                        unsigned vf, bool scalable) {
+    if (op->hasAttr("zuan.stripmined")) {
+      return failure();
+    }
     auto tile = op.getTile();
-    auto dims = op.getDims();
+    if (op.getDims().size() != 1 || op.getDims()[0] != 0 ||
+        tile.getType().getRank() != 1) {
+      return failure();
+    }
 
-    if (dims.size() != 1 || dims[0] != 0 || tile.getType().getRank() != 1) {
-      return rewriter.notifyMatchFailure(op, "not 1-D reduction");
+    auto dim = reifyZuanDim(rewriter, tile, 0);
+    if (failed(dim)) {
+      return failure();
+    }
+    if (auto value = dim->dyn_cast<Value>()) {
+      if (isa<vp::GetVLOp>(value.getDefiningOp())) {
+        return failure();
+      }
     }
 
     auto loc = op.getLoc();
-    auto dynamicOp = op->getParentOfType<DynamicOp>();
-
-    ShapeInfo shapeInfo;
-    ShapeInferenceState shapeInferenceState;
-    shapeInfo.inferShape(dynamicOp, shapeInferenceState);
-
-    // shapeInfo.dump(llvm::dbgs());
-
-    auto tileShape = *shapeInfo.lookupShape(tile);
-    if (auto val = tileShape[0].getValue()) {
-      if (isa<vp::GetVLOp>(val->getDefiningOp())) {
-        return rewriter.notifyMatchFailure(op, "already stripmined");
-      }
-    }
-
-    UnrollState state;
-    state.initialize(dynamicOp);
-
-    // Hoist the reduction to a new dynamic op. So it will be the scalar defined
-    // outside the dynamic op. This should avoid duplicated computation.
-    // Additional loads are expected to be eliminated with CSE, after lowered to
-    // VP dialect.
-    rewriter.setInsertionPoint(dynamicOp);
-    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Type type = tile.getType().getElementType();
-    Value dim = tileShape[0].getOrCreateValue(rewriter, loc);
-    Value vlmax = vp::GetVLOp::create(rewriter, loc, dim, vf, type, scalable);
+    Value dimValue = getOrCreateIndexValue(rewriter, *dim, loc);
+    Value vlmax =
+        vp::GetVLOp::create(rewriter, loc, dimValue, vf, type, scalable);
 
-    Value zeroElem = arith::ConstantOp::create(rewriter, 
-        loc, type, rewriter.getZeroAttr(type));
+    Value zeroIdx = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value zeroElem = arith::ConstantOp::create(rewriter, loc, type,
+                                               rewriter.getZeroAttr(type));
+    Value initAcc = zuan::SplatOp::create(rewriter, loc, zeroElem,
+                                          SmallVector<OpFoldResult>{vlmax});
 
-    auto newDynamicOp =
-        DynamicOp::create(rewriter, loc, type, dynamicOp.getInits(), nullptr);
-    state.valueMap.map(dynamicOp.getBody().getArguments(),
-                       newDynamicOp.getBody().getArguments());
-    rewriter.setInsertionPointToStart(&newDynamicOp.getBody().front());
-
-    SmallVector<OpFoldResult> sizes{vlmax};
-    Value initAcc = zuan::SplatOp::create(rewriter, loc, zeroElem, sizes);
-    SmallVector<Value> inits = {dim, zero, initAcc};
-    SmallVector<Type> resultTypes = {dim.getType(), zero.getType(),
+    SmallVector<Value> inits = {dimValue, zeroIdx, initAcc};
+    SmallVector<Type> resultTypes = {dimValue.getType(), zeroIdx.getType(),
                                      initAcc.getType()};
 
-    auto whileOp = scf::WhileOp::create(rewriter, 
-        loc, resultTypes, inits,
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          auto avl = args[0];
-          Value cond = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sgt,
-                                               avl, zero);
-          scf::ConditionOp::create(b, loc, cond, args);
+    auto whileOp = scf::WhileOp::create(
+        rewriter, loc, resultTypes, inits,
+        [&](OpBuilder &b, Location loopLoc, ValueRange args) {
+          Value avl = args[0];
+          Value cond = arith::CmpIOp::create(
+              b, loopLoc, arith::CmpIPredicate::sgt, avl, zeroIdx);
+          scf::ConditionOp::create(b, loopLoc, cond, args);
         },
-        [&](OpBuilder &b, Location loc, ValueRange args) -> void {
-          auto avl = args[0];
-          auto idx = args[1];
-          auto acc = args[2];
+        [&](OpBuilder &b, Location loopLoc, ValueRange args) {
+          Value avl = args[0];
+          Value idx = args[1];
+          Value acc = args[2];
 
-          Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
+          Value vl = vp::GetVLOp::create(b, loopLoc, avl, vf, type, scalable);
+          UnrollState state;
+          state.initialize(op);
           UnrollOptions options(idx, vl, 0, true);
+          Value newSourceTile = getUnrolledValue(b, tile, options, state);
+          Value newAcc =
+              createCombiningOp(b, loopLoc, op.getKind(), acc, newSourceTile);
+          if (auto *newAccOp = newAcc.getDefiningOp()) {
+            newAccOp->setAttr("zuan_passthru_operand", b.getIndexAttr(0));
+          }
 
-          auto newSourceTile = getUnrolledValue(rewriter, tile, options, state);
-          auto newAcc = createCombiningOp(rewriter, loc, op.getKind(), acc,
-                                          newSourceTile);
-          newAcc.getDefiningOp()->setAttr("zuan_passthru_operand",
-                                          b.getIndexAttr(0));
-
-          Value newAvl = arith::SubIOp::create(b, loc, avl, vl);
-          Value newIdx = arith::AddIOp::create(b, loc, idx, vl);
-          scf::YieldOp::create(b, loc, ValueRange{newAvl, newIdx, newAcc});
+          Value newAvl = arith::SubIOp::create(b, loopLoc, avl, vl);
+          Value newIdx = arith::AddIOp::create(b, loopLoc, idx, vl);
+          scf::YieldOp::create(b, loopLoc, ValueRange{newAvl, newIdx, newAcc});
         });
 
     Value init = op.getInit();
     if (init) {
+      UnrollState state;
+      state.initialize(op);
       init = getUnrolledValue(rewriter, init, getCloneOptions(), state);
     }
 
-    auto finalAcc = whileOp->getResult(2);
-    Value finalRed = zuan::ReductionOp::create(rewriter, loc, op.getKind(),
-                                                        finalAcc, dims, init);
+    Value finalRed = zuan::ReductionOp::create(
+        rewriter, loc, op.getKind(), whileOp->getResult(2), op.getDims(), init);
+    finalRed.getDefiningOp()->setAttr("zuan.stripmined",
+                                      rewriter.getUnitAttr());
+    rewriter.replaceOp(op, finalRed);
+    return success();
+  }
 
-    YieldOp::create(rewriter, loc, finalRed, nullptr);
-
-    rewriter.setInsertionPoint(op);
-    Value splat = zuan::SplatOp::create(rewriter, 
-        loc, newDynamicOp->getResult(0), ArrayRef<int64_t>{});
-    rewriter.replaceOp(op, splat);
-
+  LogicalResult matchAndRewrite(ReductionOp op,
+                                PatternRewriter &rewriter) const final {
+    if (failed(rewriteReduction(op, rewriter, vf, scalable))) {
+      return rewriter.notifyMatchFailure(op,
+                                         "not a stripminable 1-D reduction");
+    }
     return success();
   }
 
@@ -157,94 +120,313 @@ private:
   bool scalable;
 };
 
-struct ZuanStripminingPattern : OpRewritePattern<DynamicOp> {
-  explicit ZuanStripminingPattern(MLIRContext *context, unsigned vf,
-                                  bool scalable)
-      : OpRewritePattern<DynamicOp>(context, 1), vf(vf), scalable(scalable) {}
+static bool isEffectOnlyMaskRoot(MaskOp op) {
+  return op.getNumResults() == 0 &&
+         isa_and_nonnull<StoreOp, ScatterOp>(op.getMaskedOp());
+}
 
-  LogicalResult matchAndRewrite(DynamicOp op,
+static Value getRootTileValue(Operation *op);
+static void cleanupConvertedSlice(ArrayRef<Operation *> slice,
+                                  PatternRewriter &rewriter);
+
+static bool isSupportedEffectRoot(StoreOp) { return true; }
+static bool isSupportedEffectRoot(ScatterOp) { return true; }
+static bool isSupportedEffectRoot(MaskOp op) {
+  return isEffectOnlyMaskRoot(op);
+}
+
+static bool isSupportedVPRoot(StoreOp) { return true; }
+static bool isSupportedVPRoot(ScatterOp) { return true; }
+static bool isSupportedVPRoot(ExtractOp) { return true; }
+static bool isSupportedVPRoot(MaskOp op) { return isEffectOnlyMaskRoot(op); }
+
+static SetVector<Operation *> collectBackwardSlice(Operation *root) {
+  BackwardSliceOptions options;
+  options.inclusive = true;
+
+  SetVector<Operation *> slice;
+  (void)getBackwardSlice(root, &slice, options);
+  return slice;
+}
+
+static bool needsLoopStripmining(Operation *root) {
+  // Last-dimension stripmining is the hardware-adaptation step for concrete
+  // effect roots. Rank-0 roots never need it; rank-1 and rank-2+ roots both do.
+  Value tile = getRootTileValue(root);
+  auto tileType = tile ? dyn_cast<TileType>(tile.getType()) : nullptr;
+  if (!tileType) {
+    return false;
+  }
+  return TypeSwitch<Operation *, bool>(root)
+      .Case<StoreOp, ScatterOp>([&](auto) { return tileType.getRank() >= 1; })
+      .Case<MaskOp>([&](MaskOp maskOp) {
+        return isEffectOnlyMaskRoot(maskOp) && tileType.getRank() >= 1;
+      })
+      .Default([](Operation *) { return false; });
+}
+
+static Value getRootTileValue(Operation *op) {
+  return TypeSwitch<Operation *, Value>(op)
+      .Case<StoreOp>([](StoreOp storeOp) { return storeOp.getValue(); })
+      .Case<ScatterOp>([](ScatterOp scatterOp) { return scatterOp.getValue(); })
+      .Case<MaskOp>([](MaskOp maskOp) { return maskOp.getMask(); })
+      .Default([](Operation *) { return Value(); });
+}
+
+static Type getRootProcessingType(Operation *op) {
+  return TypeSwitch<Operation *, Type>(op)
+      .Case<StoreOp>([](StoreOp storeOp) {
+        return storeOp.getValue().getType().getElementType();
+      })
+      .Case<ScatterOp>([](ScatterOp scatterOp) {
+        return scatterOp.getValue().getType().getElementType();
+      })
+      .Case<MaskOp>([](MaskOp maskOp) -> Type {
+        return TypeSwitch<Operation *, Type>(maskOp.getMaskedOp())
+            .Case<StoreOp>([](StoreOp storeOp) {
+              return storeOp.getValue().getType().getElementType();
+            })
+            .Case<ScatterOp>([](ScatterOp scatterOp) {
+              return scatterOp.getValue().getType().getElementType();
+            })
+            .Default([](Operation *) { return Type(); });
+      })
+      .Default([](Operation *) { return Type(); });
+}
+
+static FailureOr<SmallVector<OpFoldResult>> reifyRootShape(OpBuilder &builder,
+                                                           Operation *op) {
+  Value tile = getRootTileValue(op);
+  if (!tile) {
+    return failure();
+  }
+  return reifyZuanShape(builder, tile);
+}
+
+static Operation *unrollRoot(OpBuilder &builder, Operation *op,
+                             UnrollOptions options, UnrollState &state) {
+  return TypeSwitch<Operation *, Operation *>(op)
+      .Case<StoreOp>([&](StoreOp storeOp) {
+        return storeOp.unroll(builder, options, state);
+      })
+      .Case<ScatterOp>([&](ScatterOp scatterOp) {
+        return scatterOp.unroll(builder, options, state);
+      })
+      .Case<MaskOp>(
+          [&](MaskOp maskOp) { return maskOp.unroll(builder, options, state); })
+      .Default([](Operation *) -> Operation * { return nullptr; });
+}
+
+static bool isAlreadyStripminedRoot(Operation *op,
+                                    ArrayRef<OpFoldResult> shape) {
+  if (op->hasAttr("zuan.stripmined")) {
+    return true;
+  }
+  if (shape.empty()) {
+    return false;
+  }
+  if (auto dimValue = shape.back().dyn_cast<Value>()) {
+    return isa<vp::GetVLOp>(dimValue.getDefiningOp());
+  }
+  return false;
+}
+
+template <typename RootOp>
+struct ZuanStaticRowNormalizationPattern : OpRewritePattern<RootOp> {
+  ZuanStaticRowNormalizationPattern(MLIRContext *context)
+      : OpRewritePattern<RootOp>(context, 3) {}
+
+  LogicalResult matchAndRewrite(RootOp op,
                                 PatternRewriter &rewriter) const final {
-    ShapeInfo shapeInfo;
-    ShapeInferenceState shapeInferenceState;
-    shapeInfo.inferShape(op, shapeInferenceState);
-
-    splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
-
-    auto yieldOp = op.getYieldOp();
-    auto yieldRegion = &yieldOp.getBody();
-    if (yieldRegion->getOps().empty()) {
-      // Scalars are produced with 1-D reduction or dummy splat. So no need to
-      // stripmine them anymore.
-      return rewriter.notifyMatchFailure(op, "empty yield region");
+    if (!isSupportedEffectRoot(op)) {
+      return rewriter.notifyMatchFailure(op, "not a supported effect root");
     }
 
-    if (yieldOp->getNumOperands() != 0) {
-      return rewriter.notifyMatchFailure(op, "expected no operand");
+    Value rootTile = getRootTileValue(op);
+    auto rootTileType =
+        rootTile ? dyn_cast<TileType>(rootTile.getType()) : nullptr;
+    if (!rootTileType || rootTileType.getRank() < 2) {
+      return rewriter.notifyMatchFailure(op, "root is not at least 2-D");
+    }
+    int64_t staticRows = rootTileType.getShape().front();
+    if (ShapedType::isDynamic(staticRows) || staticRows < 1) {
+      return rewriter.notifyMatchFailure(op,
+                                         "root leading dimension is not a constant row pack");
     }
 
     auto loc = op.getLoc();
-
-    auto referenceOp = &*yieldRegion->getOps().begin();
-    auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
-    assert(iface && "expected an unrolling interface");
-
-    auto shape = iface.getShapeToUnroll(shapeInfo);
-
-    if (shape->empty()) {
-      return rewriter.notifyMatchFailure(op, "0-D operations");
-    }
-
-    if (auto val = shape->back().getValue()) {
-      if (isa<vp::GetVLOp>(val->getDefiningOp())) {
-        return rewriter.notifyMatchFailure(op, "already stripmined");
-      }
-    }
-
-    // Strip-mining introduces EVL on the minor dimension. This pattern is not
-    // responsible for eliminating a dynamic outer dimension in a 2-D tile; that
-    // is handled by `ZuanTilingPattern` below.
-    auto unrollIdx = shape->size() - 1;
-
-    auto type = getProcessingType(op);
-
-    rewriter.setInsertionPoint(op);
-    Value dim = (*shape).back().getOrCreateValue(rewriter, loc);
+    Value dim = arith::ConstantIndexOp::create(rewriter, loc, staticRows);
 
     UnrollState state;
     state.initialize(op);
-
     dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
+
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+    Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
-    SmallVector<Value> inits = {dim, zero};
-    SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
-
-    scf::WhileOp::create(rewriter, 
-        loc, resultTypes, inits,
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          auto avl = args[0];
-          Value cond = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sgt,
-                                               avl, zero);
-          scf::ConditionOp::create(b, loc, cond, args);
-        },
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          auto avl = args[0];
-          auto idx = args[1];
-
-          Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
-          UnrollOptions options(idx, vl, unrollIdx, false);
-          op.unroll(b, options, state);
-
-          Value newAvl = arith::SubIOp::create(b, loc, avl, vl);
-          Value newIdx = arith::AddIOp::create(b, loc, idx, vl);
-
-          scf::YieldOp::create(b, loc, ValueRange{newAvl, newIdx});
+    // Normalize any static `N x ...` effect root into `N` rank-reduced row
+    // roots before VP lowering. This keeps the VP path focused on true 1-D
+    // vector tiles instead of the more fragile row-pack representation.
+    scf::ForOp::create(
+        rewriter, loc, zero, dim, one, ValueRange{},
+        [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
+          // Rank-reduce the unit row so the carried slice becomes `?xf32`
+          // instead of `1x?xf32`, and the corresponding outer lhs becomes a
+          // rank-0 tile that VP lowering can treat as a scalar.
+          UnrollOptions options(iv, b.getIndexAttr(1), 0, true);
+          unrollRoot(b, op, options, state);
+          scf::YieldOp::create(b, loopLoc);
         });
 
-    // whileOp->getParentOfType<func::FuncOp>().dump();
-
     rewriter.eraseOp(op);
+    return success();
+  }
+};
 
+static LogicalResult rewriteRootStripmining(Operation *op,
+                                            RewriterBase &rewriter, unsigned vf,
+                                            bool scalable) {
+  if (op->hasAttr("zuan.stripmined")) {
+    return failure();
+  }
+  if (auto maskOp = dyn_cast<MaskOp>(op)) {
+    if (!isEffectOnlyMaskRoot(maskOp)) {
+      return failure();
+    }
+  } else if (!isa<StoreOp, ScatterOp>(op)) {
+    return failure();
+  }
+
+  auto shape = reifyRootShape(rewriter, op);
+  if (failed(shape) || shape->empty()) {
+    return failure();
+  }
+  if (isAlreadyStripminedRoot(op, *shape)) {
+    return failure();
+  }
+
+  auto loc = op->getLoc();
+  Type type = getRootProcessingType(op);
+  // The shared stripmining rewrite is rank-agnostic: once any leading
+  // dimensions are tiled away, both 1-D and 2-D+ effect roots just chunk the
+  // trailing dimension with `vp.getvl`.
+  Value dim = getOrCreateIndexValue(rewriter, shape->back(), loc);
+
+  UnrollState state;
+  state.initialize(op);
+  dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
+
+  Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+  SmallVector<Value> inits = {dim, zero};
+  SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
+
+  scf::WhileOp::create(
+      rewriter, loc, resultTypes, inits,
+      [&](OpBuilder &b, Location loopLoc, ValueRange args) {
+        Value avl = args[0];
+        Value cond = arith::CmpIOp::create(
+            b, loopLoc, arith::CmpIPredicate::sgt, avl, zero);
+        scf::ConditionOp::create(b, loopLoc, cond, args);
+      },
+      [&](OpBuilder &b, Location loopLoc, ValueRange args) {
+        Value avl = args[0];
+        Value idx = args[1];
+
+        Value vl = vp::GetVLOp::create(b, loopLoc, avl, vf, type, scalable);
+        UnrollOptions options(idx, vl, shape->size() - 1, false);
+        Operation *newRoot = unrollRoot(b, op, options, state);
+        if (!newRoot) {
+          return;
+        }
+        // Mark the materialized inner root so a later greedy visit does not try
+        // to stripmine the same trailing-dimension chunk again.
+        newRoot->setAttr("zuan.stripmined", b.getUnitAttr());
+
+        Value newAvl = arith::SubIOp::create(b, loopLoc, avl, vl);
+        Value newIdx = arith::AddIOp::create(b, loopLoc, idx, vl);
+        scf::YieldOp::create(b, loopLoc, ValueRange{newAvl, newIdx});
+      });
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
+template <typename RootOp, typename OnSuccess>
+static LogicalResult convertSliceToVP(RootOp op, PatternRewriter &rewriter,
+                                      unsigned vf, bool scalable,
+                                      OnSuccess onSuccess) {
+  auto slice = collectBackwardSlice(op);
+  VPConversionState state;
+  state.vf = vf;
+  state.scalable = scalable;
+  state.initialize(op);
+  if (failed(convertToVP(rewriter, op, state))) {
+    return failure();
+  }
+  onSuccess(state);
+  cleanupConvertedSlice(slice.getArrayRef(), rewriter);
+  return success();
+}
+
+static void finalizeConvertedRoot(StoreOp op, PatternRewriter &rewriter,
+                                  VPConversionState &) {
+  rewriter.eraseOp(op);
+}
+
+static void finalizeConvertedRoot(ScatterOp op, PatternRewriter &rewriter,
+                                  VPConversionState &) {
+  rewriter.eraseOp(op);
+}
+
+static void finalizeConvertedRoot(MaskOp op, PatternRewriter &rewriter,
+                                  VPConversionState &) {
+  rewriter.eraseOp(op);
+}
+
+static void finalizeConvertedRoot(ExtractOp op, PatternRewriter &rewriter,
+                                  VPConversionState &state) {
+  rewriter.replaceOp(op, state.valueMap.lookup(op.getResult()));
+}
+
+static void cleanupConvertedSlice(ArrayRef<Operation *> slice,
+                                  PatternRewriter &rewriter) {
+  for (Operation *op : llvm::reverse(slice)) {
+    if (!op || op->hasTrait<OpTrait::IsTerminator>()) {
+      continue;
+    }
+    // Destructive VP-root rewrites erase the old tile slice after lowering the
+    // concrete effect/value root. Resolve direct `zuan.dim` users first so the
+    // producer can be dropped without losing its shape semantics.
+    if (failed(resolveDimUsersOfOp(op, rewriter))) {
+      continue;
+    }
+    if (!op->use_empty()) {
+      continue;
+    }
+    if (isMemoryEffectFree(op)) {
+      rewriter.eraseOp(op);
+    }
+  }
+}
+
+template <typename RootOp>
+struct ZuanStripminingPattern : OpRewritePattern<RootOp> {
+  ZuanStripminingPattern(MLIRContext *context, unsigned vf, bool scalable)
+      : OpRewritePattern<RootOp>(context), vf(vf), scalable(scalable) {}
+
+  LogicalResult matchAndRewrite(RootOp op,
+                                PatternRewriter &rewriter) const final {
+    if (!isSupportedEffectRoot(op)) {
+      return rewriter.notifyMatchFailure(op, "not a supported effect root");
+    }
+
+    auto shape = reifyRootShape(rewriter, op);
+    if (failed(shape) || shape->empty()) {
+      return rewriter.notifyMatchFailure(op, "not a stripminable tile root");
+    }
+    if (failed(rewriteRootStripmining(op, rewriter, vf, scalable))) {
+      return rewriter.notifyMatchFailure(op, "failed to stripmine root");
+    }
     return success();
   }
 
@@ -253,104 +435,70 @@ private:
   bool scalable;
 };
 
-struct ZuanTilingPattern : OpRewritePattern<DynamicOp> {
-  // The benefit of tiling is set larger. So the the tiling will be at the outer
-  // loop, and stripmining will be at the inner loop, this should lead to better
-  // cache locality.
-  explicit ZuanTilingPattern(MLIRContext *context, unsigned uf)
-      : OpRewritePattern<DynamicOp>(context, 2), uf(uf) {}
+template <typename RootOp> struct ZuanTilingPattern : OpRewritePattern<RootOp> {
+  ZuanTilingPattern(MLIRContext *context, unsigned uf)
+      : OpRewritePattern<RootOp>(context, 2), uf(uf) {}
 
-  LogicalResult matchAndRewrite(DynamicOp op,
+  LogicalResult matchAndRewrite(RootOp op,
                                 PatternRewriter &rewriter) const final {
-    ShapeInfo shapeInfo;
-    ShapeInferenceState shapeInferenceState;
-    shapeInfo.inferShape(op, shapeInferenceState);
-
-    splitDynamicOpForUnrolling(rewriter, op, 0, shapeInfo);
-
-    // TODO: Refactor this preparation code.
-    auto yieldOp = op.getYieldOp();
-    auto yieldRegion = &yieldOp.getBody();
-    if (yieldRegion->getOps().empty()) {
-      // TODO: Split the scalar operations.
-      // Scalars are produced with 1-D reduction or dummy splat. So no need to
-      // stripmine them anymore.
-      return rewriter.notifyMatchFailure(op, "empty yield region");
+    if (!isSupportedEffectRoot(op)) {
+      return rewriter.notifyMatchFailure(op, "not a supported effect root");
     }
 
-    if (yieldOp->getNumOperands() != 0) {
-      return rewriter.notifyMatchFailure(op, "expected no operand");
+    Value rootTile = getRootTileValue(op);
+    auto rootTileType =
+        rootTile ? dyn_cast<TileType>(rootTile.getType()) : nullptr;
+    if (!rootTileType || rootTileType.getRank() < 2) {
+      return rewriter.notifyMatchFailure(op, "root is not at least 2-D");
     }
 
-    auto loc = op.getLoc();
-
-    auto referenceOp = &*yieldRegion->getOps().begin();
-    auto iface = dyn_cast<ZuanUnrollingInterface>(referenceOp);
-    assert(iface && "expected an unrolling interface");
-
-    auto shape = iface.getShapeToUnroll(shapeInfo);
-
-    if (shape->size() < 2) {
-      return rewriter.notifyMatchFailure(op, "< 2-D operations");
+    auto shape = reifyRootShape(rewriter, op);
+    if (failed(shape) || shape->size() < 2) {
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to reify tiled root shape");
     }
 
-    if (auto integer = shape->front().getInteger()) {
-      if (*integer <= uf) {
+    if (auto rows = getConstantZuanIntValue((*shape)[0])) {
+      if (*rows <= uf) {
         return rewriter.notifyMatchFailure(op, "already tiled");
       }
     }
 
-    // This is the pass that is expected to eliminate a dynamic outer dimension
-    // before the VP conversion path. After tiling, the main loop sees a static
-    // outer chunk of size `uf`, and the tail loop sees a static outer size of 1.
-    // `ConvertToVP` still checks for any leftover `DynamicOuterLoopAndVector`
-    // plans and rejects them explicitly instead of assuming this pass always ran.
-    //
-    // All shapes are now the same and >= target-rank, so should be safe to
-    // access the first.
-    auto dim = (*shape)[0].getOrCreateValue(rewriter, loc);
+    auto loc = op.getLoc();
+    Value dim = getOrCreateIndexValue(rewriter, (*shape)[0], loc);
+
+    UnrollState state;
+    state.initialize(op);
+    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
 
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
     Value step = arith::ConstantIndexOp::create(rewriter, loc, uf);
-
-    UnrollState state;
-    state.initialize(op);
-
-    // Make sure no use-before-def is produced.
-    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
-
     Value size = arith::ConstantIndexOp::create(rewriter, loc, uf);
     Value div = arith::DivUIOp::create(rewriter, loc, dim, size);
     Value ub = arith::MulIOp::create(rewriter, loc, div, size);
 
-    [[maybe_unused]]
-    auto loop = scf::ForOp::create(rewriter, 
-        loc, zero, ub, step, ValueRange{},
-        [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+    scf::ForOp::create(
+        rewriter, loc, zero, ub, step, ValueRange{},
+        [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
           UnrollOptions options(iv, b.getIndexAttr(uf), 0, false);
-          op.unroll(b, options, state);
-          scf::YieldOp::create(b, loc);
+          unrollRoot(b, op, options, state);
+          scf::YieldOp::create(b, loopLoc);
         });
 
     if (uf != 1) {
       UnrollState tailState;
       tailState.initialize(op);
-
-      [[maybe_unused]]
-      auto taileLoop = scf::ForOp::create(rewriter, 
-          loc, ub, dim, one, ValueRange{},
-          [&](OpBuilder &b, Location loc, Value iv, ValueRange iterArgs) {
+      scf::ForOp::create(
+          rewriter, loc, ub, dim, one, ValueRange{},
+          [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
             UnrollOptions options(iv, b.getIndexAttr(1), 0, false);
-            op.unroll(b, options, tailState);
-            scf::YieldOp::create(b, loc);
+            unrollRoot(b, op, options, tailState);
+            scf::YieldOp::create(b, loopLoc);
           });
     }
 
-    // loop->getParentOfType<func::FuncOp>().dump();
     rewriter.eraseOp(op);
-    ;
-
     return success();
   }
 
@@ -358,30 +506,20 @@ private:
   unsigned uf;
 };
 
-struct ConvertZuanToVPPattern : OpRewritePattern<DynamicOp> {
-  explicit ConvertZuanToVPPattern(MLIRContext *context, unsigned vf,
-                                  bool scalable)
-      : OpRewritePattern(context), vf(vf), scalable(scalable) {}
+template <typename RootOp>
+struct ConvertRootToVPPattern : OpRewritePattern<RootOp> {
+  ConvertRootToVPPattern(MLIRContext *context, unsigned vf, bool scalable)
+      : OpRewritePattern<RootOp>(context), vf(vf), scalable(scalable) {}
 
-  LogicalResult matchAndRewrite(DynamicOp op,
+  LogicalResult matchAndRewrite(RootOp op,
                                 PatternRewriter &rewriter) const final {
-    // op->dump();
-    ShapeInfo shapeInfo;
-    ShapeInferenceState shapeInferenceState;
-    shapeInfo.inferShape(op, shapeInferenceState);
-
-    VPConversionState state;
-    state.vf = vf;
-    state.scalable = scalable;
-    state.initialize(op);
-
-    if (failed(convertToVP(rewriter, op, shapeInfo, state))) {
-      return rewriter.notifyMatchFailure(op, "failed to convert dynamic op to VP");
+    if (!isSupportedVPRoot(op)) {
+      return rewriter.notifyMatchFailure(op, "not a supported VP root");
     }
-
-    // op->getParentOfType<func::FuncOp>().dump();
-    rewriter.eraseOp(op);
-    return success();
+    return convertSliceToVP(op, rewriter, vf, scalable,
+                            [&](VPConversionState &state) {
+                              finalizeConvertedRoot(op, rewriter, state);
+                            });
   }
 
 private:
@@ -392,11 +530,71 @@ private:
 } // namespace
 
 void ZuanStripminingPass::runOnOperation() {
-  RewritePatternSet patterns(&getContext());
-  patterns.add<ZuanStripminingReduction1DPattern, ZuanStripminingPattern>(
-      &getContext(), vf, scalable);
-  patterns.add<ZuanTilingPattern>(&getContext(), uf);
-  if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+  auto applyOuterNormalization = [&]() -> LogicalResult {
+    RewritePatternSet outerNormalizationPatterns(&getContext());
+    outerNormalizationPatterns
+        .add<ZuanStaticRowNormalizationPattern<StoreOp>,
+             ZuanStaticRowNormalizationPattern<ScatterOp>,
+             ZuanStaticRowNormalizationPattern<MaskOp>>(&getContext());
+    return applyPatternsGreedily(getOperation(),
+                                 std::move(outerNormalizationPatterns));
+  };
+
+  IRRewriter rewriter(&getContext());
+  SmallVector<Operation *> reductions;
+  getOperation()->walk([&](ReductionOp op) { reductions.push_back(op); });
+  for (Operation *op : reductions) {
+    auto reductionOp = dyn_cast<ReductionOp>(op);
+    if (!reductionOp || !op->getBlock()) {
+      continue;
+    }
+    rewriter.setInsertionPoint(reductionOp);
+    (void)ZuanStripminingReduction1DPattern::rewriteReduction(
+        reductionOp, rewriter, vf, scalable);
+  }
+
+  if (failed(applyOuterNormalization())) {
+    signalPassFailure();
+    return;
+  }
+
+  // Some roots already have a constant leading row-pack before any tiling, so
+  // normalize those first.
+  // Leading-dimension tiling is only meaningful once a root still has at least
+  // two dimensions. Rank-1 roots skip tiling and go straight to the shared
+  // last-dimension stripmining pattern below.
+  bool hasLoopStripminingRoot = false;
+  getOperation()->walk([&](Operation *op) {
+    hasLoopStripminingRoot |= needsLoopStripmining(op);
+  });
+  if (!hasLoopStripminingRoot) {
+    return;
+  }
+
+  RewritePatternSet tilingPatterns(&getContext());
+  tilingPatterns.add<ZuanTilingPattern<StoreOp>, ZuanTilingPattern<ScatterOp>,
+                     ZuanTilingPattern<MaskOp>>(&getContext(), uf);
+  if (failed(
+          applyPatternsGreedily(getOperation(), std::move(tilingPatterns)))) {
+    signalPassFailure();
+    return;
+  }
+
+  // Tiling can introduce fresh constant leading row-packs, e.g. a `2 x ?`
+  // store slice in matmul or a `1 x ?` elementwise row slice. Normalize those
+  // newly created roots before the trailing-dimension stripmining and VP
+  // conversion phases.
+  if (failed(applyOuterNormalization())) {
+    signalPassFailure();
+    return;
+  }
+
+  RewritePatternSet stripminingPatterns(&getContext());
+  stripminingPatterns
+      .add<ZuanStripminingPattern<StoreOp>, ZuanStripminingPattern<ScatterOp>,
+           ZuanStripminingPattern<MaskOp>>(&getContext(), vf, scalable);
+  if (failed(applyPatternsGreedily(getOperation(),
+                                   std::move(stripminingPatterns)))) {
     signalPassFailure();
   }
 }
@@ -409,7 +607,10 @@ void ZuanStripminingPass::getDependentDialects(
 
 void ConvertZuanToVPPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
-  patterns.add<ConvertZuanToVPPattern>(&getContext(), vf, scalable);
+  patterns
+      .add<ConvertRootToVPPattern<StoreOp>, ConvertRootToVPPattern<ScatterOp>,
+           ConvertRootToVPPattern<ExtractOp>, ConvertRootToVPPattern<MaskOp>>(
+          &getContext(), vf, scalable);
   if (failed(applyPatternsGreedily(getOperation(), std::move(patterns)))) {
     signalPassFailure();
   }

@@ -10,6 +10,9 @@ export RISCV_LLVM_BUILD_DIR=${ZUAN_SOURCE_DIR}/llvm-project/build-riscv
 export RISCV_ZUAN_BUILD_DIR=${ZUAN_SOURCE_DIR}/build-riscv
 
 export QEMU_LD_PREFIX=${RISCV_GNU_TOOLCHAIN_SYSROOT_DIR}
+# Benchmark correctness for the fixed-width RVV baseline kernels assumes the
+# old 256-bit vector-length configuration.
+export QEMU_CPU=${QEMU_CPU:-max,v=true,vlen=256}
 
 export TRITON_SOURCE_DIR=${ZUAN_SOURCE_DIR}/third_party/triton
 export TRITON_CPU_SOURCE_DIR=${ZUAN_SOURCE_DIR}/third_party/triton-cpu

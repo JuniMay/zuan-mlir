@@ -13,7 +13,8 @@ module attributes {transform.with_named_sequence} {
     transform.apply_patterns to %func {
       transform.apply_patterns.vector.lower_masked_transfers
       transform.apply_patterns.vector.transfer_permutation_patterns
-      transform.apply_patterns.vector.lower_multi_reduction lowering_strategy="innerreduction"
+      // See: https://github.com/llvm/llvm-project/pull/182332
+      transform.apply_patterns.vector.multi_reduction_unrolling lowering_strategy = "innerreduction"
       transform.apply_patterns.vector.lower_masks
     } : !transform.any_op
 

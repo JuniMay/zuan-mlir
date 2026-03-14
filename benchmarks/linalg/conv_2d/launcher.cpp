@@ -6,6 +6,8 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 2> *, MemRef<float, 2> *,
+                                MemRef<float, 2> *);
 
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 2> *, MemRef<float, 2> *,
                                    MemRef<float, 2> *);
@@ -90,8 +92,8 @@ static void verifyConv2d() {
   auto [input, filter, output] =
       initializeData(FILTER_H, FILTER_W, OUTPUT_H, OUTPUT_W);
 
-  MemRef<float, 2> autovec({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &input, &filter, &autovec);
+  MemRef<float, 2> scalar({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &input, &filter, &scalar);
 
   MemRef<float, 2> zuan_8_1({OUTPUT_H, OUTPUT_W}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_1, &input, &filter, &zuan_8_1);
@@ -108,15 +110,15 @@ static void verifyConv2d() {
   MemRef<float, 2> zuan_4_4({OUTPUT_H, OUTPUT_W}, 0);
   runKernel(_mlir_ciface_kernel_zuan_4_4, &input, &filter, &zuan_4_4);
 
-  autovec.verify(zuan_8_1, "conv2d-zuan-8-1", 1e-3);
-  autovec.verify(zuan_8_2, "conv2d-zuan-8-2", 1e-3);
-  autovec.verify(zuan_8_4, "conv2d-zuan-8-4", 1e-3);
-  autovec.verify(zuan_4_2, "conv2d-zuan-4-2", 1e-3);
-  autovec.verify(zuan_4_4, "conv2d-zuan-4-4", 1e-3);
+  scalar.verify(zuan_8_1, "conv2d-zuan-8-1", 1e-3);
+  scalar.verify(zuan_8_2, "conv2d-zuan-8-2", 1e-3);
+  scalar.verify(zuan_8_4, "conv2d-zuan-8-4", 1e-3);
+  scalar.verify(zuan_4_2, "conv2d-zuan-4-2", 1e-3);
+  scalar.verify(zuan_4_4, "conv2d-zuan-4-4", 1e-3);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec = " << autovec[i] << "\tzuan-8-1 = " << zuan_8_1[i]
+              << ": scalar = " << scalar[i] << "\tzuan-8-1 = " << zuan_8_1[i]
               << "\tzuan-8-2 = " << zuan_8_2[i]
               << "\tzuan-8-4 = " << zuan_8_4[i]
               << "\tzuan-4-2 = " << zuan_4_2[i]

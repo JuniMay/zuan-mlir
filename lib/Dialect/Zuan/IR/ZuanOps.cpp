@@ -40,12 +40,6 @@
 namespace mlir {
 namespace zuan {
 
-static TileShape getStoredShapeOrAssert(ShapeInfo &shapeInfo, Value value) {
-  auto *shape = shapeInfo.lookupShape(value);
-  assert(shape && "expected shape to be available");
-  return *shape;
-}
-
 static LogicalResult verifyDistinctInRangeDims(Operation *op, int64_t rank,
                                                ArrayRef<int64_t> dims,
                                                StringRef desc) {
@@ -92,302 +86,6 @@ static LogicalResult verifyGatherScatterIndexShapes(Operation *op,
   }
 
   return success();
-}
-
-//===----------------------------------------------------------------------===//
-// DynamicOp
-//===----------------------------------------------------------------------===//
-
-void DynamicOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  for (auto &operand : getDpsInitsMutable()) {
-    effects.emplace_back(MemoryEffects::Read::get(), &operand, /*stage=*/0,
-                         /*effectOnFullRegion=*/true,
-                         SideEffects::DefaultResource::get());
-  }
-}
-
-void DynamicOp::build(
-    OpBuilder &builder, OperationState &result, TypeRange resultTypes,
-    ValueRange inits,
-    function_ref<void(OpBuilder &, Location, ValueRange)> bodybuilder) {
-  OpBuilder::InsertionGuard guard(builder);
-
-  result.addOperands(inits);
-  result.addTypes(resultTypes);
-
-  Region *bodyRegion = result.addRegion();
-  Block *bodyBlock = builder.createBlock(bodyRegion);
-  for (auto init : inits) {
-    auto memrefType = dyn_cast<MemRefType>(init.getType());
-    assert(memrefType && "expected memref type");
-    auto tileType =
-        TileType::get(memrefType.getShape(), memrefType.getElementType());
-    bodyBlock->addArgument(tileType, init.getLoc());
-  }
-  if (bodybuilder) {
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(bodyBlock);
-    bodybuilder(builder, result.location, bodyBlock->getArguments());
-  }
-}
-
-void DynamicOp::build(
-    OpBuilder &builder, OperationState &result, ValueRange inits,
-    function_ref<void(OpBuilder &, Location, ValueRange)> bodybuilder) {
-  build(builder, result, {}, inits, bodybuilder);
-}
-
-LogicalResult DynamicOp::verify() {
-  auto block = &getBody().front();
-  // Check terminator
-  if (block->mightHaveTerminator() && !isa<YieldOp>(block->getTerminator())) {
-    return emitOpError("expected a `zuan.yield` terminator");
-  }
-  // Verify that the only memory writes are happening in the yield op.
-  for (auto &op : getBody().getOps()) {
-    if (isa<YieldOp>(op)) {
-      // Yield op is the terminator, just break.
-      break;
-    }
-    // Aggressively check the memory writes.
-    auto effects = mlir::getEffectsRecursively(&op).value_or(
-        SmallVector<MemoryEffects::EffectInstance>{});
-    for (auto effect : effects) {
-      if (isa<MemoryEffects::Write>(effect.getEffect())) {
-        return emitOpError("expected only memory reads in the dynamic region");
-      }
-    }
-  }
-  return success();
-}
-
-void DynamicOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto bodyBlock = &getBody().front();
-  for (auto [bbArg, memref] :
-       llvm::zip(bodyBlock->getArguments(), getDpsInits())) {
-    auto memrefType = cast<MemRefType>(memref.getType());
-    TileShape shape;
-    for (unsigned i = 0, e = memrefType.getRank(); i < e; ++i) {
-      shape.push_back(DimSize(memref, i));
-    }
-    shapeInfo.markEquivalent(bbArg, shape);
-  }
-  // Recursively infer the shape of the dynamic region.
-  for (auto &op : bodyBlock->getOperations()) {
-    shapeInfo.inferShape(&op, state);
-  }
-}
-
-Operation *DynamicOp::unroll(OpBuilder &builder, UnrollOptions options,
-                             UnrollState &state) {
-  auto bodyBlock = &getBody().front();
-  auto yieldOp = getYieldOp();
-  auto yieldRegion = &yieldOp.getRegion();
-
-  SmallVector<Value> inits = llvm::map_to_vector(getInits(), [&](Value init) {
-    return getUnrolledMemref(builder, init, options, state);
-  });
-
-  return DynamicOp::create(builder, 
-      getLoc(), inits, [&](OpBuilder &b, Location loc, ValueRange args) {
-        OpBuilder::InsertionGuard guard(b);
-
-        state.valueMap.map(bodyBlock->getArguments(), args);
-        SmallVector<Value> newYieldOperands =
-            llvm::map_to_vector(yieldOp.getScalars(), [&](Value value) {
-              return getUnrolledValue(b, value, options, state);
-            });
-
-        auto newYieldOp = YieldOp::create(b, loc, newYieldOperands, nullptr);
-        state.yieldBlock = &newYieldOp.getBody().front();
-        b.setInsertionPoint(newYieldOp);
-
-        for (auto &op : yieldRegion->getOps()) {
-          unrollOp(b, &op, options, state);
-        }
-      });
-}
-
-std::optional<TileShape> DynamicOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  return std::nullopt;
-}
-
-/// Elide the dynamic op if there are no memory write effects and all the
-/// yielded scalars are defined outside the dynamic op.
-struct ElideEmptyDynamicOp : OpRewritePattern<DynamicOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(DynamicOp op,
-                                PatternRewriter &rewriter) const override {
-    Block *block = &op.getBody().front();
-    auto terminator = cast<YieldOp>(block->getTerminator());
-
-    // The only memory write effects are in the yield op, so only check if the
-    // yielded region has memory effects. Other operations in the dynamic region
-    // will not be checked. Here the check is aggressive, if no side-effects
-    // interface provided, it is assumed to have no memory writes.
-    auto effects = mlir::getEffectsRecursively(terminator)
-                       .value_or(SmallVector<MemoryEffects::EffectInstance>{});
-    for (auto effect : effects) {
-      if (isa<MemoryEffects::Write>(effect.getEffect())) {
-        return rewriter.notifyMatchFailure(op, "memory write effect");
-      }
-    }
-
-    auto yieldedOperands = terminator.getScalars();
-    if (yieldedOperands.empty()) {
-      rewriter.eraseOp(op);
-    } else {
-      // Check if the yielded scalars are defined outside the dynamic op.
-      for (auto operand : yieldedOperands) {
-        if (auto defOp = operand.getDefiningOp()) {
-          if (defOp->getBlock() == block) {
-            // The operand is defined inside the dynamic op.
-            return rewriter.notifyMatchFailure(
-                op, "operand defined inside the dynamic op");
-          }
-        }
-      }
-      // All the operands are defined outside the dynamic op, replace the
-      // dynamic op with the yielded operands.
-      rewriter.replaceOp(op, yieldedOperands);
-    }
-    return success();
-  }
-};
-
-/// Hoist memref processing operations from the dynamic region to the parent
-/// region.
-struct HoistMemRefOpPattern : OpRewritePattern<DynamicOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(DynamicOp op,
-                                PatternRewriter &rewriter) const override {
-    auto block = &op.getBody().front();
-    bool hoisted = false;
-
-    // TODO: More general implementation.
-    for (auto &operation : llvm::make_early_inc_range(block->getOperations())) {
-      if (auto dimOp = dyn_cast<memref::DimOp>(&operation)) {
-        // check if dimOp operands is defined outside the dynamic op.
-        bool canHoist = llvm::all_of(dimOp.getOperands(), [&](Value operand) {
-          return operand.getParentBlock() != block;
-        });
-        if (canHoist) {
-          rewriter.moveOpBefore(dimOp, op);
-          hoisted = true;
-        }
-      }
-    }
-
-    return hoisted ? success() : failure();
-  }
-};
-
-/// Elide dead block arguments and operands of this dynamic op.
-struct ElideDeadInitsPattern : OpRewritePattern<DynamicOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(DynamicOp op,
-                                PatternRewriter &rewriter) const override {
-    auto block = &op.getBody().front();
-    auto initArgs = block->getArguments();
-    auto inits = op.getInits();
-
-    SmallVector<Value> liveInits;
-    BitVector deadArgs(initArgs.size(), false);
-    for (auto [init, arg] : llvm::zip(inits, initArgs)) {
-      if (!arg.use_empty()) {
-        liveInits.push_back(init);
-      } else {
-        deadArgs.set(arg.getArgNumber());
-      }
-    }
-
-    if (liveInits.size() == inits.size()) {
-      return rewriter.notifyMatchFailure(op, "no dead inits");
-    }
-
-    rewriter.modifyOpInPlace(op, [&]() {
-      op.getInitsMutable().assign(liveInits);
-      block->eraseArguments(deadArgs);
-    });
-
-    return success();
-  }
-};
-
-void DynamicOp::getCanonicalizationPatterns(RewritePatternSet &results,
-                                            MLIRContext *context) {
-  results.add<ElideEmptyDynamicOp, HoistMemRefOpPattern, ElideDeadInitsPattern>(
-      context);
-}
-
-YieldOp DynamicOp::getYieldOp() {
-  auto block = &getBody().front();
-  assert(block->mightHaveTerminator() && "expected a terminator");
-  return cast<YieldOp>(block->getTerminator());
-}
-
-//===----------------------------------------------------------------------===//
-// YieldOp
-//===----------------------------------------------------------------------===//
-
-void YieldOp::build(OpBuilder &builder, OperationState &result) {
-  OpBuilder::InsertionGuard guard(builder);
-  Region *bodyRegion = result.addRegion();
-  Block *bodyBlock = builder.createBlock(bodyRegion);
-  (void)bodyBlock;
-}
-
-void YieldOp::build(OpBuilder &builder, OperationState &result,
-                    ValueRange scalars,
-                    function_ref<void(OpBuilder &, Location)> bodyBuilder) {
-  OpBuilder::InsertionGuard guard(builder);
-  result.addOperands(scalars);
-  Region *bodyRegion = result.addRegion();
-  Block *bodyBlock = builder.createBlock(bodyRegion);
-
-  if (bodyBuilder) {
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(bodyBlock);
-    bodyBuilder(builder, result.location);
-  }
-}
-
-LogicalResult YieldOp::verify() {
-  auto parentOp = dyn_cast<DynamicOp>((*this)->getParentOp());
-  if (!parentOp) {
-    return emitOpError("expected parent op to be a `zuan.dynamic`");
-  }
-  // Check the scalars and the parent results.
-  if (parentOp.getNumResults() != this->getScalars().size()) {
-    return emitOpError(
-        "expected the number of parent results and scalars to be the same");
-  }
-  // Check the types of the scalars and the parent results.
-  for (auto [scalar, result] :
-       llvm::zip(this->getScalars(), parentOp.getResults())) {
-    // 0-D tile or scalar.
-    auto type = getElementTypeOrSelf(scalar.getType());
-    if (type != result.getType()) {
-      return emitOpError("expected the type of the scalar and the parent "
-                         "result to be the same");
-    }
-  }
-  return success();
-}
-
-void YieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  if (getBody().empty()) {
-    return;
-  }
-  auto bodyBlock = &getBody().front();
-  for (auto &op : bodyBlock->getOperations()) {
-    shapeInfo.inferShape(&op, state);
-  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -505,21 +203,6 @@ LogicalResult MaskOp::verify() {
   return success();
 }
 
-void MaskOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto mask = getMask();
-  auto maskedoff = getMaskedoff();
-  if (maskedoff) {
-    // Mask and Maskedoff (passthru) are shape-equivalent.
-    shapeInfo.markEquivalent(mask, maskedoff);
-  }
-  ScopedMaskState scopedMask(state, mask, maskedoff);
-  // Recursively infer the shape of the masked region.
-  auto bodyBlock = &getBody().front();
-  for (auto &op : bodyBlock->getOperations()) {
-    shapeInfo.inferShape(&op, state);
-  }
-}
-
 Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
                           UnrollState &state) {
   Value mask = getUnrolledValue(builder, getMask(), options, state);
@@ -548,11 +231,6 @@ Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
         },
         maskedoff);
   }
-}
-
-std::optional<TileShape> MaskOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto mask = getMask();
-  return shapeInfo.getShapeWithEquivalence(mask);
 }
 
 struct ElideEmptyMaskOp : OpRewritePattern<MaskOp> {
@@ -662,11 +340,6 @@ LogicalResult MatmulOp::verify() {
                                  rhsType.getShape()[leadingSize])) {
     return emitOpError("expected lhs/rhs contraction dimensions to be compatible");
   }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.matmul` cannot be nested inside a `zuan.yield`");
-  }
   return success();
 }
 
@@ -688,49 +361,6 @@ unsigned MatmulOp::getLeadingSize() {
     leadingSize = lhsRank - 2;
   }
   return leadingSize;
-}
-
-void MatmulOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto lhs = getLhs();
-  auto rhs = getRhs();
-  auto result = getResult();
-
-  auto lhsShape = getStoredShapeOrAssert(shapeInfo, lhs);
-  auto rhsShape = getStoredShapeOrAssert(shapeInfo, rhs);
-
-  size_t leadingSize = getLeadingSize();
-
-  auto lhsRank = lhs.getType().getRank();
-  auto rhsRank = rhs.getType().getRank();
-
-  auto lhsK = lhsShape[lhsShape.rank() - 1];
-  auto rhsK = rhsShape[leadingSize];
-  shapeInfo.markEquivalent(lhsK, rhsK);
-  auto lhsLeadingDims = lhsShape.takeFront(leadingSize);
-  auto rhsLeadingDims = rhsShape.takeFront(leadingSize);
-  shapeInfo.markEquivalent(lhsLeadingDims.asArrayRef(),
-                           rhsLeadingDims.asArrayRef());
-
-  TileShape resultShape(lhsLeadingDims.asArrayRef());
-  if (lhsRank >= rhsRank) {
-    // M, if exists.
-    resultShape.push_back(lhsShape[lhsShape.rank() - 2]);
-  }
-  if (rhsRank >= lhsRank) {
-    // N, if exists
-    resultShape.push_back(rhsShape[rhsShape.rank() - 1]);
-  }
-  shapeInfo.markEquivalent(result, resultShape);
-  // if (auto mask = state.getMask()) {
-  //   shapeInfo.markEquivalent(result, *mask);
-  // }
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -799,11 +429,6 @@ Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 }
 
-std::optional<TileShape> MatmulOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // ReductionOp
 //===----------------------------------------------------------------------===//
@@ -841,42 +466,7 @@ LogicalResult ReductionOp::verify() {
           "expected init tile type to match the reduction result type");
     }
   }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError(
-        "`zuan.multi_reduction` cannot be nested inside a `zuan.yield`");
-  }
   return success();
-}
-
-void ReductionOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto tile = getTile();
-  auto result = getResult();
-  auto dims = getDims();
-  SetVector<int64_t> reductionDimSet(dims.begin(), dims.end());
-
-  auto tileShape = getStoredShapeOrAssert(shapeInfo, tile);
-  TileShape resultShape;
-  for (size_t i = 0, e = tileShape.rank(); i < e; ++i) {
-    if (!reductionDimSet.contains(i)) {
-      resultShape.push_back(tileShape[i]);
-    }
-  }
-  shapeInfo.markEquivalent(result, resultShape);
-
-  auto init = getInit();
-  if (init) {
-    shapeInfo.markEquivalent(result, init);
-  }
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(tile, mask);
-    if (maskedoff) {
-      // TODO: Check if maskedoff should be used in reduction.
-      shapeInfo.markEquivalent(tile, maskedoff);
-    }
-  }
 }
 
 Operation *ReductionOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -919,11 +509,6 @@ Operation *ReductionOp::unroll(OpBuilder &builder, UnrollOptions options,
   return reductionOp;
 }
 
-std::optional<TileShape> ReductionOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
@@ -939,29 +524,7 @@ LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult LoadOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.load` cannot be nested inside a `zuan.yield`");
-  }
   return success();
-}
-
-void LoadOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto base = getBase();
-  auto result = getResult();
-  TileShape shape;
-  for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
-    shape.push_back(DimSize(base, i));
-  }
-  shapeInfo.markEquivalent(result, shape);
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *LoadOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -971,49 +534,95 @@ Operation *LoadOp::unroll(OpBuilder &builder, UnrollOptions options,
   return loadOp;
 }
 
-std::optional<TileShape> LoadOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // StoreOp
 //===----------------------------------------------------------------------===//
 
-void StoreOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto value = getValue();
-  auto base = getBase();
-
-  TileShape shape;
-  for (unsigned i = 0, e = base.getType().getRank(); i < e; ++i) {
-    shape.push_back(DimSize(base, i));
-  }
-  shapeInfo.markEquivalent(value, shape);
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(value, mask);
-    if (maskedoff) {
-      // TODO: Check if maskedoff should be used in store.
-      shapeInfo.markEquivalent(value, maskedoff);
-    }
-  }
-}
-
 Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
                            UnrollState &state) {
-  OpBuilder::InsertionGuard guard(builder);
-
   auto memref = getUnrolledMemref(builder, getBase(), options, state);
   auto value = getUnrolledValue(builder, getValue(), options, state);
-
-  builder.setInsertionPointToEnd(state.yieldBlock);
-  auto storeOp = StoreOp::create(builder, getLoc(), value, memref);
-  return storeOp;
+  return StoreOp::create(builder, getLoc(), value, memref);
 }
 
-std::optional<TileShape> StoreOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto value = getValue();
-  return shapeInfo.getShapeWithEquivalence(value);
+//===----------------------------------------------------------------------===//
+// DimOp
+//===----------------------------------------------------------------------===//
+
+void DimOp::build(OpBuilder &builder, OperationState &result, Value tile,
+                  int64_t dim) {
+  build(builder, result, tile, builder.getI64IntegerAttr(dim));
+}
+
+LogicalResult DimOp::verify() {
+  auto tileType = getTile().getType();
+  int64_t dim = getDim();
+  if (dim < 0 || dim >= static_cast<int64_t>(tileType.getRank())) {
+    return emitOpError() << "expected dim to be in range [0, "
+                         << tileType.getRank() << ")";
+  }
+  return success();
+}
+
+OpFoldResult DimOp::fold(FoldAdaptor adaptor) {
+  int64_t staticDim = getTile().getType().getShape()[getDim()];
+  if (!ShapedType::isDynamic(staticDim)) {
+    return IntegerAttr::get(IndexType::get(getContext()), staticDim);
+  }
+  return {};
+}
+
+namespace {
+
+struct CanonicalizeZuanDim : OpRewritePattern<DimOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DimOp op,
+                                PatternRewriter &rewriter) const override {
+    auto reified = reifyZuanDim(rewriter, op.getTile(), op.getDim());
+    if (failed(reified)) {
+      return failure();
+    }
+    rewriter.replaceOp(op,
+                       getOrCreateIndexValue(rewriter, *reified, op.getLoc()));
+    return success();
+  }
+};
+
+} // namespace
+
+void DimOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                        MLIRContext *context) {
+  results.add<CanonicalizeZuanDim>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// ExtractOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ExtractOp::inferReturnTypes(MLIRContext *context,
+                                          std::optional<Location> location,
+                                          Adaptor adaptor,
+                                          SmallVectorImpl<Type> &inferred) {
+  inferred.push_back(cast<TileType>(adaptor.getTile().getType()).getElementType());
+  return success();
+}
+
+LogicalResult ExtractOp::verify() {
+  if (getTile().getType().getRank() != 0) {
+    return emitOpError("expected a rank-0 tile operand");
+  }
+  return success();
+}
+
+OpFoldResult ExtractOp::fold(FoldAdaptor adaptor) {
+  if (auto splatOp = getTile().getDefiningOp<SplatOp>()) {
+    if (splatOp.getResult().getType().getRank() == 0 &&
+        !isa<TileType>(splatOp.getValue().getType())) {
+      return splatOp.getValue();
+    }
+  }
+  return {};
 }
 
 //===----------------------------------------------------------------------===//
@@ -1038,11 +647,6 @@ LogicalResult SplatOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult SplatOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.splat` cannot be nested inside a `zuan.yield`");
-  }
   return success();
 }
 
@@ -1066,29 +670,6 @@ void SplatOp::build(OpBuilder &builder, OperationState &result, Value value,
 SmallVector<OpFoldResult> SplatOp::getMixedDims() {
   Builder builder((*this)->getContext());
   return getMixedValues(getStaticDims(), getDims(), builder);
-}
-
-void SplatOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto value = getValue();
-  auto dims = getMixedDims();
-
-  TileShape shape(
-      llvm::map_to_vector(dims, [&](OpFoldResult ofr) { return DimSize(ofr); }));
-
-  if (auto tileType = dyn_cast<TileType>(value.getType())) {
-    auto tileShape = getStoredShapeOrAssert(shapeInfo, value);
-    shape.append(tileShape.asArrayRef());
-  }
-  auto result = getResult();
-  shapeInfo.markEquivalent(result, shape);
-
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -1127,11 +708,6 @@ Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
   return splatOp;
 }
 
-std::optional<TileShape> SplatOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // OuterOp
 //===----------------------------------------------------------------------===//
@@ -1150,6 +726,12 @@ LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
     return emitOptionalError(
         location,
         "expected the rank of the lhs and rhs to differ by at most one");
+  }
+  if (lhsRank == 0 && rhsRank == 0) {
+    // Row-splitting before VP can legitimately reduce an outer product all the
+    // way to scalar x scalar. Treat that as a rank-0 tile result.
+    inferred.push_back(TileType::get({}, lhsType.getElementType()));
+    return success();
   }
   unsigned leadingRank = lhsRank;
   if (lhsRank >= rhsRank) {
@@ -1179,10 +761,9 @@ LogicalResult OuterOp::verify() {
     return emitOpError(
         "expected the rank of the lhs and rhs to differ by at most one");
   }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.outer` cannot be nested inside a `zuan.yield`");
+  if (lhsRank == 0 && rhsRank == 0) {
+    // See `inferReturnTypes`: scalar x scalar is a valid fully unrolled outer.
+    return success();
   }
   unsigned leadingRank = lhsRank;
   if (lhsRank >= rhsRank) {
@@ -1194,35 +775,6 @@ LogicalResult OuterOp::verify() {
         "expected lhs and rhs leading dimensions to be compatible");
   }
   return success();
-}
-
-void OuterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto lhs = getLhs();
-  auto rhs = getRhs();
-  auto result = getResult();
-
-  auto lhsShape = getStoredShapeOrAssert(shapeInfo, lhs);
-  auto rhsShape = getStoredShapeOrAssert(shapeInfo, rhs);
-
-  unsigned leadingRank = lhsShape.rank();
-  if (lhsShape.rank() >= rhsShape.rank()) {
-    leadingRank -= 1; // Ignore the last dimension.
-  }
-
-  TileShape resultShape(lhsShape.asArrayRef());
-  if (lhsShape.rank() <= rhsShape.rank()) {
-    resultShape.push_back(rhsShape[rhsShape.rank() - 1]);
-  }
-  shapeInfo.markEquivalent(result, resultShape);
-  shapeInfo.markEquivalent(lhsShape.takeFront(leadingRank).asArrayRef(),
-                           rhsShape.takeFront(leadingRank).asArrayRef());
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *OuterOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -1274,11 +826,6 @@ Operation *OuterOp::unroll(OpBuilder &builder, UnrollOptions options,
   return outerOp;
 }
 
-std::optional<TileShape> OuterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // StepOp
 //===----------------------------------------------------------------------===//
@@ -1316,29 +863,7 @@ SmallVector<OpFoldResult> StepOp::getMixedSizes() {
   return getMixedValues(getStaticSizes(), getSizes(), builder);
 }
 
-void StepOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto sizes = getMixedSizes();
-  auto result = getResult();
-
-  TileShape shape(llvm::map_to_vector(
-      sizes, [&](OpFoldResult ofr) { return DimSize(ofr); }));
-
-  shapeInfo.markEquivalent(result, shape);
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
-}
-
 LogicalResult StepOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.step` cannot be nested inside a `zuan.yield`");
-  }
   return success();
 }
 
@@ -1409,36 +934,13 @@ Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
   }
 }
 
-std::optional<TileShape> StepOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // CastOp
 //===----------------------------------------------------------------------===//
 
 LogicalResult CastOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.cast` cannot be nested inside a `zuan.yield`");
-  }
   // TODO: Verify the types.
   return success();
-}
-
-void CastOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto source = getTile();
-  auto result = getResult();
-  shapeInfo.markEquivalent(source, result);
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -1449,40 +951,12 @@ Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
   return castOp;
 }
 
-std::optional<TileShape> CastOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // SelectOp
 //===----------------------------------------------------------------------===//
 
 LogicalResult SelectOp::verify() {
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.select` cannot be nested inside a `zuan.yield`");
-  }
   return success();
-}
-
-void SelectOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto cond = getCond();
-  auto lhs = getLhs();
-  auto rhs = getRhs();
-  auto result = getResult();
-
-  shapeInfo.markEquivalent(lhs, cond);
-  shapeInfo.markEquivalent(lhs, rhs);
-  shapeInfo.markEquivalent(lhs, result);
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -1492,11 +966,6 @@ Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
   auto rhs = getUnrolledValue(builder, getRhs(), options, state);
   auto selectOp = SelectOp::create(builder, getLoc(), cond, lhs, rhs);
   return selectOp;
-}
-
-std::optional<TileShape> SelectOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1526,32 +995,7 @@ LogicalResult GatherOp::verify() {
     return emitOpError("expected the number of indices to be the same as the "
                        "rank of the base memref");
   }
-  // The mask op is allowed to be inside the yield op. But only store is allowed
-  // to be nested within the yield region.
-  if ((*this)->getParentOfType<YieldOp>()) {
-    return emitOpError("`zuan.gather` cannot be nested inside a `zuan.yield`");
-  }
   return verifyGatherScatterIndexShapes((*this), indices, getResult().getType());
-}
-
-void GatherOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto indices = getIndices();
-  auto result = getResult();
-  if (indices.empty()) {
-    shapeInfo.markEquivalent(result, TileShape{});
-    return;
-  }
-  shapeInfo.markEquivalent(indices[0], result);
-  for (unsigned i = 1, e = indices.size(); i < e; ++i) {
-    shapeInfo.markEquivalent(indices[0], indices[i]);
-  }
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(result, mask);
-    if (maskedoff) {
-      shapeInfo.markEquivalent(result, maskedoff);
-    }
-  }
 }
 
 Operation *GatherOp::unroll(OpBuilder &builder, UnrollOptions options,
@@ -1568,11 +1012,6 @@ Operation *GatherOp::unroll(OpBuilder &builder, UnrollOptions options,
   return gatherOp;
 }
 
-std::optional<TileShape> GatherOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto result = getResult();
-  return shapeInfo.getShapeWithEquivalence(result);
-}
-
 //===----------------------------------------------------------------------===//
 // ScatterOp
 //===----------------------------------------------------------------------===//
@@ -1587,30 +1026,8 @@ LogicalResult ScatterOp::verify() {
   return verifyGatherScatterIndexShapes((*this), indices, getValue().getType());
 }
 
-void ScatterOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto value = getValue();
-  auto indices = getIndices();
-  if (indices.empty()) {
-    return;
-  }
-  shapeInfo.markEquivalent(indices[0], value);
-  for (unsigned i = 1, e = indices.size(); i < e; ++i) {
-    shapeInfo.markEquivalent(indices[0], indices[i]);
-  }
-  if (auto maskPair = state.getMask()) {
-    auto [mask, maskedoff] = *maskPair;
-    shapeInfo.markEquivalent(value, mask);
-    if (maskedoff) {
-      // TODO: Check if maskedoff should be used in scatter.
-      shapeInfo.markEquivalent(value, maskedoff);
-    }
-  }
-}
-
 Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
                              UnrollState &state) {
-  OpBuilder::InsertionGuard guard(builder);
-
   auto memrefOptions = options;
   memrefOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
 
@@ -1621,26 +1038,12 @@ Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
   for (auto index : indices) {
     unrolledIndices.push_back(getUnrolledValue(builder, index, options, state));
   }
-
-  builder.setInsertionPointToEnd(state.yieldBlock);
-  auto scatterOp =
-      ScatterOp::create(builder, getLoc(), value, memref, unrolledIndices);
-  return scatterOp;
-}
-
-std::optional<TileShape> ScatterOp::getShapeToUnroll(ShapeInfo &shapeInfo) {
-  auto value = getValue();
-  return shapeInfo.getShapeWithEquivalence(value);
+  return ScatterOp::create(builder, getLoc(), value, memref, unrolledIndices);
 }
 
 //===----------------------------------------------------------------------===//
 // MaskYieldOp
 //===----------------------------------------------------------------------===//
-
-void MaskYieldOp::inferShape(ShapeInfo &shapeInfo, ShapeInferenceState &state) {
-  auto maskOp = this->getParentOp();
-  shapeInfo.markEquivalent(maskOp.getResults(), getTiles());
-}
 
 } // namespace zuan
 } // namespace mlir

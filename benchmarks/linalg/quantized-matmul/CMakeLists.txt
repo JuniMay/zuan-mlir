@@ -1,6 +1,8 @@
 add_executable(linalg-quantized-matmul-benchmark launcher.cpp)
 target_link_libraries(linalg-quantized-matmul-benchmark PRIVATE GoogleBenchmark)
 
+add_linalg_scalar_kernel(quantized-matmul)
+
 add_linalg_zuan_kernel(quantized-matmul 8 4)
 add_linalg_zuan_kernel(quantized-matmul 16 2)
 
@@ -18,6 +20,7 @@ add_linalg_autovec_kernel(quantized-matmul 64)
 target_link_libraries(
   linalg-quantized-matmul-benchmark
   PRIVATE
+  linalg_quantized-matmul_scalar
   linalg_quantized-matmul_zuan_8_4
   linalg_quantized-matmul_zuan_16_2
 

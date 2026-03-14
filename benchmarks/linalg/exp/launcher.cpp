@@ -6,6 +6,7 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -76,9 +77,8 @@ static void verifyExp() {
   const size_t C = 64;
 
   MemRef<float, 4> input = initializeData(B, H, W, C);
-
-  MemRef<float, 4> autovec({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &input, &autovec);
+  MemRef<float, 4> scalar({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &input, &scalar);
 
   MemRef<float, 4> zuan_8_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_1, &input, &zuan_8_1);
@@ -97,12 +97,12 @@ static void verifyExp() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  autovec.verify(zuan_8_1, "exp-zuan-8-1", 0);
-  autovec.verify(zuan_8_2, "exp-zuan-8-2", 0);
-  autovec.verify(zuan_8_4, "exp-zuan-8-4", 0);
-  autovec.verify(zuan_16_1, "exp-zuan-16-1", 0);
-  autovec.verify(zuan_16_2, "exp-zuan-16-2", 0);
-  autovec.verify(zuan_16_4, "exp-zuan-16-4", 0);
+  scalar.verify(zuan_8_1, "exp-zuan-8-1", 0);
+  scalar.verify(zuan_8_2, "exp-zuan-8-2", 0);
+  scalar.verify(zuan_8_4, "exp-zuan-8-4", 0);
+  scalar.verify(zuan_16_1, "exp-zuan-16-1", 0);
+  scalar.verify(zuan_16_2, "exp-zuan-16-2", 0);
+  scalar.verify(zuan_16_4, "exp-zuan-16-4", 0);
 
   MemRef<float, 4> transform_8_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_1, &input, &transform_8_1);
@@ -121,16 +121,16 @@ static void verifyExp() {
   MemRef<float, 4> transform_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_transform_16_4, &input, &transform_16_4);
 
-  autovec.verify(transform_8_1, "exp-transform-8-1", 0);
-  autovec.verify(transform_8_2, "exp-transform-8-2", 0);
-  autovec.verify(transform_8_4, "exp-transform-8-4", 0);
-  autovec.verify(transform_16_1, "exp-transform-16-1", 0);
-  autovec.verify(transform_16_2, "exp-transform-16-2", 0);
-  autovec.verify(transform_16_4, "exp-transform-16-4", 0);
+  scalar.verify(transform_8_1, "exp-transform-8-1", 0);
+  scalar.verify(transform_8_2, "exp-transform-8-2", 0);
+  scalar.verify(transform_8_4, "exp-transform-8-4", 0);
+  scalar.verify(transform_16_1, "exp-transform-16-1", 0);
+  scalar.verify(transform_16_2, "exp-transform-16-2", 0);
+  scalar.verify(transform_16_4, "exp-transform-16-4", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec = " << autovec[i] << "\tzuan-8-1 = " << zuan_8_1[i]
+              << ": scalar = " << scalar[i] << "\tzuan-8-1 = " << zuan_8_1[i]
               << "\tzuan-8-2 = " << zuan_8_2[i]
               << "\tzuan-8-4 = " << zuan_8_4[i]
               << "\tzuan-16-1 = " << zuan_16_1[i]

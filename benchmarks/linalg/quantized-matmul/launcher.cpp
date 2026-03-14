@@ -6,6 +6,8 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *, int,
+                                int, MemRef<int, 2> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
                                    int, int, MemRef<int, 2> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<int8_t, 2> *, MemRef<int8_t, 2> *,
@@ -85,10 +87,8 @@ static void verifyMatmul() {
   const int zp1 = 2;
 
   auto [input1, input2] = initializeData(M, N, K);
-  MemRef<int, 2> autovec({M, N}, 0);
-
-  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, zp0, zp1,
-            &autovec);
+  MemRef<int, 2> scalar({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &input1, &input2, zp0, zp1, &scalar);
   MemRef<int, 2> zuan_8_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, zp0, zp1,
             &zuan_8_4);
@@ -96,8 +96,8 @@ static void verifyMatmul() {
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, zp0, zp1,
             &zuan_16_2);
 
-  autovec.verify(zuan_8_4, "quantized-matmul-zuan-8-4", 0);
-  autovec.verify(zuan_16_2, "quantized-matmul-zuan-16-2", 0);
+  scalar.verify(zuan_8_4, "quantized-matmul-zuan-8-4", 0);
+  scalar.verify(zuan_16_2, "quantized-matmul-zuan-16-2", 0);
 
   MemRef<int, 2> transform_32_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_transform_32_4, &input1, &input2, zp0, zp1,
@@ -106,12 +106,12 @@ static void verifyMatmul() {
   runKernel(_mlir_ciface_kernel_transform_64_2, &input1, &input2, zp0, zp1,
             &transform_64_2);
 
-  autovec.verify(transform_32_4, "quantized-matmul-transform-32-4", 0);
-  autovec.verify(transform_64_2, "quantized-matmul-transform-64-2", 0);
+  scalar.verify(transform_32_4, "quantized-matmul-transform-32-4", 0);
+  scalar.verify(transform_64_2, "quantized-matmul-transform-64-2", 0);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
-    std::cerr << "Index " << i << ": autovec=" << autovec[i]
+    std::cerr << "Index " << i << ": scalar=" << scalar[i]
               << "\tzuan-8-4=" << zuan_8_4[i] << "\tzuan-16-2=" << zuan_16_2[i]
               << "\ttransform-32-4=" << transform_32_4[i]
               << "\ttransform-64-2=" << transform_64_2[i] << std::endl;

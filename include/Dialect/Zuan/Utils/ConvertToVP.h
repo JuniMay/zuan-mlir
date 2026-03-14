@@ -57,7 +57,7 @@ struct VPConversionState {
     return maskStack.pop_back_val();
   }
 
-  void initialize(DynamicOp op);
+  void initialize(Operation *root);
 
 private:
   SmallVector<std::pair<Value, Value>> maskStack;
@@ -86,8 +86,8 @@ private:
 Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
   Type outType, Value source);
 
-LogicalResult convertToVP(RewriterBase &rewriter, Operation *op,
-                          ShapeInfo &shapeInfo, VPConversionState &state);
+LogicalResult convertToVP(OpBuilder &builder, Operation *op,
+                          VPConversionState &state);
 
 } // namespace zuan
 } // namespace mlir

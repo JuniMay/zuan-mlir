@@ -1,6 +1,7 @@
 #ifndef BENCHMARKS_COMMON_VERIFICATION_H
 #define BENCHMARKS_COMMON_VERIFICATION_H
 
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -14,7 +15,8 @@ inline void verify(const T* lhs, const T *rhs, size_t N, const std::string &name
   std::cerr << name << " ";
   if (!lhs || !rhs) {
     std::cerr << FAIL << " (Null pointer detected)" << std::endl;
-    return;
+    // Benchmarks are only useful if a mismatch fails loudly in CI/QEMU too.
+    std::exit(EXIT_FAILURE);
   }
 
   bool isPass = true;
@@ -23,8 +25,9 @@ inline void verify(const T* lhs, const T *rhs, size_t N, const std::string &name
       std::cerr << FAIL << std::endl;
       std::cerr << "Index " << i << ":\tA=" << std::setprecision(10) << lhs[i]
                 << " B=" << std::setprecision(10) << rhs[i] << std::endl;
-      isPass = false;
-      break;
+      // Stop immediately so correctness regressions do not look like a passing
+      // benchmark run with only a stderr message.
+      std::exit(EXIT_FAILURE);
     }
   }
   if (isPass) {

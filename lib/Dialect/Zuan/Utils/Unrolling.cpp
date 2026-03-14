@@ -9,20 +9,23 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 
 #include "Zuan/IR/Zuan.h"
 #include "Zuan/Interfaces/ZuanUnrollingInterface.h"
 #include "Zuan/Utils/ShapeInference.h"
 #include "Zuan/Utils/Unrolling.h"
-#include "mlir/Transforms/RegionUtils.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 
 #define DEBUG_TYPE "zuan-unrolling"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE << "] ")
@@ -30,49 +33,66 @@
 namespace mlir {
 namespace zuan {
 
+static Value getMemrefValueInCurrentScope(OpBuilder &builder, Value operand,
+                                          UnrollState &state) {
+  if (state.valueMap.contains(operand)) {
+    return state.valueMap.lookup(operand);
+  }
+  if (!operand.getDefiningOp()) {
+    // Function/block arguments are already in scope here. If they needed
+    // remapping into a freshly cloned control-flow region, `valueMap` would
+    // have been populated first.
+    return operand;
+  }
+  // Otherwise the memref is produced by an op result that is not yet available
+  // in the current insertion scope. This happens, for example, when stripmining
+  // is rebuilding a new `scf.for`/`scf.while` body and a memref SSA value from
+  // the old slice lives inside that control-flow region. Clone the producer
+  // chain into the current scope first, then slice the cloned value.
+  return getUnrolledValue(builder, operand, getCloneOptions(), state);
+}
+
 Value getUnrolledValue(OpBuilder &builder, Value operand, UnrollOptions options,
                        UnrollState &state) {
+  if (isa<MemRefType>(operand.getType()) &&
+      options.getUnrollIdx() != UnrollOptions::kNoUnrollIdx) {
+    // Memrefs are sliced in the coordinate space of the current SSA value. The
+    // helper above makes sure that value is actually valid at the current
+    // insertion point, which is important when unrolling reconstructs new SCF
+    // regions instead of reusing the old ones in place.
+    Value memref = getMemrefValueInCurrentScope(builder, operand, state);
+    return createMemrefSlice(builder, memref, options);
+  }
   if (state.valueMap.contains(operand)) {
     // This is defined above, or fallback to clone.
     return state.valueMap.lookup(operand);
   }
   auto definingOp = operand.getDefiningOp();
   if (!definingOp && isa<BlockArgument>(operand)) {
-    // Block argument inside the dynamic op, and the parent block is not cloned.
+    // Block arguments are remapped explicitly when cloning loop/control-flow
+    // bodies, so a bare argument can be reused here.
     return operand;
   }
   auto opResult = dyn_cast<OpResult>(operand);
   assert(opResult && "expected an op result");
   auto newOp = unrollOp(builder, opResult.getOwner(), options, state);
-  return newOp->getResult(opResult.getResultNumber());
-}
-
-bool isMemrefDefinedInsideDynamicOp(Value value) {
-  auto *definingOp = value.getDefiningOp();
-  if (!definingOp) {
-    return false;
+  if (!newOp) {
+    llvm::report_fatal_error("unrollOp failed; see previous diagnostic");
   }
-  auto dynamicOp = definingOp->getParentOfType<DynamicOp>();
-  return dynamicOp != nullptr;
+  return newOp->getResult(opResult.getResultNumber());
 }
 
 Value getUnrolledMemref(OpBuilder &builder, Value memref, UnrollOptions options,
                         UnrollState &state) {
-  if (isMemrefDefinedInsideDynamicOp(memref)) {
-    /// Unroll the subview or other memref operations.
-    return getUnrolledValue(builder, memref, options, state);
-  } else {
-    /// Slice the memref itself.
-    return createMemrefSlice(builder, memref, options);
-  }
+  // MemRef handler will not branch on the ops anymore. It will just add a
+  // subview op on the result. The folding of subview is expected to be handled
+  // by fold-memref-alias-ops pass. This function is kept in case future
+  // optimizations are needed on the memref.
+  return getUnrolledValue(builder, memref, options, state);
 }
 
 Value createMemrefSlice(OpBuilder &rewriter, Value memref,
                         UnrollOptions options) {
-  assert(!isMemrefDefinedInsideDynamicOp(memref) &&
-         "creating slice on a memref defined inside dynamic op is not "
-         "well-defined.");
-
   auto loc = memref.getLoc();
 
   auto memrefType = cast<MemRefType>(memref.getType());
@@ -86,8 +106,9 @@ Value createMemrefSlice(OpBuilder &rewriter, Value memref,
 
   for (size_t i = 0; i < rank; ++i) {
     if (i == options.getUnrollIdx()) {
-      // This memref is not defined inside the dynamic op, so it should be safe
-      // to directly reuse the op fold results.
+      // The slice is created directly on the current memref value, so the
+      // caller-provided offset/chunk pair is already in the right coordinate
+      // space for this view.
       offsets[i] = options.getOffset();
       sizes.push_back(options.getChunkSize());
     } else if (ShapedType::isDynamic(memrefShape[i])) {
@@ -129,90 +150,8 @@ Value createMemrefSlice(OpBuilder &rewriter, Value memref,
   auto resultType =
       MemRefType::get(resultSizes, memrefType.getElementType(), layout);
   Value subview = memref::SubViewOp::create(rewriter, loc, resultType, memref,
-                                                     offsets, sizes, strides);
+                                            offsets, sizes, strides);
   return subview;
-}
-
-static Operation *unrollSubviewOp(OpBuilder &builder,
-                                  memref::SubViewOp subviewOp,
-                                  UnrollOptions options, UnrollState &state) {
-  auto oldSource = subviewOp.getSource();
-
-  auto oldOffsets = subviewOp.getMixedOffsets();
-  auto oldSizes = subviewOp.getMixedSizes();
-  auto oldStrides = subviewOp.getMixedStrides();
-
-  auto droppedDims = subviewOp.getDroppedDims();
-  auto originalIdx =
-      computeUnreducedIdx(options.getUnrollIdx(), oldSource.getType().getRank(),
-                          [&](unsigned idx) { return droppedDims.test(idx); });
-
-  // Project the dim-to-expand to the original shape.
-  UnrollOptions subOptions = options;
-  subOptions.overrideUnrollIdx(originalIdx);
-
-  SmallVector<OpFoldResult> offsets, sizes, strides;
-
-  for (size_t i = 0; i < oldOffsets.size(); ++i) {
-    if (i == static_cast<size_t>(originalIdx)) {
-      // This is the unrolling dim, use the given offset and size.
-      offsets.push_back(subOptions.getOffset());
-      sizes.push_back(subOptions.getChunkSize());
-      strides.push_back(builder.getIndexAttr(1));
-    } else {
-      // Otherwise, just copy the old offsets, sizes, and strides.
-      if (auto offsetValue = dyn_cast<Value>(oldOffsets[i])) {
-        auto newValue =
-            getUnrolledValue(builder, offsetValue, subOptions, state);
-        offsets.push_back(newValue);
-      } else {
-        offsets.push_back(oldOffsets[i]);
-      }
-
-      if (auto sizeValue = dyn_cast<Value>(oldSizes[i])) {
-        auto newValue = getUnrolledValue(builder, sizeValue, subOptions, state);
-        sizes.push_back(newValue);
-      } else {
-        sizes.push_back(oldSizes[i]);
-      }
-
-      if (auto strideValue = dyn_cast<Value>(oldStrides[i])) {
-        auto newValue =
-            getUnrolledValue(builder, strideValue, subOptions, state);
-        strides.push_back(newValue);
-      } else {
-        strides.push_back(oldStrides[i]);
-      }
-    }
-  }
-
-  Type unreducedMemrefType = memref::SubViewOp::inferResultType(
-      oldSource.getType(), offsets, sizes, strides);
-  auto [unreducedStrides, unreducedOffset] =
-      cast<MemRefType>(unreducedMemrefType).getStridesAndOffset();
-  auto unreducedSizes = cast<MemRefType>(unreducedMemrefType).getShape();
-
-  SmallVector<int64_t> resultSizes;
-  SmallVector<int64_t> resultStrides;
-
-  for (size_t i = 0; i < unreducedSizes.size(); ++i) {
-    // The rank is not reduced by the original dim, and it is not the
-    // dim-to-reduce.
-    if (!droppedDims.test(i) &&
-        !(subOptions.shouldReduce() && i == originalIdx)) {
-      resultSizes.push_back(unreducedSizes[i]);
-      resultStrides.push_back(unreducedStrides[i]);
-    }
-  }
-
-  auto targetType = MemRefType::get(
-      resultSizes, cast<MemRefType>(unreducedMemrefType).getElementType(),
-      StridedLayoutAttr::get(builder.getContext(), unreducedOffset,
-                             resultStrides));
-  auto newSubviewOp = memref::SubViewOp::create(builder, 
-      subviewOp.getLoc(), cast<MemRefType>(targetType), oldSource, offsets,
-      sizes, strides);
-  return newSubviewOp;
 }
 
 static Operation *unrollSCFForOp(OpBuilder &builder, scf::ForOp forOp,
@@ -225,11 +164,20 @@ static Operation *unrollSCFForOp(OpBuilder &builder, scf::ForOp forOp,
     newInits.push_back(newInit);
   }
 
-  auto lb = getUnrolledValue(builder, forOp.getLowerBound(), options, state);
-  auto ub = getUnrolledValue(builder, forOp.getUpperBound(), options, state);
-  auto step = getUnrolledValue(builder, forOp.getStep(), options, state);
+  // The surrounding stripmining/root unrolling decides which tile dimension is
+  // being split. Nested loop bounds usually describe independent iteration
+  // spaces such as a contraction dimension, so cloning them preserves the
+  // original loop semantics while still allowing carried tile values to change
+  // shape.
+  auto lb = getUnrolledValue(builder, forOp.getLowerBound(), getCloneOptions(),
+                             state);
+  auto ub = getUnrolledValue(builder, forOp.getUpperBound(), getCloneOptions(),
+                             state);
+  auto step =
+      getUnrolledValue(builder, forOp.getStep(), getCloneOptions(), state);
 
-  UnrollState inLoopState = {IRMapping{state.valueMap}, state.yieldBlock};
+  UnrollState inLoopState;
+  inLoopState.valueMap = IRMapping{state.valueMap};
   auto newForOp =
       scf::ForOp::create(builder, forOp.getLoc(), lb, ub, step, newInits);
 
@@ -271,20 +219,38 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
                           resultTypes, op->getAttrs());
   }
 
-  if (auto subviewOp = dyn_cast<memref::SubViewOp>(op)) {
-    return unrollSubviewOp(builder, subviewOp, options, state);
-  }
-
   if (auto forOp = dyn_cast<scf::ForOp>(op)) {
     return unrollSCFForOp(builder, forOp, options, state);
   }
 
   if (auto dimOp = dyn_cast<memref::DimOp>(op)) {
-    // Should be mapped in the state.
     auto memref = getUnrolledValue(builder, dimOp.getSource(), options, state);
-    // Clone it.
     auto index = getUnrolledValue(builder, dimOp.getIndex(), options, state);
-    return memref::DimOp::create(builder, op->getLoc(), memref, index);
+    if (options.getUnrollIdx() == UnrollOptions::kNoUnrollIdx) {
+      return memref::DimOp::create(builder, op->getLoc(), memref, index);
+    }
+
+    auto constantIndex = dyn_cast_or_null<arith::ConstantIndexOp>(
+        index.getDefiningOp());
+    if (!constantIndex) {
+      return memref::DimOp::create(builder, op->getLoc(), memref, index);
+    }
+
+    int64_t dim = constantIndex.value();
+    int64_t unrollIdx = options.getUnrollIdx();
+    if (options.shouldReduce()) {
+      if (dim == unrollIdx) {
+        // The unrolled dimension disappeared via rank reduction, so its extent
+        // is the unit chunk that triggered the reduction.
+        return arith::ConstantIndexOp::create(builder, op->getLoc(), 1);
+      }
+      if (dim > unrollIdx) {
+        dim -= 1;
+      }
+    }
+
+    auto newIndex = arith::ConstantIndexOp::create(builder, op->getLoc(), dim);
+    return memref::DimOp::create(builder, op->getLoc(), memref, newIndex);
   }
 
   if (isa<arith::CmpIOp, arith::CmpFOp>(op)) {
@@ -292,13 +258,21 @@ Operation *unrollOp(OpBuilder &builder, Operation *op, UnrollOptions options,
     auto rhs = getUnrolledValue(builder, op->getOperand(1), options, state);
     if (auto cmpi = dyn_cast<arith::CmpIOp>(op)) {
       return arith::CmpIOp::create(builder, op->getLoc(), cmpi.getPredicate(),
-                                           lhs, rhs);
+                                   lhs, rhs);
     } else if (auto cmpf = dyn_cast<arith::CmpFOp>(op)) {
       return arith::CmpFOp::create(builder, op->getLoc(), cmpf.getPredicate(),
-                                           lhs, rhs);
+                                   lhs, rhs);
     } else {
       llvm_unreachable("unexpected comparison operation");
     }
+  }
+
+  if (!isMemoryEffectFree(op)) {
+    op->emitError()
+        << "generic unrolling would clone side-effectful operation '"
+        << op->getName()
+        << "'; add explicit unrolling support or map the dominating value instead";
+    return nullptr;
   }
 
   if (op->getNumSuccessors() == 0 && op->getNumRegions() == 0) {
@@ -414,109 +388,68 @@ Value createCombiningOp(OpBuilder &b, Location loc, zuan::CombiningKind kind,
   return result;
 }
 
-void splitDynamicOpForUnrolling(RewriterBase &rewriter, DynamicOp dynamicOp,
-                                unsigned unrollIdx, ShapeInfo &shapeInfo) {
-  OpBuilder::InsertionGuard guard(rewriter);
+void UnrollState::initialize(Operation *root) {
+  BackwardSliceOptions options;
+  options.inclusive = true;
 
-  auto bodyBlock = &dynamicOp.getBody().front();
-  assert(bodyBlock->mightHaveTerminator() && "expected `zuan.yield`");
-  auto yieldOp = cast<YieldOp>(bodyBlock->getTerminator());
+  SetVector<Operation *> slice;
+  (void)getBackwardSlice(root, &slice, options);
+  llvm::SmallDenseSet<Operation *> inSlice(slice.begin(), slice.end());
+  DominanceInfo dominance(root);
 
-  /// Map from dim to the operations that use the dim.
-  std::map<DimSize, SmallVector<Operation *>> dimToOps;
-  auto yieldRegion = &yieldOp.getRegion();
+  auto reuseDominatingResult = [&](Value result) {
+    if (isa<MemRefType>(result.getType())) {
+      // Reuse any dominating memref view/buffer instead of cloning it into
+      // each generated stripmining loop body. This matters for nested SCF
+      // rewrites: a root inside a new `scf.while` body may still depend on
+      // staged memref views defined in a parent block, and cloning those
+      // producers would recreate fresh alloc/copy chains inside the loop.
+      valueMap.map(result, result);
+      return;
+    }
+    if (auto tileType = dyn_cast<TileType>(result.getType())) {
+      if (tileType.getRank() == 0) {
+        // The same dominance rule applies to scalar summaries: if the rank-0
+        // tile already dominates the rewritten root, carry it in directly
+        // instead of cloning the producing scalar path again.
+        valueMap.map(result, result);
+      }
+    }
+  };
 
-  for (auto &op : yieldRegion->getOps()) {
-    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
-      if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
-        if (unrollIdx >= shape->size()) {
-          continue;
-        }
-        auto dim = (*shape)[unrollIdx];
-        if (dimToOps.count(dim) == 0) {
-          dimToOps[dim] = {};
-        }
-        dimToOps[dim].push_back(&op);
+  for (Operation *op : slice) {
+    for (Value operand : op->getOperands()) {
+      auto *def = operand.getDefiningOp();
+      if (!def || !inSlice.contains(def)) {
+        valueMap.map(operand, operand);
+      }
+    }
+    if (op != root && dominance.properlyDominates(op, root)) {
+      for (Value result : op->getResults()) {
+        reuseDominatingResult(result);
       }
     }
   }
 
-  if (dimToOps.size() <= 1) {
-    return;
-  }
-
-  rewriter.setInsertionPoint(dynamicOp);
-
-  // Create a new dynamic op for each dim except for the first one.
-  for (auto [i, pair] : llvm::enumerate(dimToOps)) {
-    if (i == 0) {
-      continue;
-    }
-    auto dim = pair.first;
-    auto ops = pair.second;
-
-    DynamicOp::create(rewriter, 
-        dynamicOp->getLoc(), dynamicOp.getInits(),
-        [&](OpBuilder &builder, Location loc, ValueRange args) {
-          OpBuilder::InsertionGuard guard(builder);
-
-          UnrollOptions options(builder.getIndexAttr(0),
-                                dim.getOrCreateOpFoldResult(builder, loc),
-                                unrollIdx, false);
-          UnrollState state;
-          state.valueMap.map(bodyBlock->getArguments(), args);
-          SetVector<Value> valuesDefinedAbove;
-          mlir::getUsedValuesDefinedAbove(dynamicOp.getBody(),
-                                          valuesDefinedAbove);
-          state.valueMap.map(valuesDefinedAbove.getArrayRef(),
-                             valuesDefinedAbove.getArrayRef());
-
-          auto yieldOp = YieldOp::create(builder, loc);
-          state.yieldBlock = &yieldOp.getBody().front();
-
-          builder.setInsertionPoint(yieldOp);
-
-          for (auto op : ops) {
-            unrollOp(builder, op, options, state);
-          }
-        });
-  }
-
-  for (auto [i, pair] : llvm::enumerate(dimToOps)) {
-    if (i == 0) {
-      continue;
-    }
-    for (auto op : pair.second) {
-      rewriter.eraseOp(op);
-    }
-  }
-}
-
-bool isDynamicOpUnrolled(DynamicOp dynamicOp, unsigned targetRank,
-                         ShapeInfo &shapeInfo) {
-  auto yieldOp = dynamicOp.getYieldOp();
-  auto yieldRegion = &yieldOp.getRegion();
-
-  bool unrolled = true;
-  for (auto &op : yieldRegion->getOps()) {
-    if (auto iface = dyn_cast<ZuanUnrollingInterface>(&op)) {
-      if (auto shape = iface.getShapeToUnroll(shapeInfo)) {
-        if (shape->size() > targetRank) {
-          unrolled = false;
-          break;
-        }
-      }
+  Operation *scope = root;
+  while (Operation *parent = scope->getParentOp()) {
+    scope = parent;
+    if (scope->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
+      break;
     }
   }
 
-  return unrolled;
-}
-
-void UnrollState::initialize(DynamicOp op) {
-  SetVector<Value> valuesDefinedAbove;
-  mlir::getUsedValuesDefinedAbove(op.getBody(), valuesDefinedAbove);
-  this->valueMap.map(valuesDefinedAbove.getArrayRef(),
-                     valuesDefinedAbove.getArrayRef());
+  // Nested SCF bodies can capture dominating memrefs without making them
+  // explicit operands of the slice root. Walk the enclosing isolated scope so
+  // those captured staging views are also reused instead of cloned.
+  scope->walk([&](Operation *op) {
+    if (op == root || !dominance.properlyDominates(op, root)) {
+      return;
+    }
+    for (Value result : op->getResults()) {
+      reuseDominatingResult(result);
+    }
+  });
 }
 
 } // namespace zuan

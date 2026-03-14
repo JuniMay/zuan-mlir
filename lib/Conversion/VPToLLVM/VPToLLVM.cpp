@@ -305,13 +305,10 @@ static Value buildPtrVec(Location loc, MemRefType type,
   // Bitcast the buffer pointer to the index type.
   Value bufferPtrCasted =
       LLVM::PtrToIntOp::create(rewriter, loc, indexType, bufferPtr);
-  auto splatIntrName = rewriter.getStringAttr("llvm.experimental.vp.splat");
   // Splats the offset value to the vector type.
   Value indexVec =
-      LLVM::CallIntrinsicOp::create(rewriter, loc, indexVecType,
-                                    splatIntrName,
-                                    ValueRange{bufferPtrCasted, mask, evl})
-          ->getResult(0);
+      buildLLVMSplat(rewriter, loc, bufferPtrCasted, indexVecType,
+                     typeConverter);
 
   auto elementType = typeConverter->convertType(type.getElementType());
   // XXX: All element types should be byte-aligned.
@@ -319,19 +316,16 @@ static Value buildPtrVec(Location loc, MemRefType type,
   Value elementSizeValue = LLVM::ConstantOp::create(rewriter, 
       loc, indexType, rewriter.getIntegerAttr(indexType, elementSize));
   // Splat the element size to the vector type.
-  Value elementSizeVec = LLVM::CallIntrinsicOp::create(
-                             rewriter, loc, indexVecType, splatIntrName,
-                             ValueRange{elementSizeValue, mask, evl})
-                             ->getResult(0);
+  Value elementSizeVec =
+      buildLLVMSplat(rewriter, loc, elementSizeValue, indexVecType,
+                     typeConverter);
 
   for (int i = 0, e = indices.size(); i < e; ++i) {
     Value increment = indices[i];
     if (strides[i] != 1) {
       Value stride = memrefDesc.stride(rewriter, loc, i);
-      Value strideSplat = LLVM::CallIntrinsicOp::create(
-                              rewriter, loc, increment.getType(),
-                              splatIntrName, ValueRange{stride, mask, evl})
-                              ->getResult(0);
+      Value strideSplat =
+          buildLLVMSplat(rewriter, loc, stride, indexVecType, typeConverter);
       increment = LLVM::VPMulOp::create(rewriter, 
           loc, increment.getType(), increment, strideSplat, mask, evl);
     }

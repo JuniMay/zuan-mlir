@@ -5,6 +5,7 @@
 #include <iostream>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_8(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_16(double, double, int, MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_32(double, double, int, MemRef<float, 2> *);
@@ -47,9 +48,8 @@ static void verifyFillRng2D() {
   double max = 1.0;
   int seed = 19260817;
 
-  MemRef<float, 2> autovec({M, N}, 0);
-
-  runKernel(_mlir_ciface_kernel_autovec_16, min, max, seed, &autovec);
+  MemRef<float, 2> scalar({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, min, max, seed, &scalar);
   MemRef<float, 2> zuan_8_1({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_1, min, max, seed, &zuan_8_1);
 
@@ -62,23 +62,23 @@ static void verifyFillRng2D() {
   MemRef<float, 2> zuan_4_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_zuan_4_4, min, max, seed, &zuan_4_4);
 
-  autovec.verify(zuan_8_1, "fill-rng-2d-zuan-8-1", 0);
-  autovec.verify(zuan_8_2, "fill-rng-2d-zuan-8-2", 0);
-  autovec.verify(zuan_4_1, "fill-rng-2d-zuan-4-1", 0);
-  autovec.verify(zuan_4_2, "fill-rng-2d-zuan-4-2", 0);
-  autovec.verify(zuan_4_4, "fill-rng-2d-zuan-4-4", 0);
+  scalar.verify(zuan_8_1, "fill-rng-2d-zuan-8-1", 0);
+  scalar.verify(zuan_8_2, "fill-rng-2d-zuan-8-2", 0);
+  scalar.verify(zuan_4_1, "fill-rng-2d-zuan-4-1", 0);
+  scalar.verify(zuan_4_2, "fill-rng-2d-zuan-4-2", 0);
+  scalar.verify(zuan_4_4, "fill-rng-2d-zuan-4-4", 0);
 
   MemRef<float, 2> transform_4_1({M, N}, 0);
   runKernel(_mlir_ciface_kernel_transform_4_1, min, max, seed, &transform_4_1);
   MemRef<float, 2> transform_8_1({M, N}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_1, min, max, seed, &transform_8_1);
 
-  autovec.verify(transform_4_1, "fill-rng-2d-transform-4-1", 0);
-  autovec.verify(transform_8_1, "fill-rng-2d-transform-8-1", 0);
+  scalar.verify(transform_4_1, "fill-rng-2d-transform-4-1", 0);
+  scalar.verify(transform_8_1, "fill-rng-2d-transform-8-1", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec = " << autovec[i] << "\tzuan-8-2 = " << zuan_8_2[i]
+              << ": scalar = " << scalar[i] << "\tzuan-8-2 = " << zuan_8_2[i]
               << "\tzuan-8-1 = " << zuan_8_1[i]
               << "\tzuan-4-1 = " << zuan_4_1[i]
               << "\tzuan-4-2 = " << zuan_4_2[i]

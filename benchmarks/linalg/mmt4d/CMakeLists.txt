@@ -1,6 +1,8 @@
 add_executable(linalg-mmt4d-benchmark launcher.cpp)
 target_link_libraries(linalg-mmt4d-benchmark PRIVATE GoogleBenchmark)
 
+add_linalg_scalar_kernel(mmt4d)
+
 add_linalg_zuan_kernel(mmt4d 8 4)
 add_linalg_zuan_kernel(mmt4d 16 2)
 
@@ -17,7 +19,7 @@ add_linalg_autovec_kernel(mmt4d 64)
 target_link_libraries(
   linalg-mmt4d-benchmark
   PRIVATE
-  
+  linalg_mmt4d_scalar
   linalg_mmt4d_zuan_8_4
   linalg_mmt4d_zuan_16_2
 

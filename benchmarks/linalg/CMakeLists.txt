@@ -36,6 +36,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -canonicalize
         -cse
         -convert-zuan-to-vp="vf=${vf};scalable=true"
+        -fold-memref-alias-ops
         -convert-vp-to-llvm="${estimate_math_flag}"
         -canonicalize
         -cse
@@ -54,7 +55,7 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
         -reconcile-unrealized-casts
         -canonicalize
         -cse
-        -mlir-print-ir-after-all
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG}
         -o ${zuan_mlir} 2> ${zuan_debug_file}
     COMMAND
       ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
@@ -66,6 +67,54 @@ function(add_linalg_zuan_kernel benchmark_name vf uf)
 
   add_library(linalg_${benchmark_name}_zuan_${vf}_${uf}${estimate_math_suffix} STATIC ${zuan_obj})
   set_target_properties(linalg_${benchmark_name}_zuan_${vf}_${uf}${estimate_math_suffix} PROPERTIES LINKER_LANGUAGE CXX)
+endfunction()
+
+# `linalg_${benchmark_name}_scalar`
+function(add_linalg_scalar_kernel benchmark_name)
+  set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.mlir)
+  set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name}_scalar)
+
+  set(scalar_mlir ${generated_file_prefix}.mlir)
+  set(scalar_llvm ${generated_file_prefix}.ll)
+  set(scalar_debug_file ${generated_file_prefix}_debug.mlir)
+  set(scalar_obj ${generated_file_prefix}.o)
+
+  add_custom_command(
+    OUTPUT ${scalar_mlir} ${scalar_llvm} ${scalar_obj}
+    COMMAND
+      cat ${mlir_file} |
+      sed "'s/kernel(/kernel_scalar(/'" |
+      ${LLVM_BINARY_DIR}/mlir-opt
+        -linalg-generalize-named-ops
+        -convert-linalg-to-affine-loops
+        -canonicalize
+        -cse
+        -lower-affine
+        -convert-scf-to-cf
+        -convert-cf-to-llvm
+        -convert-ub-to-llvm
+        -expand-strided-metadata
+        -convert-math-to-llvm
+        -convert-math-to-libm
+        -convert-vector-to-llvm
+        -convert-arith-to-llvm
+        -llvm-request-c-wrappers
+        -finalize-memref-to-llvm
+        -convert-func-to-llvm
+        -reconcile-unrealized-casts
+        -canonicalize
+        -cse
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG} 2> ${scalar_debug_file} |
+        ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${scalar_llvm}
+    COMMAND
+      ${LLVM_BINARY_DIR}/clang
+        -march=rv64gcv_zvfh -O3 -ffast-math
+        ${CLANG_FLAGS_LIST} ${scalar_llvm} -c -save-temps -o ${scalar_obj}
+    DEPENDS ${mlir_file}
+  )
+
+  add_library(linalg_${benchmark_name}_scalar STATIC ${scalar_obj})
+  set_target_properties(linalg_${benchmark_name}_scalar PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 
 # `linalg_${benchmark_name}_autovec_${virtvecsize}`
@@ -100,10 +149,14 @@ function(add_linalg_autovec_kernel benchmark_name virtvecsize)
         -finalize-memref-to-llvm
         -convert-func-to-llvm
         -reconcile-unrealized-casts
-        -mlir-print-ir-after-all 2> ${autovec_debug_file} |
-      ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG} 2> ${autovec_debug_file} |
+        ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${autovec_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang
+        # These kernels are built as fixed-width RVV code with
+        # `--riscv-v-vector-bits-min=256`. Correctness checks for the autovec
+        # path therefore need to run under QEMU with `vlen=256` (or larger)
+        # instead of the default shorter VLEN configuration.
         -march=rv64gcv_zvfh -O3 -ffast-math -mllvm --riscv-v-vector-bits-min=256
         ${CLANG_FLAGS_LIST} ${autovec_llvm} -c -save-temps -o ${autovec_obj}
     DEPENDS ${mlir_file}
@@ -161,7 +214,7 @@ function(add_linalg_transform_kernel benchmark_name vf uf)
         -convert-arith-to-llvm
         -convert-func-to-llvm
         -reconcile-unrealized-casts
-        -mlir-print-ir-after-all 2> ${transform_debug_file} |
+        ${ZUAN_BENCHMARK_DUMP_IR_FLAG} 2> ${transform_debug_file} |
         ${LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${transform_llvm}
     COMMAND
       ${LLVM_BINARY_DIR}/clang

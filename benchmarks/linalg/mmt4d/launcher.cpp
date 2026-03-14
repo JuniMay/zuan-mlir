@@ -6,6 +6,8 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_kernel_scalar(MemRef<float, 4> *, MemRef<float, 4> *,
+                                MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_8(MemRef<float, 4> *, MemRef<float, 4> *,
                                    MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *,
@@ -94,16 +96,16 @@ static void verifyMmt4D() {
   const size_t K0 = 13;
 
   auto [input1, input2] = initializeData(M, N, K, M0, N0, K0);
-  MemRef<float, 4> autovec({M, N, M0, N0}, 0);
-  runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, &autovec);
+  MemRef<float, 4> scalar({M, N, M0, N0}, 0);
+  runKernel(_mlir_ciface_kernel_scalar, &input1, &input2, &scalar);
 
   MemRef<float, 4> zuan_8_4({M, N, M0, N0}, 0);
   runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
   MemRef<float, 4> zuan_16_2({M, N, M0, N0}, 0);
   runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
 
-  autovec.verify(zuan_16_2, "mmt4d-zuan-16-2", 0.0001);
-  autovec.verify(zuan_8_4, "mmt4d-zuan-8-4", 0.0001);
+  scalar.verify(zuan_16_2, "mmt4d-zuan-16-2", 0.0001);
+  scalar.verify(zuan_8_4, "mmt4d-zuan-8-4", 0.0001);
 
   MemRef<float, 4> transform_32_4({M, N, M0, N0}, 0);
   runKernel(_mlir_ciface_kernel_transform_32_4, &input1, &input2,
@@ -112,13 +114,13 @@ static void verifyMmt4D() {
   runKernel(_mlir_ciface_kernel_transform_64_2, &input1, &input2,
             &transform_64_2);
 
-  autovec.verify(transform_32_4, "mmt4d-transform-32-4", 0.0001);
-  autovec.verify(transform_64_2, "mmt4d-transform-64-2", 0.0001);
+  scalar.verify(transform_32_4, "mmt4d-transform-32-4", 0.0001);
+  scalar.verify(transform_64_2, "mmt4d-transform-64-2", 0.0001);
 
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": autovec=" << autovec[i] << "\tzuan-16-2=" << zuan_16_2[i]
+              << ": scalar=" << scalar[i] << "\tzuan-16-2=" << zuan_16_2[i]
               << "\tzuan-8-4=" << zuan_8_4[i]
               << "\ttransform-32-4=" << transform_32_4[i]
               << "\ttransform-64-2=" << transform_64_2[i] << std::endl;

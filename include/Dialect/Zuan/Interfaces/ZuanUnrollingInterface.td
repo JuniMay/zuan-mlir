@@ -22,16 +22,7 @@ def ZuanUnrollingInterface : OpInterface<"ZuanUnrollingInterface"> {
       /*methodName=*/"unroll",
       /*args=*/(ins "::mlir::OpBuilder &":$builder,
                     "::mlir::zuan::UnrollOptions":$options,
-                    "::mlir::zuan::UnrollState &":$state)>,
-    InterfaceMethod<
-      /*desc=*/[{
-        Get the shape-to-unroll of the operation. If the operation does not have
-        a shape semantics, e.g., it is a scalar operation, or it is the dynamic
-        op, return `std::nullopt`.
-      }],
-      /*retTy=*/"::std::optional<::mlir::zuan::TileShape>",
-      /*methodName=*/"getShapeToUnroll",
-      /*args=*/(ins "::mlir::zuan::ShapeInfo &":$shapeInfo)>
+                    "::mlir::zuan::UnrollState &":$state)>
   ];
 }
 

@@ -53,3 +53,19 @@ func.func @scatter_bad_value_shape(%base: memref<?x?xf32>, %value: !zuan.tile<?x
   zuan.scatter %value, %base[%idx0, %idx1] : !zuan.tile<?x?xf32>, memref<?x?xf32>, !zuan.tile<?xindex>, !zuan.tile<?xindex>
   return
 }
+
+// -----
+
+func.func @dim_out_of_range(%arg0: !zuan.tile<?x?xf32>) {
+  // expected-error@+1 {{expected dim to be in range [0, 2)}}
+  %0 = zuan.dim %arg0, 2 : !zuan.tile<?x?xf32>
+  return
+}
+
+// -----
+
+func.func @extract_non_scalar(%arg0: !zuan.tile<?xf32>) {
+  // expected-error@+1 {{operand #0 must be  of ranks 0}}
+  %0 = zuan.extract %arg0 : !zuan.tile<?xf32>
+  return
+}

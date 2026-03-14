@@ -8,7 +8,6 @@ separate_arguments(CLANG_FLAGS_LIST UNIX_COMMAND "${CMAKE_C_FLAGS}")
 set(mlir_file ${CMAKE_CURRENT_SOURCE_DIR}/matmul.mlir)
 set(ll_file ${CMAKE_CURRENT_BINARY_DIR}/matmul.ll)
 set(obj_file ${CMAKE_CURRENT_BINARY_DIR}/matmul.o)
-set(asm_file ${CMAKE_CURRENT_BINARY_DIR}/matmul.s)
 
 add_custom_command(
   OUTPUT ${obj_file}
@@ -34,7 +33,7 @@ add_custom_command(
     -cse -o ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir ${CMAKE_CURRENT_BINARY_DIR}/stage3.mlir
   COMMAND ${ZUAN_TRANSLATE_CMD} ${CMAKE_CURRENT_BINARY_DIR}/stage4.mlir -zuan-to-llvmir -o ${ll_file}
   COMMAND ${ZUAN_SOURCE_DIR}/llvm-project/build/bin/clang -march=rv64gcv_zvfh -O3 -g ${CLANG_FLAGS_LIST} -c -save-temps ${ll_file} -o ${obj_file}
-  DEPENDS ${mlir_file} zuan-opt
+  DEPENDS ${mlir_file} zuan-opt zuan-translate
 )
 
 add_library(zuan-matmul-kernel STATIC ${obj_file})

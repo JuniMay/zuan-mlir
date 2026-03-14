@@ -6,6 +6,7 @@
 #include <random>
 
 extern "C" {
+void _mlir_ciface_relu_kernel_scalar(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_autovec_8(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_relu_kernel_autovec_16(MemRef<float, 4> *,
                                          MemRef<float, 4> *);
@@ -76,9 +77,8 @@ static void verifyRelu() {
   const size_t C = 64;
 
   MemRef<float, 4> input = initializeData(B, H, W, C);
-
-  MemRef<float, 4> autovec({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_autovec_16, &input, &autovec);
+  MemRef<float, 4> scalar({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_relu_kernel_scalar, &input, &scalar);
 
   MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_zuan_16_1, &input, &zuan_16_1);
@@ -87,9 +87,9 @@ static void verifyRelu() {
   MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_zuan_16_4, &input, &zuan_16_4);
 
-  autovec.verify(zuan_16_1, "relu-zuan-16-1", 0);
-  autovec.verify(zuan_16_2, "relu-zuan-16-2", 0);
-  autovec.verify(zuan_16_4, "relu-zuan-16-4", 0);
+  scalar.verify(zuan_16_1, "relu-zuan-16-1", 0);
+  scalar.verify(zuan_16_2, "relu-zuan-16-2", 0);
+  scalar.verify(zuan_16_4, "relu-zuan-16-4", 0);
 
   MemRef<float, 4> transform_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_transform_16_1, &input, &transform_16_1);
@@ -98,13 +98,13 @@ static void verifyRelu() {
   MemRef<float, 4> transform_16_4({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_transform_16_4, &input, &transform_16_4);
 
-  autovec.verify(transform_16_1, "relu-transform-16-1", 0);
-  autovec.verify(transform_16_2, "relu-transform-16-2", 0);
-  autovec.verify(transform_16_4, "relu-transform-16-4", 0);
+  scalar.verify(transform_16_1, "relu-transform-16-1", 0);
+  scalar.verify(transform_16_2, "relu-transform-16-2", 0);
+  scalar.verify(transform_16_4, "relu-transform-16-4", 0);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ":\tAutovec = " << autovec[i]
+              << ":\tScalar = " << scalar[i]
               << "\tZuan-16-1 = " << zuan_16_1[i]
               << "\tZuan-16-2 = " << zuan_16_2[i]
               << "\tZuan-16-4 = " << zuan_16_4[i]

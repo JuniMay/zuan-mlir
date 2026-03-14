@@ -87,14 +87,14 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
          llvm::enumerate(linalgYieldOp.getOperands())) {
       LLVM_DEBUG(DBGS() << "Yielded operand: " << yieldedOperand << "\n");
       auto mappedOpd = getOrSplat(builder, yieldedOperand, state);
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointToEnd(state.yieldBlock);
       auto initOpOperand = state.linalgOp.getDpsInitOperand(i);
       auto indexingMap = state.linalgOp.getMatchingIndexingMap(initOpOperand);
       Value linalgInitMemref = initOpOperand->get();
       if (indexingMap.isProjectedPermutation()) {
-        Value dynamicInitMemref = state.transformedMemRefs[linalgInitMemref];
-        zuan::StoreOp::create(builder, loc, mappedOpd, dynamicInitMemref);
+        // Flat Zuan performs the destination write exactly where the linalg
+        // yield happens instead of staging it in a hidden `zuan.yield` region.
+        Value transformedInitMemref = state.transformedMemRefs[linalgInitMemref];
+        zuan::StoreOp::create(builder, loc, mappedOpd, transformedInitMemref);
       } else {
         // Handle the non-projected permutation operands.
         auto indices = state.nonProjectedPermutationIndices[initOpOperand];
@@ -231,8 +231,7 @@ static LogicalResult convertOneOpToZuan(OpBuilder &builder, Operation *op,
     for (auto index : indices) {
       newIndices.push_back(getOrSplat(builder, index, state));
     }
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToEnd(state.yieldBlock);
+    // No longer need to reset the insertion point because the ops are flat now.
     Operation *newOp =
         zuan::ScatterOp::create(builder, loc, value, memref, newIndices);
     if (auto mask = state.getMask()) {
@@ -503,8 +502,6 @@ struct LinalgGenericToZuanPattern : RewritePattern {
                  valuesDefinedAbove.getArrayRef());
     // The map of shape-transformed memrefs.
     DenseMap<Value, Value> transformedMemRefs;
-    /// The memrefs for zuan.dynamic op init operands.
-    SmallVector<Value> initMemrefs;
     /// The operands that are not using a projected permutation.
     SmallVector<OpOperand *> nonProjectedPermutationOperands;
 
@@ -628,67 +625,32 @@ struct LinalgGenericToZuanPattern : RewritePattern {
             loc, opOperand->get(), AffineMapAttr::get(permutationMap));
         // Map the original and transposed memrefs.
         transformedMemRefs[opOperand->get()] = transposed;
-        // The transposed memref is the init for the dynamic op.
-        initMemrefs.push_back(transposed);
-        // bbArgs are not mapped here, because zuan.dynamic will build
-        // corresponding block arguments.
       }
     }
 
     //----------------------------------------------------------------------
-    // 3. Create the dynamic op and map the bbArgs.
+    // 3. Materialize tile loads and map the block arguments.
     //----------------------------------------------------------------------
+    // The old region wrapper used block arguments as implicit tiles for both
+    // inputs and destination-style outputs. In the flat SSA form we replace
+    // that protocol with explicit `zuan.load`/`zuan.gather` values up front.
+    for (OpOperand *opOperand : linalgOpOperands) {
+      if (linalgOp.isScalar(opOperand)) {
+        continue;
+      }
+      auto indexingMap = linalgOp.getMatchingIndexingMap(opOperand);
+      if (!indexingMap.isProjectedPermutation()) {
+        // Non-projected permutation operands will be handled later.
+        continue;
+      }
 
-    // The memrefs that are explicitly written to inside the linalg op.
-    SetVector<Value> storeMemrefs;
-    // TODO: Investigate if this is necessary.
-    linalgOp->walk([&](memref::StoreOp storeOp) {
-      storeMemrefs.insert(storeOp.getMemRef());
-    });
-    initMemrefs.append(storeMemrefs.begin(), storeMemrefs.end());
+      auto bbArg = linalgOp.getMatchingBlockArgument(opOperand);
+      Value source = transformedMemRefs[opOperand->get()];
+      Value loaded = zuan::LoadOp::create(rewriter, loc, source);
+      valueMap.map(bbArg, loaded);
+    }
 
-    zuan::YieldOp yieldOp;
-
-    auto dynamicOp = zuan::DynamicOp::create(rewriter, 
-        loc, initMemrefs, [&](OpBuilder &b, Location loc, ValueRange inits) {
-          // The index into the bbArgs of the dynamic region.
-          unsigned initIdx = 0;
-          // Map the dps init bbargs with dynamic region inits.
-          for (OpOperand *opOperand : linalgOpOperands) {
-            if (linalgOp.isScalar(opOperand)) {
-              continue;
-            }
-            auto indexingMap = linalgOp.getMatchingIndexingMap(opOperand);
-            auto bbArg = linalgOp.getMatchingBlockArgument(opOperand);
-
-            if (!indexingMap.isProjectedPermutation()) {
-              // Handle the non-projected permutation operands later.
-              continue;
-            }
-            if (linalgOp.isDpsInput(opOperand)) {
-              // Get the mapped subview for the dps input operand.
-              Value subview = transformedMemRefs[opOperand->get()];
-              // Create a load op for the subview.
-              Value loaded = zuan::LoadOp::create(b, loc, subview);
-              // Map the dps input bbarg to the loaded value.
-              valueMap.map(bbArg, loaded);
-            } else {
-              // Map the dps init bbarg to the dynamic region init.
-              valueMap.map(bbArg, inits[initIdx++]);
-            }
-          }
-          yieldOp = zuan::YieldOp::create(b, loc);
-        });
-
-    // This is the block to insert converted operations inside linalg op.
-    auto dynamicBlock = &dynamicOp.getBody().front();
-    auto yieldBlock = &yieldOp.getBody().front();
-
-    zuan::LinalgConversionState state(commonShape, dynamicBlock, yieldBlock,
-                                      linalgOp);
-
-    // Insert new operations before the yield op.
-    rewriter.setInsertionPoint(yieldOp);
+    zuan::LinalgConversionState state(commonShape, linalgOp);
 
     // Gather the non-projected permutation operands.
     for (auto opOperand : nonProjectedPermutationOperands) {
@@ -743,11 +705,8 @@ namespace mlir {
 namespace zuan {
 
 LinalgConversionState::LinalgConversionState(SmallVector<OpFoldResult> ofrShape,
-                                             Block *dynamicBlock,
-                                             Block *yieldBlock,
                                              linalg::LinalgOp linalgOp)
-    : ofrShape(ofrShape), dynamicBlock(dynamicBlock), yieldBlock(yieldBlock),
-      linalgOp(linalgOp) {
+    : ofrShape(ofrShape), linalgOp(linalgOp) {
   this->staticShape = llvm::map_to_vector(ofrShape, [](OpFoldResult ofr) {
     if (auto attr = ofr.dyn_cast<Attribute>()) {
       return cast<IntegerAttr>(attr).getInt();

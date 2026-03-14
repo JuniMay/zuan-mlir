@@ -55,14 +55,19 @@ void verify() {
   const size_t N = 12937;
 
   auto [vec_a, vec_b] = initializeData(N);
+  std::vector<float> vec_c_scalar(N);
   std::vector<float> vec_c_triton_cpu(N);
   std::vector<float> vec_c_zuan(N);
+  runKernel(kernel_scalar_wrapper, N, vec_a.data(), vec_b.data(),
+            vec_c_scalar.data());
   runKernel(kernel_triton_cpu, N, vec_a.data(), vec_b.data(),
             vec_c_triton_cpu.data());
   runKernel(kernel_zuan_wrapper, N, vec_a.data(), vec_b.data(),
             vec_c_zuan.data());
 
-  verify(vec_c_triton_cpu.data(), vec_c_zuan.data(), N, "Vector Multiply");
+  verify(vec_c_scalar.data(), vec_c_triton_cpu.data(), N,
+         "Vector Multiply Triton CPU");
+  verify(vec_c_scalar.data(), vec_c_zuan.data(), N, "Vector Multiply Zuan");
 }
 
 int main(int argc, char **argv) {
