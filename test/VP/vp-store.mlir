@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm=enable-rvv=true %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm=enable-rvv=true %s | FileCheck %s
 
 // CHECK-LABEL: func.func @vp_store
 func.func @vp_store(%vec: vector<[4]xf32>, %mem: memref<?x?xf32>, %i: index, %j: index, %evl: index) {

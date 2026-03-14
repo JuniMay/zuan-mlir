@@ -11,7 +11,7 @@ void _mlir_ciface_kernel_autovec_16(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 1> *, MemRef<float, 0> *);
 
-void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
+void _mlir_ciface_kernel_dyno_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
 void _mlir_ciface_kernel_transform_16_2(MemRef<float, 1> *, MemRef<float, 0> *);
 }
 
@@ -53,23 +53,23 @@ static void verifyReduce() {
   const size_t N = 1397;
   MemRef<float, 1> vec = initializeData(N);
   MemRef<float, 0> scalar({}, 0);
-  MemRef<float, 0> zuan_16_2({}, 0);
+  MemRef<float, 0> dyno_16_2({}, 0);
   MemRef<float, 0> transform_16_2({}, 0);
 
   runKernel(_mlir_ciface_kernel_scalar, &vec, &scalar);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec, &zuan_16_2);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &vec, &dyno_16_2);
   runKernel(_mlir_ciface_kernel_transform_16_2, &vec, &transform_16_2);
 
   std::cerr << "scalar:    " << scalar[0] << "\n";
-  std::cerr << "zuan-16-2: " << zuan_16_2[0] << "\n";
+  std::cerr << "dyno-16-2: " << dyno_16_2[0] << "\n";
   std::cerr << "transform-16-2: " << transform_16_2[0] << "\n";
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);

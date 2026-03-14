@@ -3,7 +3,7 @@ target_link_libraries(linalg-dot-fp16-benchmark PRIVATE GoogleBenchmark)
 
 add_linalg_scalar_kernel(dot-fp16)
 
-add_linalg_zuan_kernel(dot-fp16 16 2)
+add_linalg_dyno_kernel(dot-fp16 16 2)
 
 add_linalg_transform_kernel(dot-fp16 16 1)
 
@@ -16,7 +16,7 @@ target_link_libraries(
   linalg-dot-fp16-benchmark
   PRIVATE
   linalg_dot-fp16_scalar
-  linalg_dot-fp16_zuan_16_2
+  linalg_dot-fp16_dyno_16_2
 
   linalg_dot-fp16_transform_16_1
 

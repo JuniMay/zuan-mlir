@@ -12,13 +12,13 @@ void _mlir_ciface_kernel_autovec_16(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 4> *, MemRef<float, 4> *);
 
-void _mlir_ciface_kernel_zuan_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
 
-void _mlir_ciface_kernel_zuan_16_1_est(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan_16_2_est(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_kernel_zuan_16_4_est(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_1_est(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_2_est(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_kernel_dyno_16_4_est(MemRef<float, 4> *, MemRef<float, 4> *);
 
 void _mlir_ciface_kernel_transform_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
 void _mlir_ciface_kernel_transform_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
@@ -78,29 +78,29 @@ static void verifyRsqrt() {
   MemRef<float, 4> scalar({B, H, W, C}, 0);
   runKernel(_mlir_ciface_kernel_scalar, &input, &scalar);
 
-  MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_1, &input, &zuan_16_1);
+  MemRef<float, 4> dyno_16_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_1, &input, &dyno_16_1);
 
-  MemRef<float, 4> zuan_16_2({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &input, &zuan_16_2);
+  MemRef<float, 4> dyno_16_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &input, &dyno_16_2);
 
-  MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_4, &input, &zuan_16_4);
+  MemRef<float, 4> dyno_16_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_4, &input, &dyno_16_4);
 
-  scalar.verify(zuan_16_1, "rsqrt-zuan-16-1", 0.001);
-  scalar.verify(zuan_16_2, "rsqrt-zuan-16-2", 0.001);
-  scalar.verify(zuan_16_4, "rsqrt-zuan-16-4", 0.001);
+  scalar.verify(dyno_16_1, "rsqrt-dyno-16-1", 0.001);
+  scalar.verify(dyno_16_2, "rsqrt-dyno-16-2", 0.001);
+  scalar.verify(dyno_16_4, "rsqrt-dyno-16-4", 0.001);
 
-  MemRef<float, 4> zuan_16_1_est({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_1_est, &input, &zuan_16_1_est);
+  MemRef<float, 4> dyno_16_1_est({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_1_est, &input, &dyno_16_1_est);
 
-  MemRef<float, 4> zuan_16_2_est({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2_est, &input, &zuan_16_2_est);
+  MemRef<float, 4> dyno_16_2_est({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_2_est, &input, &dyno_16_2_est);
 
-  MemRef<float, 4> zuan_16_4_est({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_4_est, &input, &zuan_16_4_est);
+  MemRef<float, 4> dyno_16_4_est({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_4_est, &input, &dyno_16_4_est);
 
-  // Zuan Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
+  // Dyno Compiler uses vfrsqrt7 intrinsic, while clang uses accurate rsqrt
   // even if fast-math is enabled.
   // The estimate variants intentionally use the 7-bit reciprocal-square-root
   // approximation, so keep them as printed diagnostics rather than hard
@@ -122,12 +122,12 @@ static void verifyRsqrt() {
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
               << ": scalar = " << scalar[i]
-              << "\tzuan-16-1 = " << zuan_16_1[i]
-              << "\tzuan-16-2 = " << zuan_16_2[i]
-              << "\tzuan-16-4 = " << zuan_16_4[i]
-              << "\tzuan-16-1-est = " << zuan_16_1_est[i]
-              << "\tzuan-16-2-est = " << zuan_16_2_est[i]
-              << "\tzuan-16-4-est = " << zuan_16_4_est[i]
+              << "\tdyno-16-1 = " << dyno_16_1[i]
+              << "\tdyno-16-2 = " << dyno_16_2[i]
+              << "\tdyno-16-4 = " << dyno_16_4[i]
+              << "\tdyno-16-1-est = " << dyno_16_1_est[i]
+              << "\tdyno-16-2-est = " << dyno_16_2_est[i]
+              << "\tdyno-16-4-est = " << dyno_16_4_est[i]
               << "\ttransform-16-1 = " << transform_16_1[i]
               << "\ttransform-16-2 = " << transform_16_2[i]
               << "\ttransform-16-4 = " << transform_16_4[i] << std::endl;
@@ -135,28 +135,28 @@ static void verifyRsqrt() {
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_1, _mlir_ciface_kernel_dyno_16_1)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_4, _mlir_ciface_kernel_dyno_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_1_est,
-                  _mlir_ciface_kernel_zuan_16_1_est)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_1_est,
+                  _mlir_ciface_kernel_dyno_16_1_est)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2_est,
-                  _mlir_ciface_kernel_zuan_16_2_est)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2_est,
+                  _mlir_ciface_kernel_dyno_16_2_est)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_4_est,
-                  _mlir_ciface_kernel_zuan_16_4_est)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_4_est,
+                  _mlir_ciface_kernel_dyno_16_4_est)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{32, 64, 128}, {32, 64, 128}, {32, 64, 128}, {32, 64, 128}});
 

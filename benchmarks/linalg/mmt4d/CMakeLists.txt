@@ -3,8 +3,8 @@ target_link_libraries(linalg-mmt4d-benchmark PRIVATE GoogleBenchmark)
 
 add_linalg_scalar_kernel(mmt4d)
 
-add_linalg_zuan_kernel(mmt4d 8 4)
-add_linalg_zuan_kernel(mmt4d 16 2)
+add_linalg_dyno_kernel(mmt4d 8 4)
+add_linalg_dyno_kernel(mmt4d 16 2)
 
 # XXX: mmt4d failed to be vectorized, using non-scalable vector here.
 # vscale = 256 / 64 = 4 on spacemit K1.
@@ -20,8 +20,8 @@ target_link_libraries(
   linalg-mmt4d-benchmark
   PRIVATE
   linalg_mmt4d_scalar
-  linalg_mmt4d_zuan_8_4
-  linalg_mmt4d_zuan_16_2
+  linalg_mmt4d_dyno_8_4
+  linalg_mmt4d_dyno_16_2
 
   linalg_mmt4d_transform_32_4
   linalg_mmt4d_transform_64_2

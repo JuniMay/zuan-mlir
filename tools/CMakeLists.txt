@@ -1,3 +1,3 @@
-add_subdirectory(zuan-lsp)
-add_subdirectory(zuan-opt)
-add_subdirectory(zuan-translate)
+add_subdirectory(dyno-lsp)
+add_subdirectory(dyno-opt)
+add_subdirectory(dyno-translate)

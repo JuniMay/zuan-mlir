@@ -46,7 +46,7 @@ BENCHMARK_CAPTURE(runBenchmark, triton_cpu, kernel_triton_cpu)
     ->Arg(1 << 15)
     ->Arg(1 << 16);
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, kernel_zuan_wrapper)
+BENCHMARK_CAPTURE(runBenchmark, dyno, kernel_dyno_wrapper)
     ->Unit(benchmark::kMillisecond)
     ->Arg(1 << 13)
     ->Arg(1 << 14)
@@ -59,16 +59,16 @@ void verify() {
   auto [vec_a, vec_b] = initializeData(N);
   std::vector<float> vec_c_scalar(N);
   std::vector<float> vec_c_triton_cpu(N);
-  std::vector<float> vec_c_zuan(N);
+  std::vector<float> vec_c_dyno(N);
   runKernel(kernel_scalar_wrapper, N, ALPHA, vec_a.data(), vec_b.data(),
             vec_c_scalar.data());
   runKernel(kernel_triton_cpu, N, ALPHA, vec_a.data(), vec_b.data(),
             vec_c_triton_cpu.data());
-  runKernel(kernel_zuan_wrapper, N, ALPHA, vec_a.data(), vec_b.data(),
-            vec_c_zuan.data());
+  runKernel(kernel_dyno_wrapper, N, ALPHA, vec_a.data(), vec_b.data(),
+            vec_c_dyno.data());
 
   verify(vec_c_scalar.data(), vec_c_triton_cpu.data(), N, "SAXPY Triton CPU");
-  verify(vec_c_scalar.data(), vec_c_zuan.data(), N, "SAXPY Zuan");
+  verify(vec_c_scalar.data(), vec_c_dyno.data(), N, "SAXPY Dyno");
 }
 
 int main(int argc, char **argv) {

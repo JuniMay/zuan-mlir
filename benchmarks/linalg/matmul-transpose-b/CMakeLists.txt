@@ -3,8 +3,8 @@ target_link_libraries(linalg-matmul-transpose-b-benchmark PRIVATE GoogleBenchmar
 
 add_linalg_scalar_kernel(matmul-transpose-b)
 
-add_linalg_zuan_kernel(matmul-transpose-b 8 4)
-add_linalg_zuan_kernel(matmul-transpose-b 16 2)
+add_linalg_dyno_kernel(matmul-transpose-b 8 4)
+add_linalg_dyno_kernel(matmul-transpose-b 16 2)
 add_linalg_transform_kernel(matmul-transpose-b 8 4)
 add_linalg_transform_kernel(matmul-transpose-b 16 2)
 
@@ -17,8 +17,8 @@ target_link_libraries(
   linalg-matmul-transpose-b-benchmark
   PRIVATE
   linalg_matmul-transpose-b_scalar
-  linalg_matmul-transpose-b_zuan_16_2
-  linalg_matmul-transpose-b_zuan_8_4
+  linalg_matmul-transpose-b_dyno_16_2
+  linalg_matmul-transpose-b_dyno_8_4
   linalg_matmul-transpose-b_transform_16_2
   linalg_matmul-transpose-b_transform_8_4
 

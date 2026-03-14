@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm %s | FileCheck %s
 
 // CHECK-LABEL: func.func @vp_addf16
 func.func @vp_addf16(%a: vector<[4]xf16>, %b: vector<[4]xf16>, %evl: index) -> vector<[4]xf16> {

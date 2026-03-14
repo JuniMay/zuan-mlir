@@ -3,8 +3,8 @@ target_link_libraries(linalg-matmul-benchmark PRIVATE GoogleBenchmark)
 
 add_linalg_scalar_kernel(matmul)
 
-add_linalg_zuan_kernel(matmul 8 4)
-add_linalg_zuan_kernel(matmul 16 2)
+add_linalg_dyno_kernel(matmul 8 4)
+add_linalg_dyno_kernel(matmul 16 2)
 
 add_linalg_transform_kernel(matmul 8 4)
 add_linalg_transform_kernel(matmul 16 2)
@@ -19,8 +19,8 @@ target_link_libraries(
   PRIVATE
   linalg_matmul_scalar
 
-  linalg_matmul_zuan_16_2
-  linalg_matmul_zuan_8_4
+  linalg_matmul_dyno_16_2
+  linalg_matmul_dyno_8_4
 
   linalg_matmul_transform_16_2
   linalg_matmul_transform_8_4

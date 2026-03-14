@@ -1,7 +1,7 @@
-//RUN: zuan-opt -convert-vp-to-llvm \
+//RUN: dyno-opt -convert-vp-to-llvm \
 //RUN:          -convert-func-to-llvm \
 //RUN:          -reconcile-unrealized-casts %s \
-//RUN: | zuan-translate --zuan-to-llvmir | FileCheck %s
+//RUN: | dyno-translate --dyno-to-llvmir | FileCheck %s
 
 func.func @vp_fcmp(%lhs: vector<[4]xf32>, %rhs: vector<[4]xf32>, %evl: index) -> vector<[4]xi1> {
   // CHECK: @llvm.vp.fcmp.nxv4f32

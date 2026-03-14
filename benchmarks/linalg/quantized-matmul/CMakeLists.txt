@@ -3,8 +3,8 @@ target_link_libraries(linalg-quantized-matmul-benchmark PRIVATE GoogleBenchmark)
 
 add_linalg_scalar_kernel(quantized-matmul)
 
-add_linalg_zuan_kernel(quantized-matmul 8 4)
-add_linalg_zuan_kernel(quantized-matmul 16 2)
+add_linalg_dyno_kernel(quantized-matmul 8 4)
+add_linalg_dyno_kernel(quantized-matmul 16 2)
 
 # XXX: quantized-matmul failed to be vectorized, using non-scalable vector here.
 # vscale = 256 / 64 = 4 on spacemit K1.
@@ -21,8 +21,8 @@ target_link_libraries(
   linalg-quantized-matmul-benchmark
   PRIVATE
   linalg_quantized-matmul_scalar
-  linalg_quantized-matmul_zuan_8_4
-  linalg_quantized-matmul_zuan_16_2
+  linalg_quantized-matmul_dyno_8_4
+  linalg_quantized-matmul_dyno_16_2
 
   linalg_quantized-matmul_transform_32_4
   linalg_quantized-matmul_transform_64_2

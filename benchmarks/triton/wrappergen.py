@@ -68,19 +68,19 @@ def generate_kernel_wrapper(kernel_name: str, signature: str | dict) -> str:
 
 extern "C" {{
   void {kernel_name}_triton_cpu({triton_cpu_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ);
-  void {kernel_name}_zuan({triton_shared_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ);
+  void {kernel_name}_dyno({triton_shared_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ);
   void {kernel_name}_scalar({triton_shared_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ);
 }}
 
-void {kernel_name}_zuan_wrapper({triton_cpu_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ) {{
+void {kernel_name}_dyno_wrapper({triton_cpu_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ) {{
   {triton_shared_memrefs}
   // The grids order are different between Triton-CPU and Triton-Shared
-  {kernel_name}_zuan({triton_shared_args}, gridX, gridY, gridZ, x, y, z);
+  {kernel_name}_dyno({triton_shared_args}, gridX, gridY, gridZ, x, y, z);
 }}
 
 void {kernel_name}_scalar_wrapper({triton_cpu_arg_decls}, uint32_t x, uint32_t y, uint32_t z, uint32_t gridX, uint32_t gridY, uint32_t gridZ) {{
   {triton_shared_memrefs}
-  // The scalar reference kernel uses the same raw MLIR ABI as the Zuan kernel.
+  // The scalar reference kernel uses the same raw MLIR ABI as the Dyno kernel.
   {kernel_name}_scalar({triton_shared_args}, gridX, gridY, gridZ, x, y, z);
 }}
 

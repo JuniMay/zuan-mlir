@@ -11,12 +11,12 @@ void _mlir_ciface_kernel_autovec_16(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 1> *);
 
-void _mlir_ciface_kernel_zuan_8_2(MemRef<float, 2> *, MemRef<float, 1> *);
-void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 1> *);
-void _mlir_ciface_kernel_zuan_8_8(MemRef<float, 2> *, MemRef<float, 1> *);
-void _mlir_ciface_kernel_zuan_16_1(MemRef<float, 2> *, MemRef<float, 1> *);
-void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 2> *, MemRef<float, 1> *);
-void _mlir_ciface_kernel_zuan_16_4(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_8_2(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_8_4(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_8_8(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_16_1(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_16_2(MemRef<float, 2> *, MemRef<float, 1> *);
+void _mlir_ciface_kernel_dyno_16_4(MemRef<float, 2> *, MemRef<float, 1> *);
 
 void _mlir_ciface_kernel_transform_8_2(MemRef<float, 2> *, MemRef<float, 1> *);
 void _mlir_ciface_kernel_transform_8_4(MemRef<float, 2> *, MemRef<float, 1> *);
@@ -70,25 +70,25 @@ static void verifyReduce() {
 
   runKernel(_mlir_ciface_kernel_scalar, &tile, &scalar);
 
-  MemRef<float, 1> zuan_8_2({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_2, &tile, &zuan_8_2);
-  MemRef<float, 1> zuan_8_4({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_4, &tile, &zuan_8_4);
-  MemRef<float, 1> zuan_8_8({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_8, &tile, &zuan_8_8);
-  MemRef<float, 1> zuan_16_1({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_1, &tile, &zuan_16_1);
-  MemRef<float, 1> zuan_16_2({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &tile, &zuan_16_2);
-  MemRef<float, 1> zuan_16_4({N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_4, &tile, &zuan_16_4);
+  MemRef<float, 1> dyno_8_2({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_2, &tile, &dyno_8_2);
+  MemRef<float, 1> dyno_8_4({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_4, &tile, &dyno_8_4);
+  MemRef<float, 1> dyno_8_8({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_8, &tile, &dyno_8_8);
+  MemRef<float, 1> dyno_16_1({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_1, &tile, &dyno_16_1);
+  MemRef<float, 1> dyno_16_2({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &tile, &dyno_16_2);
+  MemRef<float, 1> dyno_16_4({N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_4, &tile, &dyno_16_4);
 
-  scalar.verify(zuan_8_2, "reduce-2d-zuan-8-2", 0.0001);
-  scalar.verify(zuan_8_4, "reduce-2d-zuan-8-4", 0.0001);
-  scalar.verify(zuan_8_8, "reduce-2d-zuan-8-8", 0.0001);
-  scalar.verify(zuan_16_1, "reduce-2d-zuan-16-1", 0.0001);
-  scalar.verify(zuan_16_2, "reduce-2d-zuan-16-2", 0.0001);
-  scalar.verify(zuan_16_4, "reduce-2d-zuan-16-4", 0.0001);
+  scalar.verify(dyno_8_2, "reduce-2d-dyno-8-2", 0.0001);
+  scalar.verify(dyno_8_4, "reduce-2d-dyno-8-4", 0.0001);
+  scalar.verify(dyno_8_8, "reduce-2d-dyno-8-8", 0.0001);
+  scalar.verify(dyno_16_1, "reduce-2d-dyno-16-1", 0.0001);
+  scalar.verify(dyno_16_2, "reduce-2d-dyno-16-2", 0.0001);
+  scalar.verify(dyno_16_4, "reduce-2d-dyno-16-4", 0.0001);
 
   MemRef<float, 1> transform_8_2({N}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_2, &tile, &transform_8_2);
@@ -114,10 +114,10 @@ static void verifyReduce() {
     std::cerr << "Index " << i << std::setprecision(10)
               << ": scalar=" << scalar[i]
 
-              << "\tzuan-8-2=" << zuan_8_2[i] << "\tzuan-8-4=" << zuan_8_4[i]
-              << "\tzuan-8-8=" << zuan_8_8[i] << "\tzuan-16-1=" << zuan_16_1[i]
-              << "\tzuan-16-2=" << zuan_16_2[i]
-              << "\tzuan-16-4=" << zuan_16_4[i]
+              << "\tdyno-8-2=" << dyno_8_2[i] << "\tdyno-8-4=" << dyno_8_4[i]
+              << "\tdyno-8-8=" << dyno_8_8[i] << "\tdyno-16-1=" << dyno_16_1[i]
+              << "\tdyno-16-2=" << dyno_16_2[i]
+              << "\tdyno-16-4=" << dyno_16_4[i]
 
               << "\ttransform-8-2=" << transform_8_2[i]
               << "\ttransform-8-4=" << transform_8_4[i]
@@ -131,30 +131,30 @@ static void verifyReduce() {
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_2, _mlir_ciface_kernel_dyno_8_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_4, _mlir_ciface_kernel_dyno_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_8, _mlir_ciface_kernel_dyno_8_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_kernel_zuan_16_1)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_1, _mlir_ciface_kernel_dyno_16_1)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_4, _mlir_ciface_kernel_dyno_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{512, 1 << 10, 1 << 12, 1 << 14},
                    {1 << 16, 1 << 18, 1 << 22}});

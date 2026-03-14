@@ -3,9 +3,9 @@ target_link_libraries(linalg-relu-benchmark PRIVATE GoogleBenchmark)
 
 add_linalg_scalar_kernel(relu)
 
-add_linalg_zuan_kernel(relu 16 1)
-add_linalg_zuan_kernel(relu 16 2)
-add_linalg_zuan_kernel(relu 16 4)
+add_linalg_dyno_kernel(relu 16 1)
+add_linalg_dyno_kernel(relu 16 2)
+add_linalg_dyno_kernel(relu 16 4)
 
 add_linalg_transform_kernel(relu 16 1)
 add_linalg_transform_kernel(relu 16 2)
@@ -20,9 +20,9 @@ target_link_libraries(
   linalg-relu-benchmark
   PRIVATE
   linalg_relu_scalar
-  linalg_relu_zuan_16_1
-  linalg_relu_zuan_16_2
-  linalg_relu_zuan_16_4
+  linalg_relu_dyno_16_1
+  linalg_relu_dyno_16_2
+  linalg_relu_dyno_16_4
 
   linalg_relu_transform_16_1
   linalg_relu_transform_16_2

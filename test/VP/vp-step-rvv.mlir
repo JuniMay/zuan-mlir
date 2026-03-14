@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm=enable-rvv=true %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm=enable-rvv=true %s | FileCheck %s
 
 // CHECK-LABEL: func.func @vstep_unmasked
 func.func @vstep_unmasked(%vl: index) -> vector<[8]xindex> {

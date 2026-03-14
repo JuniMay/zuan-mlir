@@ -1,14 +1,19 @@
 cmake_minimum_required(VERSION 3.20.0)
-project(zuan LANGUAGES CXX C)
+project(dyno LANGUAGES CXX C)
 
 set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
 
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
+include(CTest)
+
 option(ENABLE_RISCV_GNU_TOOLCHAIN "Build the RISC-V GNU toolchain" OFF)
 option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
 option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
-option(ZUAN_BENCHMARK_DUMP_IR
+option(ENABLE_DYNO_RUNTIME_REGRESSIONS
+       "Enable runtime regression targets under regression/"
+       OFF)
+option(DYNO_BENCHMARK_DUMP_IR
        "Dump benchmark MLIR after every pass with -mlir-print-ir-after-all"
        OFF)
 
@@ -17,6 +22,7 @@ option(ZUAN_BENCHMARK_DUMP_IR
 #-------------------------------------------------------------------------------
 
 find_package(MLIR REQUIRED CONFIG)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
@@ -37,23 +43,23 @@ include(HandleLLVMOptions)
 # Set up the source tree
 #-------------------------------------------------------------------------------
 
-set(ZUAN_SOURCE_DIR ${PROJECT_SOURCE_DIR})
-set(ZUAN_BINARY_DIR ${PROJECT_BINARY_DIR})
+set(DYNO_SOURCE_DIR ${PROJECT_SOURCE_DIR})
+set(DYNO_BINARY_DIR ${PROJECT_BINARY_DIR})
 
-message(STATUS "Zuan source dir: ${ZUAN_SOURCE_DIR}")
-message(STATUS "Zuan binary dir: ${ZUAN_BINARY_DIR}")
+message(STATUS "Dyno source dir: ${DYNO_SOURCE_DIR}")
+message(STATUS "Dyno binary dir: ${DYNO_BINARY_DIR}")
 
-list(APPEND CMAKE_MODULE_PATH "${ZUAN_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${DYNO_SOURCE_DIR}/cmake")
 
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${ZUAN_SOURCE_DIR}/include)
-include_directories(${ZUAN_BINARY_DIR}/include)
+include_directories(${DYNO_SOURCE_DIR}/include)
+include_directories(${DYNO_BINARY_DIR}/include)
 
-include_directories(${ZUAN_SOURCE_DIR}/include/Dialect)
-include_directories(${ZUAN_BINARY_DIR}/include/Dialect)
+include_directories(${DYNO_SOURCE_DIR}/include/Dialect)
+include_directories(${DYNO_BINARY_DIR}/include/Dialect)
 
-include_directories(${ZUAN_SOURCE_DIR}/runtime)
+include_directories(${DYNO_SOURCE_DIR}/runtime)
 
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
@@ -61,7 +67,10 @@ add_definitions(${LLVM_DEFINITIONS})
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
-add_subdirectory(test)
+if (BUILD_TESTING)
+  add_subdirectory(test)
+  add_subdirectory(regression)
+endif()
 
 #-------------------------------------------------------------------------------
 # RISC-V Toolchain
@@ -69,8 +78,8 @@ add_subdirectory(test)
 
 include(ExternalProject)
 
-set(RISCV_GNU_TOOLCHAIN_DIR "${ZUAN_SOURCE_DIR}/third_party/riscv-gnu-toolchain")
-set(RISCV_GNU_TOOLCHAIN_BUILD_DIR "${ZUAN_BINARY_DIR}/third_party/riscv-gnu-toolchain")
+set(RISCV_GNU_TOOLCHAIN_DIR "${DYNO_SOURCE_DIR}/third_party/riscv-gnu-toolchain")
+set(RISCV_GNU_TOOLCHAIN_BUILD_DIR "${DYNO_BINARY_DIR}/third_party/riscv-gnu-toolchain")
 
 if (ENABLE_RISCV_GNU_TOOLCHAIN)
   ExternalProject_Add(

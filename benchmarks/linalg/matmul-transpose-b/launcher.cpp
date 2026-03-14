@@ -16,9 +16,9 @@ void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 2> *,
                                     MemRef<float, 2> *);
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 2> *,
                                     MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_16_2(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_16_2(MemRef<float, 2> *, MemRef<float, 2> *,
                                    MemRef<float, 2> *);
 void _mlir_ciface_kernel_transform_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
                                        MemRef<float, 2> *);
@@ -81,14 +81,14 @@ static void verifyMatmul() {
   MemRef<float, 2> scalar({M, N}, 0);
   runKernel(_mlir_ciface_kernel_scalar, &input1, &input2, &scalar);
 
-  MemRef<float, 2> zuan_8_4({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
+  MemRef<float, 2> dyno_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_4, &input1, &input2, &dyno_8_4);
 
-  MemRef<float, 2> zuan_16_2({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
+  MemRef<float, 2> dyno_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &input1, &input2, &dyno_16_2);
 
-  scalar.verify(zuan_16_2, "matmul-zuan-16-2", 0.0001);
-  scalar.verify(zuan_8_4, "matmul-zuan-8-4", 0.0001);
+  scalar.verify(dyno_16_2, "matmul-dyno-16-2", 0.0001);
+  scalar.verify(dyno_8_4, "matmul-dyno-8-4", 0.0001);
 
   MemRef<float, 2> transform_8_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_4, &input1, &input2,
@@ -106,25 +106,25 @@ static void verifyMatmul() {
   // print first 10 elements
   for (int i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": scalar=" << scalar[i] << "\tzuan-8-4=" << zuan_8_4[i]
-              << "\tzuan-16-2=" << zuan_16_2[i]
+              << ": scalar=" << scalar[i] << "\tdyno-8-4=" << dyno_8_4[i]
+              << "\tdyno-16-2=" << dyno_16_2[i]
               << "\ttransform-8-4=" << transform_8_4[i]
               << "\ttransform-16-2=" << transform_16_2[i] << std::endl;
   }
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_4, _mlir_ciface_kernel_dyno_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},

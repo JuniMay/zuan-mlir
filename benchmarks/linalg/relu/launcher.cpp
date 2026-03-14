@@ -15,9 +15,9 @@ void _mlir_ciface_relu_kernel_autovec_32(MemRef<float, 4> *,
 void _mlir_ciface_relu_kernel_autovec_64(MemRef<float, 4> *,
                                          MemRef<float, 4> *);
 
-void _mlir_ciface_relu_kernel_zuan_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_relu_kernel_zuan_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
-void _mlir_ciface_relu_kernel_zuan_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_relu_kernel_dyno_16_1(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_relu_kernel_dyno_16_2(MemRef<float, 4> *, MemRef<float, 4> *);
+void _mlir_ciface_relu_kernel_dyno_16_4(MemRef<float, 4> *, MemRef<float, 4> *);
 
 void _mlir_ciface_relu_kernel_transform_16_1(MemRef<float, 4> *,
                                              MemRef<float, 4> *);
@@ -80,16 +80,16 @@ static void verifyRelu() {
   MemRef<float, 4> scalar({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_scalar, &input, &scalar);
 
-  MemRef<float, 4> zuan_16_1({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_16_1, &input, &zuan_16_1);
-  MemRef<float, 4> zuan_16_2({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_16_2, &input, &zuan_16_2);
-  MemRef<float, 4> zuan_16_4({B, H, W, C}, 0);
-  runKernel(_mlir_ciface_relu_kernel_zuan_16_4, &input, &zuan_16_4);
+  MemRef<float, 4> dyno_16_1({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_relu_kernel_dyno_16_1, &input, &dyno_16_1);
+  MemRef<float, 4> dyno_16_2({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_relu_kernel_dyno_16_2, &input, &dyno_16_2);
+  MemRef<float, 4> dyno_16_4({B, H, W, C}, 0);
+  runKernel(_mlir_ciface_relu_kernel_dyno_16_4, &input, &dyno_16_4);
 
-  scalar.verify(zuan_16_1, "relu-zuan-16-1", 0);
-  scalar.verify(zuan_16_2, "relu-zuan-16-2", 0);
-  scalar.verify(zuan_16_4, "relu-zuan-16-4", 0);
+  scalar.verify(dyno_16_1, "relu-dyno-16-1", 0);
+  scalar.verify(dyno_16_2, "relu-dyno-16-2", 0);
+  scalar.verify(dyno_16_4, "relu-dyno-16-4", 0);
 
   MemRef<float, 4> transform_16_1({B, H, W, C}, 0);
   runKernel(_mlir_ciface_relu_kernel_transform_16_1, &input, &transform_16_1);
@@ -105,9 +105,9 @@ static void verifyRelu() {
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
               << ":\tScalar = " << scalar[i]
-              << "\tZuan-16-1 = " << zuan_16_1[i]
-              << "\tZuan-16-2 = " << zuan_16_2[i]
-              << "\tZuan-16-4 = " << zuan_16_4[i]
+              << "\tDyno-16-1 = " << dyno_16_1[i]
+              << "\tDyno-16-2 = " << dyno_16_2[i]
+              << "\tDyno-16-4 = " << dyno_16_4[i]
               << "\tTransform-16-1 = " << transform_16_1[i]
               << "\tTransform-16-2 = " << transform_16_2[i]
               << "\tTransform-16-4 = " << transform_16_4[i] << std::endl;
@@ -115,16 +115,16 @@ static void verifyRelu() {
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_1, _mlir_ciface_relu_kernel_zuan_16_1)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_1, _mlir_ciface_relu_kernel_dyno_16_1)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_relu_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_relu_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_relu_kernel_zuan_16_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_4, _mlir_ciface_relu_kernel_dyno_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{16, 32}, {16, 32}, {256, 512}, {256, 512, 1024, 2048}});
 

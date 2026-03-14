@@ -18,7 +18,7 @@ void _mlir_ciface_kernel_autovec_32(MemRef<_Float16, 1> *,
 void _mlir_ciface_kernel_autovec_64(MemRef<_Float16, 1> *,
                                     MemRef<_Float16, 1> *, MemRef<float, 0> *);
 
-void _mlir_ciface_kernel_zuan_16_2(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
+void _mlir_ciface_kernel_dyno_16_2(MemRef<_Float16, 1> *, MemRef<_Float16, 1> *,
                                    MemRef<float, 0> *);
 
 void _mlir_ciface_kernel_transform_16_1(MemRef<_Float16, 1> *,
@@ -71,28 +71,28 @@ static void verifyDotFp16() {
   runKernel(_mlir_ciface_kernel_scalar, &vec_a, &vec_b, &scalar);
 
   MemRef<float, 0> output_16_2({}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &vec_a, &vec_b, &output_16_2);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &vec_a, &vec_b, &output_16_2);
 
   MemRef<float, 0> output_transform_16_1({}, 0);
   runKernel(_mlir_ciface_kernel_transform_16_1, &vec_a, &vec_b,
             &output_transform_16_1);
 
-  // The clang auto-vectorization generates ordered reduce, while in zuan it
+  // The clang auto-vectorization generates ordered reduce, while in dyno it
   // uses unordered reduce. The difference in the order of reduction can lead to
   // different results.
-  scalar.verify(output_16_2, "dot-fp16-zuan-16-2", 10);
+  scalar.verify(output_16_2, "dot-fp16-dyno-16-2", 10);
   scalar.verify(output_transform_16_1, "dot-fp16-transform-16-1", 10);
 
   std::cerr << "scalar = " << std::setprecision(10) << scalar[0]
-            << "\tzuan_16_2 = " << output_16_2[0]
+            << "\tdyno_16_2 = " << output_16_2[0]
             << "\ttransform_16_1 = " << output_transform_16_1[0] << std::endl;
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->RangeMultiplier(4)
     ->Range(1 << 10, 1 << 22);

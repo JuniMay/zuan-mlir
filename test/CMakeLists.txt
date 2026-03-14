@@ -5,17 +5,17 @@ configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py
 )
 
-set(ZUAN_TEST_DEPENDS
+set(DYNO_TEST_DEPENDS
   FileCheck count not
-  zuan-opt
-  zuan-translate
+  dyno-opt
+  dyno-translate
 )
 
-add_lit_testsuite(check-zuan "Running the zuan compiler regression tests"
+add_lit_testsuite(check-dyno "Running the dyno compiler regression tests"
   ${CMAKE_CURRENT_BINARY_DIR}
-  DEPENDS ${ZUAN_TEST_DEPENDS}
+  DEPENDS ${DYNO_TEST_DEPENDS}
 )
 
-set_target_properties(check-zuan PROPERTIES FOLDER "Tests")
+set_target_properties(check-dyno PROPERTIES FOLDER "Tests")
 
-add_lit_testsuites(ZUAN ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${ZUAN_TEST_DEPENDS})
+add_lit_testsuites(DYNO ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${DYNO_TEST_DEPENDS})

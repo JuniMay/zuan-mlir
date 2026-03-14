@@ -48,7 +48,7 @@ BENCHMARK_CAPTURE(runBenchmark, triton_cpu, kernel_triton_cpu)
     ->Arg(192)
     ->Arg(256);
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, kernel_zuan_wrapper)
+BENCHMARK_CAPTURE(runBenchmark, dyno, kernel_dyno_wrapper)
     ->Unit(benchmark::kMillisecond)
     ->Arg(64)
     ->Arg(128)
@@ -61,18 +61,18 @@ void verify() {
   auto [q, k] = initializeData(SEQ_LEN);
   std::vector<float> output_scalar(SEQ_LEN * SEQ_LEN);
   std::vector<float> output_triton_cpu(SEQ_LEN * SEQ_LEN);
-  std::vector<float> output_zuan(SEQ_LEN * SEQ_LEN);
+  std::vector<float> output_dyno(SEQ_LEN * SEQ_LEN);
   runKernel(kernel_scalar_wrapper, SEQ_LEN, q.data(), k.data(),
             output_scalar.data());
   runKernel(kernel_triton_cpu, SEQ_LEN, q.data(), k.data(),
             output_triton_cpu.data());
-  runKernel(kernel_zuan_wrapper, SEQ_LEN, q.data(), k.data(),
-            output_zuan.data());
+  runKernel(kernel_dyno_wrapper, SEQ_LEN, q.data(), k.data(),
+            output_dyno.data());
 
   verify<float>(output_scalar.data(), output_triton_cpu.data(),
                 SEQ_LEN * SEQ_LEN, "Attention Triton CPU", 0.001);
-  verify<float>(output_scalar.data(), output_zuan.data(), SEQ_LEN * SEQ_LEN,
-                "Attention Zuan", 0.001);
+  verify<float>(output_scalar.data(), output_dyno.data(), SEQ_LEN * SEQ_LEN,
+                "Attention Dyno", 0.001);
 }
 
 int main(int argc, char **argv) {

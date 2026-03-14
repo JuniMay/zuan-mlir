@@ -94,7 +94,7 @@ def draw_figure(
         cpu_time = row["cpu_time"]
         parts = name.split("/")
         if len(parts) >= 3:
-            category = parts[1]  # e.g., zuan_16_2, autovec_16
+            category = parts[1]  # e.g., dyno_16_2, autovec_16
             data_size = "/".join(parts[2:])  # e.g., 128/256
         else:
             category = "Unknown"
@@ -125,11 +125,10 @@ def draw_figure(
         sampled_data_sizes = all_data_sizes[:: len(all_data_sizes) // MAX_DATA_SIZE_CNT]
         perf_df = perf_df[perf_df["data_size"].isin(sampled_data_sizes)]
 
-    # Assign colors: zuan 的类别使用黑色, 其他使用浅灰色
     unique_categories = perf_df["category"].unique()
     category_colors = {}
     for cat in unique_categories:
-        if "zuan" in cat.lower():
+        if "dyno" in cat.lower():
             category_colors[cat] = "black"
         else:
             category_colors[cat] = "lightgray"

@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm %s | FileCheck %s
 
 func.func @vp_gather(%mem: memref<?x?xf32>, %idx0: vector<[4]xindex>, %idx1: vector<[4]xindex>, %evl: index) -> vector<[4]xf32> {
   // CHECK: llvm.call_intrinsic "llvm.vp.gather"

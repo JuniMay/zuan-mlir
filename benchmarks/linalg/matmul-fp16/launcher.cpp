@@ -17,15 +17,15 @@ void _mlir_ciface_kernel_autovec_32(MemRef<_Float16, 2> *,
 void _mlir_ciface_kernel_autovec_64(MemRef<_Float16, 2> *,
                                     MemRef<_Float16, 2> *,
                                     MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan_8_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+void _mlir_ciface_kernel_dyno_8_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                   MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan_8_8(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+void _mlir_ciface_kernel_dyno_8_8(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                   MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan_16_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+void _mlir_ciface_kernel_dyno_16_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                    MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan_16_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+void _mlir_ciface_kernel_dyno_16_4(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                    MemRef<_Float16, 2> *);
-void _mlir_ciface_kernel_zuan_32_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
+void _mlir_ciface_kernel_dyno_32_2(MemRef<_Float16, 2> *, MemRef<_Float16, 2> *,
                                    MemRef<_Float16, 2> *);
 
 void _mlir_ciface_kernel_transform_8_4(MemRef<_Float16, 2> *,
@@ -101,16 +101,16 @@ static void verifyMatmul() {
   MemRef<_Float16, 2> autovec({M, N}, 0);
   runKernel(_mlir_ciface_kernel_autovec_16, &input1, &input2, &autovec);
 
-  MemRef<_Float16, 2> zuan_8_4({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_4, &input1, &input2, &zuan_8_4);
-  MemRef<_Float16, 2> zuan_8_8({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_8, &input1, &input2, &zuan_8_8);
-  MemRef<_Float16, 2> zuan_16_2({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_2, &input1, &input2, &zuan_16_2);
-  MemRef<_Float16, 2> zuan_16_4({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_16_4, &input1, &input2, &zuan_16_4);
-  MemRef<_Float16, 2> zuan_32_2({M, N}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_32_2, &input1, &input2, &zuan_32_2);
+  MemRef<_Float16, 2> dyno_8_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_4, &input1, &input2, &dyno_8_4);
+  MemRef<_Float16, 2> dyno_8_8({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_8, &input1, &input2, &dyno_8_8);
+  MemRef<_Float16, 2> dyno_16_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_2, &input1, &input2, &dyno_16_2);
+  MemRef<_Float16, 2> dyno_16_4({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_16_4, &input1, &input2, &dyno_16_4);
+  MemRef<_Float16, 2> dyno_32_2({M, N}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_32_2, &input1, &input2, &dyno_32_2);
 
   MemRef<_Float16, 2> transform_8_4({M, N}, 0);
   runKernel(_mlir_ciface_kernel_transform_8_4, &input1, &input2,
@@ -135,11 +135,11 @@ static void verifyMatmul() {
   for (int i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
               << ": autovec=" << (float)autovec[i]
-              << "\tzuan-8-4=" << (float)zuan_8_4[i]
-              << "\tzuan-8-8=" << (float)zuan_8_8[i]
-              << "\tzuan-16-2=" << (float)zuan_16_2[i]
-              << "\tzuan-16-4=" << (float)zuan_16_4[i]
-              << "\tzuan-32-2=" << (float)zuan_32_2[i]
+              << "\tdyno-8-4=" << (float)dyno_8_4[i]
+              << "\tdyno-8-8=" << (float)dyno_8_8[i]
+              << "\tdyno-16-2=" << (float)dyno_16_2[i]
+              << "\tdyno-16-4=" << (float)dyno_16_4[i]
+              << "\tdyno-32-2=" << (float)dyno_32_2[i]
               << "\ttransform-8-4=" << (float)transform_8_4[i]
               << "\ttransform-8-8=" << (float)transform_8_8[i]
               << "\ttransform-16-2=" << (float)transform_16_2[i]
@@ -149,38 +149,38 @@ static void verifyMatmul() {
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_4, _mlir_ciface_kernel_dyno_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_8, _mlir_ciface_kernel_zuan_8_8)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_8, _mlir_ciface_kernel_dyno_8_8)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_2, _mlir_ciface_kernel_zuan_16_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_2, _mlir_ciface_kernel_dyno_16_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-BENCHMARK_CAPTURE(runBenchmark, zuan_16_4, _mlir_ciface_kernel_zuan_16_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_16_4, _mlir_ciface_kernel_dyno_16_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
         {128, 192, 256, 384, 512, 768, 1024},
     });
-BENCHMARK_CAPTURE(runBenchmark, zuan_32_2, _mlir_ciface_kernel_zuan_32_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_32_2, _mlir_ciface_kernel_dyno_32_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({
         {128, 192, 256, 384, 512, 768, 1024},

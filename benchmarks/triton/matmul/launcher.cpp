@@ -60,7 +60,7 @@ BENCHMARK_CAPTURE(runBenchmark, triton_cpu, kernel_triton_cpu)
     ->Args({511, 237, 123})
     ->Args({1023, 509, 2173});
 
-BENCHMARK_CAPTURE(runBenchmark, zuan, kernel_zuan_wrapper)
+BENCHMARK_CAPTURE(runBenchmark, dyno, kernel_dyno_wrapper)
     ->Unit(benchmark::kMillisecond)
     ->Args({64, 64, 64})
     ->Args({128, 128, 128})
@@ -78,17 +78,17 @@ void verify() {
   auto [input1, input2] = initializeData(M, N, K);
   std::vector<float> output_scalar(M * N);
   std::vector<float> output_triton_cpu(M * N);
-  std::vector<float> output_zuan(M * N);
+  std::vector<float> output_dyno(M * N);
   runKernel(kernel_scalar_wrapper, M, N, K, input1.data(), input2.data(),
             output_scalar.data());
   runKernel(kernel_triton_cpu, M, N, K, input1.data(), input2.data(),
             output_triton_cpu.data());
-  runKernel(kernel_zuan_wrapper, M, N, K, input1.data(), input2.data(),
-            output_zuan.data());
+  runKernel(kernel_dyno_wrapper, M, N, K, input1.data(), input2.data(),
+            output_dyno.data());
 
   verify<float>(output_scalar.data(), output_triton_cpu.data(), M * N,
                 "Matmul Triton CPU", 0.0001);
-  verify<float>(output_scalar.data(), output_zuan.data(), M * N, "Matmul Zuan",
+  verify<float>(output_scalar.data(), output_dyno.data(), M * N, "Matmul Dyno",
                 0.0001);
 }
 

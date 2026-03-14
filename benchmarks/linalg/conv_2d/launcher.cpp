@@ -18,15 +18,15 @@ void _mlir_ciface_kernel_autovec_32(MemRef<float, 2> *, MemRef<float, 2> *,
 void _mlir_ciface_kernel_autovec_64(MemRef<float, 2> *, MemRef<float, 2> *,
                                     MemRef<float, 2> *);
 
-void _mlir_ciface_kernel_zuan_8_1(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_8_1(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_8_2(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_8_2(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_8_4(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_4_2(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_4_2(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
-void _mlir_ciface_kernel_zuan_4_4(MemRef<float, 2> *, MemRef<float, 2> *,
+void _mlir_ciface_kernel_dyno_4_4(MemRef<float, 2> *, MemRef<float, 2> *,
                                   MemRef<float, 2> *);
 }
 
@@ -95,54 +95,54 @@ static void verifyConv2d() {
   MemRef<float, 2> scalar({OUTPUT_H, OUTPUT_W}, 0);
   runKernel(_mlir_ciface_kernel_scalar, &input, &filter, &scalar);
 
-  MemRef<float, 2> zuan_8_1({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_1, &input, &filter, &zuan_8_1);
+  MemRef<float, 2> dyno_8_1({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_1, &input, &filter, &dyno_8_1);
 
-  MemRef<float, 2> zuan_8_2({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_2, &input, &filter, &zuan_8_2);
+  MemRef<float, 2> dyno_8_2({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_2, &input, &filter, &dyno_8_2);
 
-  MemRef<float, 2> zuan_8_4({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_8_4, &input, &filter, &zuan_8_4);
+  MemRef<float, 2> dyno_8_4({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_8_4, &input, &filter, &dyno_8_4);
 
-  MemRef<float, 2> zuan_4_2({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_4_2, &input, &filter, &zuan_4_2);
+  MemRef<float, 2> dyno_4_2({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_4_2, &input, &filter, &dyno_4_2);
 
-  MemRef<float, 2> zuan_4_4({OUTPUT_H, OUTPUT_W}, 0);
-  runKernel(_mlir_ciface_kernel_zuan_4_4, &input, &filter, &zuan_4_4);
+  MemRef<float, 2> dyno_4_4({OUTPUT_H, OUTPUT_W}, 0);
+  runKernel(_mlir_ciface_kernel_dyno_4_4, &input, &filter, &dyno_4_4);
 
-  scalar.verify(zuan_8_1, "conv2d-zuan-8-1", 1e-3);
-  scalar.verify(zuan_8_2, "conv2d-zuan-8-2", 1e-3);
-  scalar.verify(zuan_8_4, "conv2d-zuan-8-4", 1e-3);
-  scalar.verify(zuan_4_2, "conv2d-zuan-4-2", 1e-3);
-  scalar.verify(zuan_4_4, "conv2d-zuan-4-4", 1e-3);
+  scalar.verify(dyno_8_1, "conv2d-dyno-8-1", 1e-3);
+  scalar.verify(dyno_8_2, "conv2d-dyno-8-2", 1e-3);
+  scalar.verify(dyno_8_4, "conv2d-dyno-8-4", 1e-3);
+  scalar.verify(dyno_4_2, "conv2d-dyno-4-2", 1e-3);
+  scalar.verify(dyno_4_4, "conv2d-dyno-4-4", 1e-3);
 
   for (size_t i = 0; i < 10; i++) {
     std::cerr << "Index " << i << std::setprecision(10)
-              << ": scalar = " << scalar[i] << "\tzuan-8-1 = " << zuan_8_1[i]
-              << "\tzuan-8-2 = " << zuan_8_2[i]
-              << "\tzuan-8-4 = " << zuan_8_4[i]
-              << "\tzuan-4-2 = " << zuan_4_2[i]
-              << "\tzuan-4-4 = " << zuan_4_4[i] << std::endl;
+              << ": scalar = " << scalar[i] << "\tdyno-8-1 = " << dyno_8_1[i]
+              << "\tdyno-8-2 = " << dyno_8_2[i]
+              << "\tdyno-8-4 = " << dyno_8_4[i]
+              << "\tdyno-4-2 = " << dyno_4_2[i]
+              << "\tdyno-4-4 = " << dyno_4_4[i] << std::endl;
   }
 }
 
 //-------------------------------------------------------------------
-// Zuan
+// Dyno
 //-------------------------------------------------------------------
 
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_1, _mlir_ciface_kernel_zuan_8_1)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_1, _mlir_ciface_kernel_dyno_8_1)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{3, 5, 7}, {3, 5, 7}, {128, 256, 512}, {128, 256, 512}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_2, _mlir_ciface_kernel_zuan_8_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_2, _mlir_ciface_kernel_dyno_8_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{3, 5, 7}, {3, 5, 7}, {128, 256, 512}, {128, 256, 512}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_8_4, _mlir_ciface_kernel_zuan_8_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_8_4, _mlir_ciface_kernel_dyno_8_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{3, 5, 7}, {3, 5, 7}, {128, 256, 512}, {128, 256, 512}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_4_2, _mlir_ciface_kernel_zuan_4_2)
+BENCHMARK_CAPTURE(runBenchmark, dyno_4_2, _mlir_ciface_kernel_dyno_4_2)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{3, 5, 7}, {3, 5, 7}, {128, 256, 512}, {128, 256, 512}});
-BENCHMARK_CAPTURE(runBenchmark, zuan_4_4, _mlir_ciface_kernel_zuan_4_4)
+BENCHMARK_CAPTURE(runBenchmark, dyno_4_4, _mlir_ciface_kernel_dyno_4_4)
     ->Unit(benchmark::kMillisecond)
     ->ArgsProduct({{3, 5, 7}, {3, 5, 7}, {128, 256, 512}, {128, 256, 512}});
 

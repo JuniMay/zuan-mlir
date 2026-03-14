@@ -1,58 +1,48 @@
 # This function defines triton_`benchmark_name`_kernels library, which includes
-# the generated object files for the scalar reference, Zuan, and Triton CPU
+# the generated object files for the scalar reference, Dyno, and Triton CPU
 # kernels.
-# 
-# The `xxx_kernel` names in IRs will be replaced with `kernel_zuan` and
-# `kernel_triton_cpu` respectively.
 function(add_triton_benchmark benchmark_name python_args)
   set(python_file ${CMAKE_CURRENT_SOURCE_DIR}/${benchmark_name}.py)
 
   set(generated_file_prefix ${CMAKE_CURRENT_BINARY_DIR}/${benchmark_name})
   set(ttir_file ${generated_file_prefix}.ttir)
   set(mlir_file ${generated_file_prefix}.mlir)
-  set(mlir_debug_file ${generated_file_prefix}_debug.mlir)
   set(launcher_header ${generated_file_prefix}.h)
 
-  set(zuan_mlir ${generated_file_prefix}_zuan.mlir)
-  set(zuan_llvm ${generated_file_prefix}_zuan.ll)
-  set(zuan_debug_file ${generated_file_prefix}_zuan_debug.mlir)
-  set(zuan_obj ${generated_file_prefix}_zuan.o)
+  set(dyno_mlir ${generated_file_prefix}_dyno.mlir)
+  set(dyno_llvm ${generated_file_prefix}_dyno.ll)
+  set(dyno_obj ${generated_file_prefix}_dyno.o)
 
   set(scalar_mlir ${generated_file_prefix}_scalar.mlir)
   set(scalar_llvm ${generated_file_prefix}_scalar.ll)
-  set(scalar_debug_file ${generated_file_prefix}_scalar_debug.mlir)
   set(scalar_obj ${generated_file_prefix}_scalar.o)
 
+  set(triton_cpu_input ${generated_file_prefix}_triton_cpu.ttir)
   set(triton_cpu_mlir ${generated_file_prefix}_cpu.mlir)
   set(triton_cpu_llvm ${generated_file_prefix}_cpu.ll)
   set(triton_cpu_obj ${generated_file_prefix}_cpu.o)
 
-  #-----------------------------------------------------------------------------
-  # Step 1: Generate the TTIR file
-  #-----------------------------------------------------------------------------
   add_custom_command(
     OUTPUT ${ttir_file} ${launcher_header}
-    COMMAND
-      ${CMAKE_COMMAND} -E env
+    COMMAND ${CMAKE_COMMAND} -E env
       "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/..:$ENV{PYTHONPATH}"
-      "TRITON_PLUGIN_DIRS=${ZUAN_TRITON_SHARED_SOURCE_DIR}"
-      "TRITON_SHARED_OPT_PATH=${ZUAN_TRITON_SHARED_OPT}"
-      "LLVM_BINARY_DIR=${ZUAN_TRITON_LLVM_BINARY_DIR}"
-      ${ZUAN_TRITON_PYTHON_EXECUTABLE} ${python_file} -o ${ttir_file} ${python_args}
+      "TRITON_PLUGIN_DIRS=${DYNO_TRITON_SHARED_SOURCE_DIR}"
+      "TRITON_SHARED_OPT_PATH=${DYNO_TRITON_SHARED_OPT}"
+      "LLVM_BINARY_DIR=${DYNO_TRITON_LLVM_BINARY_DIR}"
+      ${DYNO_TRITON_PYTHON_EXECUTABLE}
+      ${python_file}
+      -o ${ttir_file}
+      ${python_args}
     DEPENDS
       ${python_file}
       ${CMAKE_CURRENT_SOURCE_DIR}/../wrappergen.py
-      ${ZUAN_TRITON_SHARED_OPT}
+      ${DYNO_TRITON_SHARED_OPT}
+    VERBATIM
   )
 
-  #-----------------------------------------------------------------------------
-  # Step 2: Convert TTIR to Linalg and then to Zuan
-  #-----------------------------------------------------------------------------
   add_custom_command(
     OUTPUT ${mlir_file}
-    COMMAND 
-      ${ZUAN_TRITON_SHARED_OPT}
-      # -triton-to-linalg-experimental 
+    COMMAND ${DYNO_TRITON_SHARED_OPT}
       -triton-to-structured
       -cse
       -canonicalize
@@ -64,175 +54,141 @@ function(add_triton_benchmark benchmark_name python_args)
       -reconcile-unrealized-casts
       -cse
       -canonicalize
-      ${ZUAN_BENCHMARK_DUMP_IR_FLAG}
-      -o ${mlir_file} ${ttir_file} 2> ${mlir_debug_file}
+      ${DYNO_BENCHMARK_DUMP_IR_FLAG}
+      ${ttir_file}
+      -o ${mlir_file}
+    DEPENDS ${ttir_file}
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+  )
+
+  dyno_lower_scalar_mlir_to_llvm_ir(
+    INPUT ${mlir_file}
+    OUTPUT_MLIR ${scalar_mlir}
+    OUTPUT_LLVM ${scalar_llvm}
+    KERNEL_NAME kernel_scalar
+    BUFFERIZE
+    POST_EXPAND_LOWER_AFFINE
+    DEPENDS ${mlir_file}
+  )
+  dyno_compile_llvm_ir_to_object(
+    INPUT ${scalar_llvm}
+    OUTPUT ${scalar_obj}
+    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
+  )
+
+  dyno_lower_dyno_mlir_to_llvm_ir(
+    INPUT ${mlir_file}
+    OUTPUT_MLIR ${dyno_mlir}
+    OUTPUT_LLVM ${dyno_llvm}
+    KERNEL_NAME kernel_dyno
+    VF 16
+    UF 2
+    BUFFERIZE
+    FUSE_ELEMENTWISE
+    FOLD_MEMREF_ALIAS_OPS
+    PRE_VP_CANONICALIZE
+    POST_VP_CANONICALIZE
+    DEPENDS ${mlir_file}
+  )
+  dyno_compile_llvm_ir_to_object(
+    INPUT ${dyno_llvm}
+    OUTPUT ${dyno_obj}
+    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
+  )
+
+  dyno_rewrite_mlir_kernel(
+    INPUT ${ttir_file}
+    OUTPUT ${triton_cpu_input}
+    KERNEL_NAME kernel_triton_cpu
     DEPENDS ${ttir_file}
   )
 
   add_custom_command(
-    OUTPUT ${scalar_mlir} ${scalar_llvm} ${scalar_obj}
-    COMMAND
-      cat ${mlir_file} |
-      sed "'s/kernel(/kernel_scalar(/'" |
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-opt
-        -empty-tensor-to-alloc-tensor
-        -one-shot-bufferize="allow-return-allocs-from-loops=true"
-        -linalg-generalize-named-ops
-        -convert-linalg-to-affine-loops
-        -canonicalize
-        -cse
-        -lower-affine
-        -convert-scf-to-cf
-        -convert-cf-to-llvm
-        -convert-ub-to-llvm
-        -expand-strided-metadata
-        -lower-affine
-        -convert-math-to-llvm
-        -convert-math-to-libm
-        -convert-vector-to-llvm
-        -convert-arith-to-llvm
-        -finalize-memref-to-llvm
-        -convert-func-to-llvm
-        -reconcile-unrealized-casts
-        -canonicalize
-        -cse
-        ${ZUAN_BENCHMARK_DUMP_IR_FLAG} 2> ${scalar_debug_file} |
-        ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-translate -mlir-to-llvmir -o ${scalar_llvm}
-    COMMAND
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
-        -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${scalar_llvm} -o ${scalar_obj}
-    DEPENDS
-      ${mlir_file}
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-opt
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/mlir-translate
+    OUTPUT ${triton_cpu_mlir}
+    COMMAND ${DYNO_TRITON_CPU_OPT}
+      -triton-combine
+      -canonicalize
+      -triton-reorder-broadcast
+      -cse
+      -loop-invariant-code-motion
+      -symbol-dce
+      -triton-cpu-scalarize=skip-gather-scatter=true
+      -triton-cpu-convert-memory-ops=use-gather-scatter=true
+      -triton-cpu-convert-ptr-ops
+      -triton-cpu-convert-elementwise-ops
+      -triton-cpu-convert-elem-manip-ops
+      -triton-cpu-convert-dot-op
+      -triton-cpu-convert-histogram-op
+      "-triton-cpu-convert-reduction=use-multidim-reduction-op=false\\;use-reduction-op=true"
+      -triton-cpu-convert-scan
+      -triton-cpu-convert-control-flow-op
+      -triton-cpu-convert-atomic-ops
+      -triton-cpu-convert-debug-ops
+      -cse
+      -symbol-dce
+      -canonicalize
+      -triton-cpu-canonicalize
+      -triton-cpu-optimize-masks
+      -canonicalize
+      -triton-cpu-convert-dot-generic
+      "-triton-cpu-add-casts-for-unsupported-ops=promote-bf16-to-fp32=false\\;convert-mixed-precision-matmul=true\\;promote-lib-math-to-fp32=true"
+      "-triton-cpu-decompose-fp-conversions=decompose-bf16-conversions=false\\;decompose-fp8-conversions=true"
+      -cse
+      -symbol-dce
+      -canonicalize
+      -triton-cpu-lower-multi-reduction
+      -expand-strided-metadata
+      "-convert-vector-to-scf=full-unroll=true\\;target-rank=1\\;lower-tensors=false"
+      -lower-affine
+      -convert-scf-to-cf
+      -convert-index-to-llvm
+      -triton-cpu-func-op-to-llvm
+      -triton-cpu-get-program-id-op-to-llvm
+      -triton-cpu-memory-op-to-llvm
+      -triton-cpu-atomic-ops-to-llvm
+      -triton-cpu-debug-ops-to-llvm
+      -triton-cpu-math-to-vec-lib=lib=sleef
+      -convert-math-to-llvm
+      -convert-math-to-libm
+      -convert-vector-to-llvm
+      -finalize-memref-to-llvm
+      -convert-arith-to-llvm
+      -convert-func-to-llvm
+      -convert-ub-to-llvm
+      -canonicalize
+      -cse
+      -symbol-dce
+      ${triton_cpu_input}
+      -o ${triton_cpu_mlir}
+    DEPENDS ${triton_cpu_input} ${DYNO_TRITON_CPU_OPT}
+    COMMAND_EXPAND_LISTS
+    VERBATIM
   )
 
   add_custom_command(
-    OUTPUT ${zuan_mlir} ${zuan_llvm} ${zuan_obj}
-    COMMAND
-      cat ${mlir_file} |
-      sed "'s/kernel(/kernel_zuan(/'" |
-      ${ZUAN_OPT_CMD}
-        -linalg-fuse-elementwise-ops 
-        -empty-tensor-to-alloc-tensor 
-        -one-shot-bufferize="allow-return-allocs-from-loops=true"
-        -convert-linalg-to-zuan
-        -lower-zuan="target-rank=2"
-        -zuan-stripmining="vf=16;uf=2;scalable=true"
-        -canonicalize
-        -cse
-        -convert-zuan-to-vp="vf=16;scalable=true"
-        -fold-memref-alias-ops
-        -convert-vp-to-llvm
-        -canonicalize
-        -cse
-        -expand-strided-metadata 
-        -lower-affine 
-        -convert-scf-to-cf 
-        -convert-cf-to-llvm 
-        -convert-vector-to-llvm 
-        -convert-arith-to-llvm 
-        -convert-math-to-llvm
-        -convert-math-to-libm
-        -convert-vector-to-llvm
-        -finalize-memref-to-llvm
-        -convert-func-to-llvm
-        -reconcile-unrealized-casts
-        -canonicalize
-        -cse
-        ${ZUAN_BENCHMARK_DUMP_IR_FLAG}
-        -o ${zuan_mlir} 2> ${zuan_debug_file}
-    COMMAND
-      ${ZUAN_TRANSLATE_CMD} ${zuan_mlir} -zuan-to-llvmir -o ${zuan_llvm}
-    COMMAND
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
-        -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${zuan_llvm} -o ${zuan_obj}
-    DEPENDS
-      ${mlir_file}
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
-      zuan-opt
-      zuan-translate
+    OUTPUT ${triton_cpu_llvm}
+    COMMAND ${DYNO_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate
+      ${triton_cpu_mlir}
+      -mlir-to-llvmir
+      -o ${triton_cpu_llvm}
+    DEPENDS ${triton_cpu_mlir} ${DYNO_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate
+    VERBATIM
   )
 
-  #-----------------------------------------------------------------------------
-  # Step 3: Convert TTIR to Triton CPU
-  #-----------------------------------------------------------------------------
-  add_custom_command(
-    OUTPUT ${triton_cpu_mlir} ${triton_cpu_llvm} ${triton_cpu_obj}
-    COMMAND
-      cat ${ttir_file} |
-      sed "'s/kernel(/kernel_triton_cpu(/'" |
-      ${ZUAN_TRITON_CPU_OPT}
-        -triton-combine
-        -canonicalize
-        -triton-reorder-broadcast
-        -cse
-        -loop-invariant-code-motion 
-        -symbol-dce
-        # TTIR -> TTCIR
-        -triton-cpu-scalarize="skip-gather-scatter=true"
-        -triton-cpu-convert-memory-ops="use-gather-scatter=true"
-        -triton-cpu-convert-ptr-ops
-        -triton-cpu-convert-elementwise-ops
-        -triton-cpu-convert-elem-manip-ops
-        -triton-cpu-convert-dot-op
-        -triton-cpu-convert-histogram-op
-        -triton-cpu-convert-reduction="use-multidim-reduction-op=false;use-reduction-op=true"
-        -triton-cpu-convert-scan
-        -triton-cpu-convert-control-flow-op
-        -triton-cpu-convert-atomic-ops
-        -triton-cpu-convert-debug-ops
-        -cse
-        -symbol-dce
-        -canonicalize
-        # TTCIR -> Target TTCIR
-        -triton-cpu-canonicalize
-        -triton-cpu-optimize-masks
-        -canonicalize
-        -triton-cpu-convert-dot-generic
-        -triton-cpu-add-casts-for-unsupported-ops="promote-bf16-to-fp32=false;convert-mixed-precision-matmul=true;promote-lib-math-to-fp32=true"
-        -triton-cpu-decompose-fp-conversions="decompose-bf16-conversions=false;decompose-fp8-conversions=true"
-        -cse
-        -symbol-dce
-        -canonicalize
-        # Target TTCIR -> LLVM
-        -triton-cpu-lower-multi-reduction
-        -expand-strided-metadata
-        -convert-vector-to-scf="full-unroll=true;target-rank=1;lower-tensors=false"
-        -lower-affine
-        -convert-scf-to-cf
-        -convert-index-to-llvm
-        -triton-cpu-func-op-to-llvm
-        -triton-cpu-get-program-id-op-to-llvm
-        -triton-cpu-memory-op-to-llvm
-        -triton-cpu-atomic-ops-to-llvm
-        -triton-cpu-debug-ops-to-llvm 
-        -triton-cpu-math-to-vec-lib="lib=sleef"
-        -convert-math-to-llvm
-        -convert-math-to-libm
-        -convert-vector-to-llvm
-        -finalize-memref-to-llvm
-        -convert-arith-to-llvm
-        -convert-func-to-llvm
-        -convert-ub-to-llvm
-        -canonicalize
-        -cse
-        -symbol-dce -o ${triton_cpu_mlir}
-    COMMAND
-      ${ZUAN_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate ${triton_cpu_mlir} -mlir-to-llvmir -o ${triton_cpu_llvm}
-    COMMAND
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
-        -march=rv64gcv_zvfh -O2 -g ${CLANG_FLAGS_LIST} -c -save-temps ${triton_cpu_llvm} -o ${triton_cpu_obj}
+  dyno_compile_llvm_ir_to_object(
+    INPUT ${triton_cpu_llvm}
+    OUTPUT ${triton_cpu_obj}
+    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
     DEPENDS
-      ${ttir_file}
-      ${ZUAN_TRITON_CPU_OPT}
-      ${ZUAN_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate
-      ${ZUAN_HOST_LLVM_BINARY_DIR}/clang
+      ${DYNO_TRITON_CPU_OPT}
+      ${DYNO_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate
   )
 
-  add_library(triton_${benchmark_name}_kernels STATIC ${scalar_obj} ${zuan_obj} ${triton_cpu_obj})
-  set_target_properties(triton_${benchmark_name}_kernels PROPERTIES LINKER_LANGUAGE CXX)
+  add_library(triton_${benchmark_name}_kernels STATIC
+              ${scalar_obj} ${dyno_obj} ${triton_cpu_obj})
+  set_target_properties(triton_${benchmark_name}_kernels
+                        PROPERTIES LINKER_LANGUAGE CXX)
 endfunction()
 
 add_subdirectory(matmul)

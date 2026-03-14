@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm %s | FileCheck %s
 
 // CHECK-LABEL: func.func @vp_splatf32
 func.func @vp_splatf32(%a: f32, %evl: index) -> vector<[4]xf32> {

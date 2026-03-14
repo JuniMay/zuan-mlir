@@ -1,4 +1,4 @@
-//RUN: zuan-opt -convert-vp-to-llvm %s | FileCheck %s
+//RUN: dyno-opt -convert-vp-to-llvm %s | FileCheck %s
 
 // CHECK-LABEL: func.func @vp_reductionf32
 func.func @vp_reductionf32(%a: vector<[4]xf32>, %evl: index) -> f32 {

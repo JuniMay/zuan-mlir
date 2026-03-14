@@ -12,9 +12,9 @@ current cases are:
 Each program is compiled twice:
 
 - with `triton-cpu` for the reference CPU lowering
-- with `triton_shared` and then through the Zuan lowering pipeline
+- with `triton_shared` and then through the Dyno lowering pipeline
 
-The shared CMake helper in [CMakeLists.txt](/root/zuan-mlir/benchmarks/triton/CMakeLists.txt)
+The shared CMake helper in [CMakeLists.txt](/root/dyno-mlir/benchmarks/triton/CMakeLists.txt)
 now also builds a scalar reference kernel from the generated linalg MLIR
 through:
 
@@ -26,9 +26,9 @@ through:
 That gives three generated kernel entry points per benchmark:
 
 - `kernel_triton_cpu`
-- `kernel_zuan`
+- `kernel_dyno`
 - `kernel_scalar`
-- `kernel_zuan_wrapper`
+- `kernel_dyno_wrapper`
 - `kernel_scalar_wrapper`
 
 **Kernel Signatures**
@@ -40,7 +40,7 @@ That gives three generated kernel entry points per benchmark:
   `x, y, z, gridX, gridY, gridZ`.
 - It is meant to be called through `launch_kernel(...)`.
 
-`kernel_zuan` and `kernel_scalar`
+`kernel_dyno` and `kernel_scalar`
 
 - These use the same raw MLIR unranked-memref ABI.
 - Each memref argument is lowered as a pair:
@@ -52,7 +52,7 @@ That gives three generated kernel entry points per benchmark:
 
 The generated header also emits:
 
-- `kernel_zuan_wrapper`
+- `kernel_dyno_wrapper`
 - `kernel_scalar_wrapper`
 - `kernel_ptr_t`
 - `launch_kernel(...)`
@@ -60,7 +60,7 @@ The generated header also emits:
 So the practical rule is:
 
 - `kernel_triton_cpu` uses the launcher ABI directly
-- `kernel_zuan_wrapper` / `kernel_scalar_wrapper` already adapt the raw
+- `kernel_dyno_wrapper` / `kernel_scalar_wrapper` already adapt the raw
   pointer launcher ABI into the MLIR memref ABI and forward the implicit launch
   arguments in `gridX, gridY, gridZ, x, y, z` order
 
@@ -68,7 +68,7 @@ So the practical rule is:
 1. Add `<name>.py` that emits the TTIR and wrapper header.
 2. Add a subdirectory with a launcher and call `add_triton_benchmark(<name> "...args...")`.
 3. Include the generated `<name>.h` in the launcher for `kernel_triton_cpu`,
-   `kernel_zuan_wrapper`, `kernel_scalar_wrapper`, `launch_kernel`, and
+   `kernel_dyno_wrapper`, `kernel_scalar_wrapper`, `launch_kernel`, and
    `kernel_ptr_t`.
 4. Use `runKernel(kernel_scalar_wrapper, ...)` for reference checking instead
    of handwritten scalar math.
