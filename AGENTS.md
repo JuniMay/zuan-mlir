@@ -7,6 +7,15 @@ formalized semantics and structure defined in `docs/formalism.md`. The
 vocabulary of variable names, function names, IR constructions, test cases,
 comments, and other documentation should also adhere to the formalism.
 
+Add comments to the codebase when the code is not self-explanatory or
+complex to understand. The comments should be concise and clear, and should not be
+redundant with the code itself. The comments should be added along with the code
+instead of being deferred to the end.
+
+Follow the principle of Occam's Razor when implementing the features. Avoid
+unncessary complexity and over-engineering. If existing code are obsolete or
+redundant, they should be notified after the on-going task is completed.
+
 ## Regression Testing
 
 Regression testing includes:
