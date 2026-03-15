@@ -1,107 +1,72 @@
-// RUN: dyno-opt -lower-dyno -dyno-stripmining="vf=8 scalable=true" %s | FileCheck %s
+// RUN: dyno-opt -lower-dyno='target-rank=2' %s | FileCheck %s
 
-// CHECK-LABEL: func.func @matmul
-func.func @matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
-                  %c: memref<?x?xf32>) {
-  %a_tile = dyno.load %a : memref<?x?xf32>
-  %b_tile = dyno.load %b : memref<?x?xf32>
-  %c_tile = dyno.load %c : memref<?x?xf32>
-  // CHECK: scf.for %[[K:.+]] = %{{.+}} to %{{.+}} step %{{.+}} iter_args(%[[ACC:.+]] = %{{.+}})
-  // CHECK: %[[A:.+]] = dyno.load
-  // CHECK: %[[B:.+]] = dyno.load
-  // CHECK: %[[OUTER:.+]] = dyno.outer <mul> %[[A]], %[[B]]
-  // CHECK: %[[NEWACC:.+]] = arith.addf %[[ACC]], %[[OUTER]]
-  %mm = dyno.matmul %a_tile, %b_tile : !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-  %sum = arith.addf %mm, %c_tile : !dyno.tile<?x?xf32>
-  dyno.store %sum, %c : !dyno.tile<?x?xf32>, memref<?x?xf32>
+// CHECK-LABEL: func.func @matmul_style
+func.func @matmul_style(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
+                        %c: memref<?x?xf32>) {
+  %c1 = arith.constant 1 : index
+  %c0 = arith.constant 0 : index
+  %m = memref.dim %a, %c0 : memref<?x?xf32>
+  %n = memref.dim %b, %c1 : memref<?x?xf32>
+  %k = memref.dim %a, %c1 : memref<?x?xf32>
+  %a_rows = memref.dim %a, %c0 : memref<?x?xf32>
+  %a_cols = memref.dim %a, %c1 : memref<?x?xf32>
+  %a_expand = memref.expand_shape %a [[0, 1], [2]] output_shape [1, %a_rows, %a_cols]
+      : memref<?x?xf32> into memref<1x?x?xf32>
+  %a_transpose = memref.transpose %a_expand (d0, d1, d2) -> (d1, d0, d2)
+      : memref<1x?x?xf32> to memref<?x1x?xf32, strided<[?, ?, 1]>>
+  %a_common = memref.subview %a_transpose[0, 0, 0] [%m, %n, %k] [1, 0, 1]
+      : memref<?x1x?xf32, strided<[?, ?, 1]>> to memref<?x?x?xf32, strided<[?, 0, 1]>>
+  %b_rows = memref.dim %b, %c0 : memref<?x?xf32>
+  %b_cols = memref.dim %b, %c1 : memref<?x?xf32>
+  %b_expand = memref.expand_shape %b [[0, 1], [2]] output_shape [1, %b_rows, %b_cols]
+      : memref<?x?xf32> into memref<1x?x?xf32>
+  %b_transpose = memref.transpose %b_expand (d0, d1, d2) -> (d0, d2, d1)
+      : memref<1x?x?xf32> to memref<1x?x?xf32, strided<[?, 1, ?]>>
+  %b_common = memref.subview %b_transpose[0, 0, 0] [%m, %n, %k] [0, 1, 1]
+      : memref<1x?x?xf32, strided<[?, 1, ?]>> to memref<?x?x?xf32, strided<[0, 1, ?]>>
+  %c_view = memref.transpose %c (d0, d1) -> (d0, d1)
+      : memref<?x?xf32> to memref<?x?xf32, strided<[?, 1]>>
+  // CHECK: memref.subview %{{.*}}[0, 0, 0] [%{{.*}}, %{{.*}}, %{{.*}}] [1, 0, 1]
+  // CHECK: memref.subview %{{.*}}[0, 0, 0] [%{{.*}}, %{{.*}}, %{{.*}}] [0, 1, 1]
+  %a_tile = dyno.load %a_common : memref<?x?x?xf32, strided<[?, 0, 1]>>
+  %b_tile = dyno.load %b_common : memref<?x?x?xf32, strided<[0, 1, ?]>>
+  %c_tile = dyno.load %c_view : memref<?x?xf32, strided<[?, 1]>>
+  %mul = arith.mulf %a_tile, %b_tile : !dyno.tile<?x?x?xf32>
+  // CHECK: arith.mulf %{{.*}}, %{{.*}} : !dyno.tile<?x?x?xf32>
+  // CHECK: dyno.reduction <add> %{{.*}} [2], %{{.*}} : !dyno.tile<?x?x?xf32>, !dyno.tile<?x?xf32>
+  %red = dyno.reduction <add> %mul [2], %c_tile :
+      !dyno.tile<?x?x?xf32>, !dyno.tile<?x?xf32>
+  dyno.store %red, %c_view : !dyno.tile<?x?xf32>, memref<?x?xf32, strided<[?, 1]>>
   return
 }
 
-// CHECK-LABEL: func.func @matmul2
-func.func @matmul2(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
-                   %c: memref<?x?xf32>, %d: memref<?x?xf32>) {
-  %a_tile = dyno.load %a : memref<?x?xf32>
-  %b_tile = dyno.load %b : memref<?x?xf32>
-  %c_tile = dyno.load %c : memref<?x?xf32>
-  %d_tile = dyno.load %d : memref<?x?xf32>
+// CHECK-LABEL: func.func @slice_reduction_result
+func.func @slice_reduction_result(%src: memref<?x?x?x?xf32>,
+                                  %init: memref<?x?x?xf32>,
+                                  %dst: memref<?x?x?xf32>) {
+  %src_tile = dyno.load %src : memref<?x?x?x?xf32>
+  %init_tile = dyno.load %init : memref<?x?x?xf32>
+  %red = dyno.reduction <add> %src_tile [2], %init_tile :
+      !dyno.tile<?x?x?x?xf32>, !dyno.tile<?x?x?xf32>
   // CHECK: scf.for
-  // CHECK: scf.for
-  %mm1 = dyno.matmul %a_tile, %b_tile : !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-  %mm2 = dyno.matmul %mm1, %c_tile : !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-  %sum = arith.addf %mm2, %d_tile : !dyno.tile<?x?xf32>
-  dyno.store %sum, %d : !dyno.tile<?x?xf32>, memref<?x?xf32>
+  // CHECK: dyno.reduction <add> %{{.*}} [1], %{{.*}} : !dyno.tile<?x?x?xf32>, !dyno.tile<?x?xf32>
+  // CHECK: dyno.store %{{.*}}, %{{.*}} : <?x?xf32>, memref
+  dyno.store %red, %dst : !dyno.tile<?x?x?xf32>, memref<?x?x?xf32>
   return
 }
 
-// CHECK-LABEL: func.func @matmul_masked
-func.func @matmul_masked(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
-                         %c: memref<?x?xf32>, %m: memref<?x?xi1>) {
-  %mask = dyno.load %m : memref<?x?xi1>
-  %a_tile = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %loaded = dyno.load %a : memref<?x?xf32>
-    dyno.mask_yield %loaded : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %b_tile = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %loaded = dyno.load %b : memref<?x?xf32>
-    dyno.mask_yield %loaded : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %c_tile = dyno.load %c : memref<?x?xf32>
+// CHECK-LABEL: func.func @slice_effect_mask_root
+func.func @slice_effect_mask_root(%src: memref<?x?x?xf32>,
+                                  %mask: memref<?x?x?xi1>,
+                                  %dst: memref<?x?x?xf32>) {
+  %src_tile = dyno.load %src : memref<?x?x?xf32>
+  %mask_tile = dyno.load %mask : memref<?x?x?xi1>
+  %sum = arith.addf %src_tile, %src_tile : !dyno.tile<?x?x?xf32>
   // CHECK: scf.for
-  // CHECK: dyno.mask %{{.*}} {
-  // CHECK: dyno.mask_yield %{{.*}}
-  %mm = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %matmul = dyno.matmul %a_tile, %b_tile :
-        !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-    dyno.mask_yield %matmul : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %sum = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %add = arith.addf %mm, %c_tile : !dyno.tile<?x?xf32>
-    dyno.mask_yield %add : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  dyno.mask %mask : !dyno.tile<?x?xi1> {
-    dyno.store %sum, %c : !dyno.tile<?x?xf32>, memref<?x?xf32>
-  }
-  return
-}
-
-// CHECK-LABEL: func.func @matmul2_masked
-func.func @matmul2_masked(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
-                          %c: memref<?x?xf32>, %m: memref<?x?xi1>,
-                          %d: memref<?x?xf32>) {
-  %mask = dyno.load %m : memref<?x?xi1>
-  %a_tile = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %loaded = dyno.load %a : memref<?x?xf32>
-    dyno.mask_yield %loaded : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %b_tile = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %loaded = dyno.load %b : memref<?x?xf32>
-    dyno.mask_yield %loaded : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %c_tile = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %loaded = dyno.load %c : memref<?x?xf32>
-    dyno.mask_yield %loaded : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %d_tile = dyno.load %d : memref<?x?xf32>
-  // CHECK: scf.for
-  // CHECK: scf.for
-  // CHECK: dyno.mask %{{.*}} {
-  // CHECK: dyno.mask_yield %{{.*}}
-  %mm1 = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %matmul = dyno.matmul %a_tile, %b_tile :
-        !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-    dyno.mask_yield %matmul : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %mm2 = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %matmul = dyno.matmul %mm1, %c_tile :
-        !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-    dyno.mask_yield %matmul : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  %sum = dyno.mask %mask : !dyno.tile<?x?xi1> {
-    %add = arith.addf %mm2, %d_tile : !dyno.tile<?x?xf32>
-    dyno.mask_yield %add : !dyno.tile<?x?xf32>
-  } : !dyno.tile<?x?xf32>
-  dyno.mask %mask : !dyno.tile<?x?xi1> {
-    dyno.store %sum, %d : !dyno.tile<?x?xf32>, memref<?x?xf32>
+  // CHECK: dyno.mask %{{.*}} : <?x?xi1> {
+  // CHECK: dyno.store %{{.*}}, %{{.*}} : <?x?xf32>, memref
+  dyno.mask %mask_tile : !dyno.tile<?x?x?xi1> {
+    dyno.store %sum, %dst : !dyno.tile<?x?x?xf32>, memref<?x?x?xf32>
   }
   return
 }

@@ -16,9 +16,9 @@
 
 #include "VP/IR/VP.h"
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ConvertToVP.h"
 #include "Dyno/Utils/ShapeInference.h"
-#include "Dyno/Utils/Unrolling.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 
 #define DEBUG_TYPE "dyno-to-vp"
@@ -122,7 +122,7 @@ static FailureOr<VPShapePlan> planVPShape(OpBuilder &builder, Location loc,
     if (auto rows = getConstantDynoIntValue(shape[0])) {
       // A static outer dimension is represented as a row-pack in the current
       // emitter. This is a legality classification, not a profitability model:
-      // cost control is expected to happen earlier via tiling/unrolling.
+      // cost control is expected to happen earlier via tiling and slicing.
       auto evl = materializeDimValue(builder, loc, shape[1], state);
       if (failed(evl)) {
         return failure();
@@ -877,7 +877,7 @@ Value createCastOp(OpBuilder &b, Location loc, CastKind kind, Type outType,
     casted = arith::IndexCastOp::create(b, loc, outType, source);
     break;
   case CastKind::INDEXCASTUI:
-    casted = arith::IndexCastOp::create(b, loc, outType, source);
+    casted = arith::IndexCastUIOp::create(b, loc, outType, source);
     break;
   }
   return casted;
@@ -999,127 +999,6 @@ static LogicalResult handleSelectOp(OpBuilder &b, SelectOp selectOp,
     }
   }
   state.tileMap[selectOp.getResult()] = values;
-  return success();
-}
-
-static LogicalResult handleOuterOp(OpBuilder &b, OuterOp outerOp,
-                                   VPConversionState &state) {
-  auto loc = outerOp->getLoc();
-
-  auto lhs = outerOp.getLhs();
-  auto rhs = outerOp.getRhs();
-
-  if (failed(ensureTileMapped(b, lhs, state)) ||
-      failed(ensureTileMapped(b, rhs, state))) {
-    return failure();
-  }
-  auto lhsShape = reifyDynoShape(b, lhs);
-  auto rhsShape = reifyDynoShape(b, rhs);
-  auto resultShape = reifyDynoShape(b, outerOp.getResult());
-  if (failed(lhsShape) || failed(rhsShape) || failed(resultShape)) {
-    return failure();
-  }
-
-  auto lhsPlan = planVPShape(b, loc, *lhsShape, state);
-  auto rhsPlan = planVPShape(b, loc, *rhsShape, state);
-  auto resultPlan = planVPShape(b, loc, *resultShape, state);
-  if (failed(lhsPlan) || failed(rhsPlan) || failed(resultPlan) ||
-      lhsPlan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector ||
-      rhsPlan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector ||
-      resultPlan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
-    return failure();
-  }
-  auto resultRows = getStaticRowCount(*resultPlan);
-  if (failed(resultRows)) {
-    return failure();
-  }
-
-  auto kind = outerOp.getKind();
-  auto &lhsValues = state.tileMap[lhs];
-  auto &rhsValues = state.tileMap[rhs];
-
-  auto getLhsForRow = [&](unsigned row) -> FailureOr<Value> {
-    if (lhsValues.size() == *resultRows) {
-      return lhsValues[row];
-    }
-    if (lhsValues.size() != 1) {
-      return failure();
-    }
-    Value lhsValue = lhsValues.front();
-    if (resultPlan->kind == VPShapePlan::Kind::RowPack2D &&
-        lhs.getType().getRank() == 1 && isa<VectorType>(lhsValue.getType())) {
-      // `vector x vector -> row-pack` outer products keep the lhs as a single
-      // vector value in `tileMap`, so materialize one scalar lane per result
-      // row on demand.
-      return vector::ExtractOp::create(
-                 b, loc, lhsValue, ArrayRef<int64_t>{static_cast<int64_t>(row)})
-          .getResult();
-    }
-    return lhsValue;
-  };
-
-  auto getRhsForRow = [&](unsigned row) -> FailureOr<Value> {
-    if (rhsValues.size() == *resultRows) {
-      return rhsValues[row];
-    }
-    if (rhsValues.size() == 1) {
-      return rhsValues.front();
-    }
-    return failure();
-  };
-
-  SmallVector<Value> values;
-
-  if (resultPlan->hasVector()) {
-    for (unsigned i = 0; i < *resultRows; ++i) {
-      auto maskPair = getMaskPair(state, i);
-      auto mask = maskPair.first;
-      auto maskedoff = maskPair.second;
-
-      auto lhsRow = getLhsForRow(i);
-      auto rhsRow = getRhsForRow(i);
-      if (failed(lhsRow) || failed(rhsRow)) {
-        return failure();
-      }
-
-      Value lhsVector = *lhsRow;
-      if (!isa<VectorType>(lhsVector.getType())) {
-        auto splat =
-            vector::BroadcastOp::create(b, loc, (*rhsRow).getType(), lhsVector);
-        lhsVector = vp::predicateOperation(b, splat, resultPlan->evl, mask,
-                                           nullptr, maskedoff)
-                        ->getResult(0);
-      }
-      auto outer = createCombiningOp(b, loc, kind, lhsVector, *rhsRow);
-      auto predOp = vp::predicateOperation(
-          b, outer.getDefiningOp(), resultPlan->evl, mask, nullptr, maskedoff);
-      values.push_back(predOp->getResult(0));
-    }
-  } else {
-    for (unsigned i = 0; i < *resultRows; ++i) {
-      auto maskPair = getMaskPair(state, i);
-      auto mask = maskPair.first;
-      auto maskedoff = maskPair.second;
-
-      auto lhsRow = getLhsForRow(i);
-      auto rhsRow = getRhsForRow(i);
-      if (failed(lhsRow) || failed(rhsRow)) {
-        return failure();
-      }
-
-      auto res = createSCFIfOp(
-          b, loc, mask, maskedoff,
-          [&](OpBuilder &inner, Location innerLoc) {
-            return createCombiningOp(inner, innerLoc, kind, *lhsRow, *rhsRow);
-          },
-          [&](OpBuilder &inner, Location innerLoc) {
-            return buildZero(inner, innerLoc, (*lhsRow).getType());
-          });
-      values.push_back(res);
-    }
-  }
-
-  state.tileMap[outerOp.getResult()] = values;
   return success();
 }
 
@@ -1499,9 +1378,6 @@ LogicalResult convertToVP(OpBuilder &builder, Operation *op,
       })
       .Case([&](SelectOp selectOp) {
         return handleSelectOp(builder, selectOp, state);
-      })
-      .Case([&](OuterOp outerOp) {
-        return handleOuterOp(builder, outerOp, state);
       })
       .Case([&](ScatterOp scatterOp) {
         return handleScatterOp(builder, scatterOp, state);

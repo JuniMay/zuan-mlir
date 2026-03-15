@@ -18,8 +18,6 @@
 #include "mlir/Interfaces/ViewLikeInterface.h"
 #include "llvm/ADT/TypeSwitch.h"
 
-#include "Dyno/Interfaces/DynoUnrollingInterface.h"
-
 #include "Dyno/IR/DynoEnums.h.inc"
 #define GET_ATTRDEF_CLASSES
 #include "Dyno/IR/DynoAttributes.h.inc"
@@ -37,7 +35,7 @@ namespace dyno {
 
 void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp);
 
-/// Mask a given operation with a mas. If the mask is nullptr, return the
+/// Mask a given operation with a mask. If the mask is nullptr, return the
 /// original operation. This function does not handle def-use chains, and the
 /// caller is responsible for updating the uses of the original operation.
 Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,

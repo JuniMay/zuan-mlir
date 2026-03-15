@@ -20,7 +20,7 @@ def COMBINING_KIND_XOR : I32EnumAttrCase<"XOR", 10, "xor">;
 def COMBINING_KIND_MINIMUMF : I32EnumAttrCase<"MINIMUMF", 11, "minimumf">;
 def COMBINING_KIND_MAXIMUMF : I32EnumAttrCase<"MAXIMUMF", 12, "maximumf">;
 
-def CombiningKind : I32EnumAttr<"CombiningKind", "Kind of outer operations",
+def CombiningKind : I32EnumAttr<"CombiningKind", "Kind of reduction and pointwise combiners",
   [
     COMBINING_KIND_ADD, COMBINING_KIND_MUL, COMBINING_KIND_MINUI,
     COMBINING_KIND_MINSI, COMBINING_KIND_MINNUMF, COMBINING_KIND_MAXUI,

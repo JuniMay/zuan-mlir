@@ -10,7 +10,6 @@
 include "Dyno/IR/DynoAttributes.td"
 include "Dyno/IR/DynoDialect.td"
 include "Dyno/IR/DynoTypes.td"
-include "Dyno/Interfaces/DynoUnrollingInterface.td"
 
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
@@ -38,7 +37,6 @@ def Dyno_MaskYieldOp : Dyno_Op<"mask_yield", [
 }
 
 def Dyno_MaskOp : Dyno_Op<"mask", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   RecursiveMemoryEffects,
   SingleBlockImplicitTerminator<"dyno::MaskYieldOp">
 ]> {
@@ -88,38 +86,10 @@ def Dyno_MaskOp : Dyno_Op<"mask", [
 }
 
 //===----------------------------------------------------------------------===//
-// High-level tile operations
+// Reduction-like tile operations
 //===----------------------------------------------------------------------===//
 
-def Dyno_MatmulOp : Dyno_Op<"matmul", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
-  Pure, InferTypeOpAdaptor,
-  AllRanksMatch<["lhs", "rhs", "result"]>,
-]> {
-  let summary = "Matrix multiplication operation in Dyno dialect";
-  let description = [{
-    `dyno.matmul` operation computes the matrix multiplication of two tiles. If
-    the two operands differ in ranks, it will execute a matvec or vecmat mul.
-
-    The leading dims of the two tiles should be compatible.
-  }];
-
-  let arguments = (ins Dyno_TileType:$lhs, Dyno_TileType:$rhs);
-  let results = (outs Dyno_TileType:$result);
-
-  let assemblyFormat = [{
-    $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `,` qualified(type($rhs))
-  }];
-
-  let hasVerifier = 1;
-  let extraClassDeclaration = [{
-    /// Get the shared leading size of two operands.
-    unsigned getLeadingSize();
-  }];
-}
-
-def Dyno_ReductionOp : Dyno_Op<"reduction", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
+ def Dyno_ReductionOp : Dyno_Op<"reduction", [
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
@@ -151,7 +121,6 @@ def Dyno_ReductionOp : Dyno_Op<"reduction", [
 //===----------------------------------------------------------------------===//
 
 def Dyno_LoadOp : Dyno_Op<"load", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   InferTypeOpAdaptor,
   AllShapesMatch<["base", "result"]>,
   AllElementTypesMatch<["base", "result"]>
@@ -169,7 +138,6 @@ def Dyno_LoadOp : Dyno_Op<"load", [
 }
 
 def Dyno_StoreOp : Dyno_Op<"store", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   AllShapesMatch<["value", "base"]>, AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Store a tile to a memref";
@@ -227,7 +195,6 @@ def Dyno_ExtractOp : Dyno_Op<"extract", [Pure, InferTypeOpAdaptor]> {
 }
 
 def Dyno_SplatOp : Dyno_Op<"splat", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["value", "result"]>
 ]> {
@@ -256,34 +223,7 @@ def Dyno_SplatOp : Dyno_Op<"splat", [
   let hasVerifier = 1;
 }
 
-def Dyno_OuterOp : Dyno_Op<"outer", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
-  Pure, InferTypeOpAdaptor,
-  AllElementTypesMatch<["lhs", "rhs", "result"]>
-]> {
-  let summary = "Outer operation";
-  let description = [{
-    `dyno.outer` operation computes the outer product/sum/... of two tiles.
-    The result equals broadcasting and applying the element-wise operation to
-    the two tiles.
-
-    The leading dims of two tiles should be compatible. If the rank of one of
-    the tiles is less than the other by 1, this equals a vector-scalar
-    operation at the most minor dimension.
-  }];
-
-  let arguments = (ins Dyno_CombiningKindAttr:$kind,
-                       Dyno_TileType:$lhs,
-                       Dyno_TileType:$rhs);
-  let results = (outs Dyno_TileType:$result);
-  let assemblyFormat = [{
-    $kind $lhs `,` $rhs attr-dict `:` qualified(type($lhs)) `,` qualified(type($rhs))
-  }];
-  let hasVerifier = 1;
-}
-
 def Dyno_CastOp : Dyno_Op<"cast", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   Pure, AllShapesMatch<["tile", "result"]>
 ]> {
   let summary = "Cast all elements of a tile to another type";
@@ -302,7 +242,6 @@ def Dyno_CastOp : Dyno_Op<"cast", [
 }
 
 def Dyno_StepOp : Dyno_Op<"step", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["result", "start"]>
 ]> {
@@ -334,7 +273,6 @@ def Dyno_StepOp : Dyno_Op<"step", [
 }
 
 def Dyno_SelectOp : Dyno_Op<"select", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   Pure, AllShapesMatch<["cond", "lhs", "rhs", "result"]>,
   AllTypesMatch<["lhs", "rhs", "result"]>
 ]> {
@@ -355,7 +293,6 @@ def Dyno_SelectOp : Dyno_Op<"select", [
 }
 
 def Dyno_GatherOp : Dyno_Op<"gather", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   InferTypeOpAdaptor, AllElementTypesMatch<["base", "result"]>
 ]> {
   let summary = "Memory gather operation";
@@ -383,7 +320,6 @@ def Dyno_GatherOp : Dyno_Op<"gather", [
 }
 
 def Dyno_ScatterOp : Dyno_Op<"scatter", [
-  DeclareOpInterfaceMethods<DynoUnrollingInterface>,
   AllElementTypesMatch<["value", "base"]>
 ]> {
   let summary = "Memory scatter operation";

@@ -7,7 +7,5 @@ func.func @kernel(%a: memref<?x?xf32>, %dst: memref<?xf32>) {
 
 // CHECK-LABEL: func.func @kernel
 // CHECK: scf.while
-// CHECK: %[[ACC:.*]] = scf.for
-// CHECK: arith.addf %{{.*}}, %{{.*}} : !dyno.tile<?xf32>
-// CHECK: dyno.store %[[ACC]], %{{.*}} {dyno.stripmined}
-// CHECK-NOT: dyno.reduction <add>
+// CHECK: dyno.reduction <add> %{{.*}} [0], %{{.*}} : !dyno.tile<?x?xf32>, !dyno.tile<?xf32>
+// CHECK: dyno.store %{{.*}}, %{{.*}} {dyno.stripmined}

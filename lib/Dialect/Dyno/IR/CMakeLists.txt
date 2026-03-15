@@ -12,5 +12,4 @@ add_mlir_dialect_library(
   LINK_LIBS PUBLIC
   MLIRIR
   DynoUtils
-  DynoInterfaces
 )

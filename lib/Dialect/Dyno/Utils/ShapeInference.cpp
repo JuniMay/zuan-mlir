@@ -163,34 +163,6 @@ reifyStepShape(OpBuilder &builder, StepOp stepOp) {
 }
 
 static FailureOr<SmallVector<OpFoldResult>>
-reifyMatmulShape(OpBuilder &builder, MatmulOp matmulOp) {
-  auto lhsShape = reifyDynoShape(builder, matmulOp.getLhs());
-  auto rhsShape = reifyDynoShape(builder, matmulOp.getRhs());
-  if (failed(lhsShape) || failed(rhsShape)) {
-    return failure();
-  }
-
-  auto resultType = matmulOp.getResult().getType();
-  SmallVector<OpFoldResult> result;
-  unsigned leadingSize = matmulOp.getLeadingSize();
-  for (unsigned i = 0; i < leadingSize; ++i) {
-    result.push_back((*lhsShape)[i]);
-  }
-
-  auto lhsRank = matmulOp.getLhs().getType().getRank();
-  auto rhsRank = matmulOp.getRhs().getType().getRank();
-  if (lhsRank >= rhsRank) {
-    result.push_back((*lhsShape)[lhsShape->size() - 2]);
-  }
-  if (rhsRank >= lhsRank) {
-    result.push_back((*rhsShape)[rhsShape->size() - 1]);
-  }
-
-  overlayStaticShape(builder, resultType, result);
-  return result;
-}
-
-static FailureOr<SmallVector<OpFoldResult>>
 reifyReductionShape(OpBuilder &builder, ReductionOp reductionOp) {
   auto sourceShape = reifyDynoShape(builder, reductionOp.getTile());
   if (failed(sourceShape)) {
@@ -206,22 +178,6 @@ reifyReductionShape(OpBuilder &builder, ReductionOp reductionOp) {
     }
   }
   overlayStaticShape(builder, reductionOp.getResult().getType(), result);
-  return result;
-}
-
-static FailureOr<SmallVector<OpFoldResult>>
-reifyOuterShape(OpBuilder &builder, OuterOp outerOp) {
-  auto lhsShape = reifyDynoShape(builder, outerOp.getLhs());
-  auto rhsShape = reifyDynoShape(builder, outerOp.getRhs());
-  if (failed(lhsShape) || failed(rhsShape)) {
-    return failure();
-  }
-
-  SmallVector<OpFoldResult> result(lhsShape->begin(), lhsShape->end());
-  if (outerOp.getLhs().getType().getRank() <= outerOp.getRhs().getType().getRank()) {
-    result.push_back(rhsShape->back());
-  }
-  overlayStaticShape(builder, outerOp.getResult().getType(), result);
   return result;
 }
 
@@ -272,10 +228,8 @@ reifyOpResultShape(OpBuilder &builder, OpResult result) {
       .Case<LoadOp>([&](LoadOp loadOp) { return reifyLoadShape(builder, loadOp); })
       .Case<SplatOp>([&](SplatOp splatOp) { return reifySplatShape(builder, splatOp); })
       .Case<StepOp>([&](StepOp stepOp) { return reifyStepShape(builder, stepOp); })
-      .Case<MatmulOp>([&](MatmulOp matmulOp) { return reifyMatmulShape(builder, matmulOp); })
       .Case<ReductionOp>(
           [&](ReductionOp reductionOp) { return reifyReductionShape(builder, reductionOp); })
-      .Case<OuterOp>([&](OuterOp outerOp) { return reifyOuterShape(builder, outerOp); })
       .Case<CastOp, SelectOp>(
           [&](auto shapePreservingOp) -> FailureOr<SmallVector<OpFoldResult>> {
         auto shape = reifyDynoShape(builder, shapePreservingOp->getOperand(0));

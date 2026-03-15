@@ -2,9 +2,10 @@
 
 #include "VP/IR/VP.h"
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ConvertToVP.h"
 #include "Dyno/Utils/ShapeInference.h"
-#include "Dyno/Utils/Unrolling.h"
+#include "Dyno/Utils/Slicing.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -110,38 +111,60 @@ struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
 
     auto whileOp = scf::WhileOp::create(
         rewriter, loc, resultTypes, inits,
-        [&](OpBuilder &b, Location loopLoc, ValueRange args) {
-          Value avl = args[0];
-          Value cond = arith::CmpIOp::create(
-              b, loopLoc, arith::CmpIPredicate::sgt, avl, zeroIdx);
-          scf::ConditionOp::create(b, loopLoc, cond, args);
-        },
-        [&](OpBuilder &b, Location loopLoc, ValueRange args) {
-          Value avl = args[0];
-          Value idx = args[1];
-          Value acc = args[2];
+        [&](OpBuilder &, Location, ValueRange) {},
+        [&](OpBuilder &, Location, ValueRange) {});
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(whileOp.getBeforeBody());
+      Value avl = whileOp.getBeforeArguments()[0];
+      Value cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                                         avl, zeroIdx);
+      scf::ConditionOp::create(rewriter, loc, cond,
+                               whileOp.getBeforeArguments());
+    }
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(whileOp.getAfterBody());
+      Value avl = whileOp.getAfterArguments()[0];
+      Value idx = whileOp.getAfterArguments()[1];
+      Value acc = whileOp.getAfterArguments()[2];
 
-          Value vl = vp::GetVLOp::create(b, loopLoc, avl, vf, type, scalable);
-          UnrollState state;
-          state.initialize(op);
-          UnrollOptions options(idx, vl, 0, true);
-          Value newSourceTile = getUnrolledValue(b, tile, options, state);
-          Value newAcc =
-              createCombiningOp(b, loopLoc, op.getKind(), acc, newSourceTile);
-          if (auto *newAccOp = newAcc.getDefiningOp()) {
-            newAccOp->setAttr("dyno_passthru_operand", b.getIndexAttr(0));
-          }
+      Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
+      auto spec = SliceSpec::getSingleDimSlice(rewriter, tile, 0, idx, vl,
+                                               /*dropUnitDim=*/false);
+      if (failed(spec)) {
+        rewriter.eraseOp(whileOp);
+        return failure();
+      }
 
-          Value newAvl = arith::SubIOp::create(b, loopLoc, avl, vl);
-          Value newIdx = arith::AddIOp::create(b, loopLoc, idx, vl);
-          scf::YieldOp::create(b, loopLoc, ValueRange{newAvl, newIdx, newAcc});
-        });
+      SliceState state;
+      state.initialize(op);
+      auto newSourceTile = sliceValue(rewriter, tile, *spec, state);
+      if (failed(newSourceTile)) {
+        rewriter.eraseOp(whileOp);
+        return failure();
+      }
+      Value newAcc =
+          createCombiningOp(rewriter, loc, op.getKind(), acc, *newSourceTile);
+      if (auto *newAccOp = newAcc.getDefiningOp()) {
+        newAccOp->setAttr("dyno_passthru_operand", rewriter.getIndexAttr(0));
+      }
+
+      Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
+      Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
+      scf::YieldOp::create(rewriter, loc, ValueRange{newAvl, newIdx, newAcc});
+    }
 
     Value init = op.getInit();
     if (init) {
-      UnrollState state;
+      SliceState state;
       state.initialize(op);
-      init = getUnrolledValue(rewriter, init, getCloneOptions(), state);
+      auto mappedInit = cloneOrReuseValue(rewriter, init, state);
+      if (failed(mappedInit)) {
+        rewriter.eraseOp(whileOp);
+        return failure();
+      }
+      init = *mappedInit;
     }
 
     Value finalRed = dyno::ReductionOp::create(
@@ -156,6 +179,9 @@ struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
                                         unsigned vf, bool scalable,
                                         ReductionModeKind reductionMode,
                                         FloatingPointPolicy fpPolicy) {
+    // TODO: This pass still uses the temporary compatibility rewrite for
+    // stripminable 1-D reductions. The exact reduction-mode/fp-policy
+    // semantics remain owned by the future reduction task.
     (void)reductionMode;
     (void)fpPolicy;
     return rewriteParallelReduction(op, rewriter, vf, scalable);
@@ -262,18 +288,18 @@ static FailureOr<SmallVector<OpFoldResult>> reifyRootShape(OpBuilder &builder,
   return reifyDynoShape(builder, tile);
 }
 
-static Operation *unrollRoot(OpBuilder &builder, Operation *op,
-                             UnrollOptions options, UnrollState &state) {
-  return TypeSwitch<Operation *, Operation *>(op)
-      .Case<StoreOp>([&](StoreOp storeOp) {
-        return storeOp.unroll(builder, options, state);
-      })
-      .Case<ScatterOp>([&](ScatterOp scatterOp) {
-        return scatterOp.unroll(builder, options, state);
-      })
-      .Case<MaskOp>(
-          [&](MaskOp maskOp) { return maskOp.unroll(builder, options, state); })
-      .Default([](Operation *) -> Operation * { return nullptr; });
+static FailureOr<Operation *> sliceRoot(OpBuilder &builder, Operation *op,
+                                        Value tile, unsigned dim,
+                                        OpFoldResult offset,
+                                        OpFoldResult size, bool dropUnitDim) {
+  auto spec =
+      SliceSpec::getSingleDimSlice(builder, tile, dim, offset, size, dropUnitDim);
+  if (failed(spec)) {
+    return failure();
+  }
+  SliceState state;
+  state.initialize(op);
+  return sliceRootOperation(builder, op, *spec, state);
 }
 
 static bool isAlreadyStripminedRoot(Operation *op,
@@ -316,26 +342,28 @@ struct DynoStaticRowNormalizationPattern : OpRewritePattern<RootOp> {
     auto loc = op.getLoc();
     Value dim = arith::ConstantIndexOp::create(rewriter, loc, staticRows);
 
-    UnrollState state;
-    state.initialize(op);
-    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
-
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
     // Normalize any static `N x ...` effect root into `N` rank-reduced row
     // roots before VP lowering. This keeps the VP path focused on true 1-D
     // vector tiles instead of the more fragile row-pack representation.
-    scf::ForOp::create(
-        rewriter, loc, zero, dim, one, ValueRange{},
-        [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
-          // Rank-reduce the unit row so the carried slice becomes `?xf32`
-          // instead of `1x?xf32`, and the corresponding outer lhs becomes a
-          // rank-0 tile that VP lowering can treat as a scalar.
-          UnrollOptions options(iv, b.getIndexAttr(1), 0, true);
-          unrollRoot(b, op, options, state);
-          scf::YieldOp::create(b, loopLoc);
-        });
+    auto loop =
+        scf::ForOp::create(rewriter, loc, zero, dim, one, ValueRange{});
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(loop.getBody());
+      // Rank-reduce the unit row so the carried slice becomes `?xf32`
+      // instead of `1x?xf32`, and the corresponding outer lhs becomes a
+      // rank-0 tile that VP lowering can treat as a scalar.
+      if (failed(sliceRoot(rewriter, op, rootTile, 0, loop.getInductionVar(),
+                           rewriter.getIndexAttr(1),
+                           /*dropUnitDim=*/true))) {
+        rewriter.eraseOp(loop);
+        return rewriter.notifyMatchFailure(op,
+                                           "failed to normalize static row slice");
+      }
+    }
 
     rewriter.eraseOp(op);
     return success();
@@ -371,40 +399,44 @@ static LogicalResult rewriteRootStripmining(Operation *op,
   // trailing dimension with `vp.getvl`.
   Value dim = getOrCreateIndexValue(rewriter, shape->back(), loc);
 
-  UnrollState state;
-  state.initialize(op);
-  dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
-
   Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
   SmallVector<Value> inits = {dim, zero};
   SmallVector<Type> resultTypes = {dim.getType(), zero.getType()};
 
-  scf::WhileOp::create(
+  auto whileOp = scf::WhileOp::create(
       rewriter, loc, resultTypes, inits,
-      [&](OpBuilder &b, Location loopLoc, ValueRange args) {
-        Value avl = args[0];
-        Value cond = arith::CmpIOp::create(
-            b, loopLoc, arith::CmpIPredicate::sgt, avl, zero);
-        scf::ConditionOp::create(b, loopLoc, cond, args);
-      },
-      [&](OpBuilder &b, Location loopLoc, ValueRange args) {
-        Value avl = args[0];
-        Value idx = args[1];
+      [&](OpBuilder &, Location, ValueRange) {},
+      [&](OpBuilder &, Location, ValueRange) {});
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getBeforeBody());
+    Value avl = whileOp.getBeforeArguments()[0];
+    Value cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                                       avl, zero);
+    scf::ConditionOp::create(rewriter, loc, cond, whileOp.getBeforeArguments());
+  }
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getAfterBody());
+    Value avl = whileOp.getAfterArguments()[0];
+    Value idx = whileOp.getAfterArguments()[1];
 
-        Value vl = vp::GetVLOp::create(b, loopLoc, avl, vf, type, scalable);
-        UnrollOptions options(idx, vl, shape->size() - 1, false);
-        Operation *newRoot = unrollRoot(b, op, options, state);
-        if (!newRoot) {
-          return;
-        }
-        // Mark the materialized inner root so a later greedy visit does not try
-        // to stripmine the same trailing-dimension chunk again.
-        newRoot->setAttr("dyno.stripmined", b.getUnitAttr());
+    Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
+    auto newRoot = sliceRoot(rewriter, op, getRootTileValue(op),
+                             shape->size() - 1, idx, vl,
+                             /*dropUnitDim=*/false);
+    if (failed(newRoot)) {
+      rewriter.eraseOp(whileOp);
+      return failure();
+    }
+    // Mark the materialized inner root so a later greedy visit does not try
+    // to stripmine the same trailing-dimension chunk again.
+    (*newRoot)->setAttr("dyno.stripmined", rewriter.getUnitAttr());
 
-        Value newAvl = arith::SubIOp::create(b, loopLoc, avl, vl);
-        Value newIdx = arith::AddIOp::create(b, loopLoc, idx, vl);
-        scf::YieldOp::create(b, loopLoc, ValueRange{newAvl, newIdx});
-      });
+    Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
+    Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
+    scf::YieldOp::create(rewriter, loc, ValueRange{newAvl, newIdx});
+  }
 
   rewriter.eraseOp(op);
   return success();
@@ -527,10 +559,6 @@ template <typename RootOp> struct DynoTilingPattern : OpRewritePattern<RootOp> {
     auto loc = op.getLoc();
     Value dim = getOrCreateIndexValue(rewriter, (*shape)[0], loc);
 
-    UnrollState state;
-    state.initialize(op);
-    dim = getUnrolledValue(rewriter, dim, getCloneOptions(), state);
-
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
     Value step = arith::ConstantIndexOp::create(rewriter, loc, uf);
@@ -538,24 +566,30 @@ template <typename RootOp> struct DynoTilingPattern : OpRewritePattern<RootOp> {
     Value div = arith::DivUIOp::create(rewriter, loc, dim, size);
     Value ub = arith::MulIOp::create(rewriter, loc, div, size);
 
-    scf::ForOp::create(
-        rewriter, loc, zero, ub, step, ValueRange{},
-        [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
-          UnrollOptions options(iv, b.getIndexAttr(uf), 0, false);
-          unrollRoot(b, op, options, state);
-          scf::YieldOp::create(b, loopLoc);
-        });
+    auto loop = scf::ForOp::create(rewriter, loc, zero, ub, step, ValueRange{});
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(loop.getBody());
+      if (failed(sliceRoot(rewriter, op, rootTile, 0, loop.getInductionVar(),
+                           rewriter.getIndexAttr(uf),
+                           /*dropUnitDim=*/false))) {
+        rewriter.eraseOp(loop);
+        return rewriter.notifyMatchFailure(op, "failed to tile root");
+      }
+    }
 
     if (uf != 1) {
-      UnrollState tailState;
-      tailState.initialize(op);
-      scf::ForOp::create(
-          rewriter, loc, ub, dim, one, ValueRange{},
-          [&](OpBuilder &b, Location loopLoc, Value iv, ValueRange) {
-            UnrollOptions options(iv, b.getIndexAttr(1), 0, false);
-            unrollRoot(b, op, options, tailState);
-            scf::YieldOp::create(b, loopLoc);
-          });
+      auto tailLoop =
+          scf::ForOp::create(rewriter, loc, ub, dim, one, ValueRange{});
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(tailLoop.getBody());
+      if (failed(sliceRoot(rewriter, op, rootTile, 0, tailLoop.getInductionVar(),
+                           rewriter.getIndexAttr(1),
+                           /*dropUnitDim=*/false))) {
+        rewriter.eraseOp(tailLoop);
+        rewriter.eraseOp(loop);
+        return rewriter.notifyMatchFailure(op, "failed to tile tail root");
+      }
     }
 
     rewriter.eraseOp(op);

@@ -23,6 +23,7 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -32,7 +33,6 @@
 
 #include "Dyno/IR/Dyno.h"
 #include "Dyno/Utils/ShapeInference.h"
-#include "Dyno/Utils/Unrolling.h"
 
 #define GET_OP_CLASSES
 #include "Dyno/IR/DynoOps.cpp.inc"
@@ -46,8 +46,8 @@ static LogicalResult verifyDistinctInRangeDims(Operation *op, int64_t rank,
   llvm::SmallDenseSet<int64_t> seen;
   for (int64_t dim : dims) {
     if (dim < 0 || dim >= rank) {
-      return op->emitOpError() << "expected " << desc
-                               << " to be in range [0, " << rank << ")";
+      return op->emitOpError()
+             << "expected " << desc << " to be in range [0, " << rank << ")";
     }
     if (!seen.insert(dim).second) {
       return op->emitOpError() << "expected " << desc << " to be unique";
@@ -88,6 +88,91 @@ static LogicalResult verifyGatherScatterIndexShapes(Operation *op,
   return success();
 }
 
+static LogicalResult verifyDynamicStaticIndexList(Operation *op,
+                                                  ArrayRef<int64_t> staticVals,
+                                                  ValueRange dynamicVals,
+                                                  StringRef desc) {
+  unsigned expectedDynamicVals = llvm::count_if(
+      staticVals, [](int64_t dim) { return ShapedType::isDynamic(dim); });
+  if (dynamicVals.size() != expectedDynamicVals) {
+    return op->emitOpError()
+           << "expected " << expectedDynamicVals << " dynamic " << desc
+           << " operands for " << staticVals.size() << " mixed " << desc;
+  }
+  return success();
+}
+
+static LogicalResult verifyExactTileShape(Operation *op, ArrayRef<int64_t> lhs,
+                                          ArrayRef<int64_t> rhs,
+                                          StringRef desc) {
+  if (lhs != rhs) {
+    return op->emitOpError() << "expected " << desc;
+  }
+  return success();
+}
+
+static bool isSignlessIntegerOrIndex(Type type) {
+  return isa<IndexType>(type) ||
+         (isa<IntegerType>(type) && cast<IntegerType>(type).isSignless());
+}
+
+static LogicalResult verifyCastKind(Operation *op, CastKind kind, Type srcType,
+                                    Type dstType) {
+  auto isSignlessInteger = [](Type type) {
+    return isa<IntegerType>(type) && cast<IntegerType>(type).isSignless();
+  };
+  auto isFloat = [](Type type) { return isa<FloatType>(type); };
+  auto isIndex = [](Type type) { return isa<IndexType>(type); };
+  auto fail = [&]() {
+    return op->emitOpError() << "invalid cast kind " << stringifyEnum(kind)
+                             << " for " << srcType << " to " << dstType;
+  };
+  auto getBitWidth = [](Type type) -> std::optional<unsigned> {
+    if (isa<IntegerType, FloatType>(type)) {
+      return type.getIntOrFloatBitWidth();
+    }
+    return std::nullopt;
+  };
+
+  switch (kind) {
+  case CastKind::BITCAST:
+    if (auto srcWidth = getBitWidth(srcType), dstWidth = getBitWidth(dstType);
+        srcWidth && dstWidth && *srcWidth == *dstWidth &&
+        ((isSignlessInteger(srcType) && isSignlessInteger(dstType)) ||
+         (isFloat(srcType) && isFloat(dstType)) ||
+         (isSignlessInteger(srcType) && isFloat(dstType)) ||
+         (isFloat(srcType) && isSignlessInteger(dstType)))) {
+      return success();
+    }
+    return fail();
+  case CastKind::EXTF:
+  case CastKind::TRUNCF:
+    return (isFloat(srcType) && isFloat(dstType)) ? success() : fail();
+  case CastKind::EXTSI:
+  case CastKind::EXTUI:
+  case CastKind::TRUNCI:
+    return (isSignlessInteger(srcType) && isSignlessInteger(dstType))
+               ? success()
+               : fail();
+  case CastKind::FPTOSI:
+  case CastKind::FPTOUI:
+    return (isFloat(srcType) && isSignlessInteger(dstType)) ? success()
+                                                            : fail();
+  case CastKind::SITOFP:
+  case CastKind::UITOFP:
+    return (isSignlessInteger(srcType) && isFloat(dstType)) ? success()
+                                                            : fail();
+  case CastKind::INDEXCAST:
+  case CastKind::INDEXCASTUI:
+    return ((isIndex(srcType) && isSignlessInteger(dstType)) ||
+            (isSignlessInteger(srcType) && isIndex(dstType)))
+               ? success()
+               : fail();
+  }
+
+  llvm_unreachable("unexpected cast kind");
+}
+
 //===----------------------------------------------------------------------===//
 // MaskOp
 //===----------------------------------------------------------------------===//
@@ -117,8 +202,8 @@ Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
     builder.setInsertionPointAfter(maskedOp);
     resultTypes = maskedOp->getResultTypes();
   }
-  return MaskOp::create(builder, 
-      loc, resultTypes, mask,
+  return MaskOp::create(
+      builder, loc, resultTypes, mask,
       [&](OpBuilder &b, Location loc) { createMaskOpRegion(b, loc, maskedOp); },
       maskedoff);
 }
@@ -168,17 +253,21 @@ LogicalResult MaskOp::verify() {
   if ((*this)->getParentOfType<MaskOp>()) {
     return emitOpError("nested `dyno.mask` is not allowed");
   }
-  auto mask = getMask();
-  // Check the returned types are the same as the maskedoff value.
+  if (getMask().getType().getElementType() !=
+      IntegerType::get(getContext(), 1)) {
+    return emitOpError("expected the mask tile element type to be i1");
+  }
   if (auto maskedoff = getMaskedoff()) {
-    auto maskedoffType = maskedoff.getType();
-    if (!TileType::isShapeCompatible(mask.getType().getShape(),
-                                     maskedoffType.getShape())) {
-      return emitOpError(
-          "expected the mask and maskedoff types to be compatible");
+    if (getNumResults() == 0) {
+      return emitOpError("expected maskedoff only on value-producing masks");
+    }
+    for (Type resultType : getResultTypes()) {
+      if (maskedoff.getType() != resultType) {
+        return emitOpError(
+            "expected maskedoff tile type to match each result type exactly");
+      }
     }
   }
-  // At most one operation inside.
   Block *bodyBlock = &getBody().front();
   if (bodyBlock->empty()) {
     return emitOpError("expected the masked region to have an operation");
@@ -191,46 +280,31 @@ LogicalResult MaskOp::verify() {
   if (!terminator) {
     return emitOpError("expected a `dyno.mask_yield` terminator");
   }
-  if (terminator.getNumOperands() != getNumResults()) {
-    return emitOpError("expected the masked region to yield one value per result");
+  if (getNumResults() == 0) {
+    if (auto maskedOp = getMaskedOp();
+        maskedOp && maskedOp->getNumResults() != 0) {
+      return emitOpError("expected effect-only masks to contain a masked "
+                         "operation with no results");
+    }
   }
-  for (auto [yielded, result] : llvm::zip(terminator.getOperands(), getResults())) {
-    if (!TileType::isCompatible(yielded.getType(), result.getType())) {
-      return emitOpError("expected yielded tile types to match mask result types");
+  if (terminator.getNumOperands() != getNumResults()) {
+    return emitOpError(
+        "expected the masked region to yield one value per result");
+  }
+  for (auto [yielded, result] :
+       llvm::zip(terminator.getOperands(), getResults())) {
+    if (cast<TileType>(result.getType()).getShape() !=
+        getMask().getType().getShape()) {
+      return emitOpError(
+          "expected the mask shape to match each result shape exactly");
+    }
+    if (yielded.getType() != result.getType()) {
+      return emitOpError(
+          "expected yielded tile types to match mask result types exactly");
     }
   }
 
   return success();
-}
-
-Operation *MaskOp::unroll(OpBuilder &builder, UnrollOptions options,
-                          UnrollState &state) {
-  Value mask = getUnrolledValue(builder, getMask(), options, state);
-  Value maskedoff = getMaskedoff();
-  if (maskedoff) {
-    maskedoff = getUnrolledValue(builder, maskedoff, options, state);
-  }
-  auto maskedOp = getMaskedOp();
-  if (maskedOp) {
-    maskedOp = unrollOp(builder, maskedOp, options, state);
-    return maskOperation(builder, getLoc(), maskedOp, mask, maskedoff);
-  } else {
-    // Just clone the yield op.
-    auto bodyBlock = &getBody().front();
-    auto terminator = cast<MaskYieldOp>(bodyBlock->getTerminator());
-    auto newOperands =
-        llvm::map_to_vector(terminator.getOperands(), [&](Value op) {
-          return getUnrolledValue(builder, op, options, state);
-        });
-    auto newResultTypes = llvm::map_to_vector(
-        newOperands, [&](Value opd) { return opd.getType(); });
-    return MaskOp::create(builder, 
-        getLoc(), newResultTypes, mask,
-        [&](OpBuilder &b, Location loc) {
-          MaskYieldOp::create(b, loc, newOperands);
-        },
-        maskedoff);
-  }
 }
 
 struct ElideEmptyMaskOp : OpRewritePattern<MaskOp> {
@@ -256,177 +330,6 @@ struct ElideEmptyMaskOp : OpRewritePattern<MaskOp> {
 void MaskOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                          MLIRContext *context) {
   results.add<ElideEmptyMaskOp>(context);
-}
-
-//===----------------------------------------------------------------------===//
-// MatmulOp
-//===----------------------------------------------------------------------===//
-
-LogicalResult MatmulOp::inferReturnTypes(MLIRContext *context,
-                                         std::optional<Location> location,
-                                         Adaptor adaptor,
-                                         SmallVectorImpl<Type> &inferred) {
-  auto lhsType = cast<TileType>(adaptor.getLhs().getType());
-  auto rhsType = cast<TileType>(adaptor.getRhs().getType());
-  if (lhsType.getElementType() != rhsType.getElementType()) {
-    return emitOptionalError(
-        location,
-        "expected the element type of the lhs and rhs to be the same");
-  }
-  auto lhsShape = lhsType.getShape();
-  auto rhsShape = rhsType.getShape();
-
-  auto lhsRank = lhsType.getRank();
-  auto rhsRank = rhsType.getRank();
-
-  size_t leadingSize;
-
-  if (lhsRank < rhsRank) {
-    assert(rhsRank >= 2 && "expected rank >= 2");
-    // (1) * k @ k * n => (1) * n
-    leadingSize = lhsRank - 1;
-  } else if (lhsRank > rhsRank) {
-    assert(lhsRank >= 2 && "expected rank >= 2");
-    // m * k @ k * (1) => m * (1)
-    leadingSize = rhsRank - 1;
-  } else {
-    assert(lhsRank >= 2 && "expected rank >= 2");
-    leadingSize = lhsRank - 2;
-  }
-
-  auto lhsK = lhsShape.back();
-  auto rhsK = rhsShape[leadingSize];
-
-  if (!TileType::isDimCompatible(lhsK, rhsK)) {
-    return emitOptionalError(
-        location,
-        "expected the inner dimensions of the lhs and rhs to be compatible");
-  }
-
-  ArrayRef<int64_t> lhsLeadingDims(lhsShape.begin(), leadingSize);
-  ArrayRef<int64_t> rhsLeadingDims(rhsShape.begin(), leadingSize);
-  auto resultShape =
-      TileType::selectStaticShape(lhsLeadingDims, rhsLeadingDims);
-  if (lhsRank >= rhsRank) {
-    // M, if exists.
-    resultShape.push_back(lhsShape[lhsShape.size() - 2]);
-  }
-  if (rhsRank >= lhsRank) {
-    // N, if exists
-    resultShape.push_back(rhsShape.back());
-  }
-
-  auto tileType = TileType::get(resultShape, lhsType.getElementType());
-  inferred.push_back(tileType);
-  return success();
-}
-
-LogicalResult MatmulOp::verify() {
-  auto lhsType = getLhs().getType();
-  auto rhsType = getRhs().getType();
-  if (lhsType.getRank() < 1 || rhsType.getRank() < 1) {
-    return emitOpError("expected lhs and rhs to be at least rank-1 tiles");
-  }
-  if (std::max(lhsType.getRank(), rhsType.getRank()) < 2) {
-    return emitOpError("expected matmul operands to include an inner reduction dimension");
-  }
-  auto leadingSize = getLeadingSize();
-  if (!TileType::isShapeCompatible(lhsType.getShape().take_front(leadingSize),
-                                   rhsType.getShape().take_front(leadingSize))) {
-    return emitOpError(
-        "expected lhs and rhs leading dimensions to be compatible");
-  }
-  if (!TileType::isDimCompatible(lhsType.getShape().back(),
-                                 rhsType.getShape()[leadingSize])) {
-    return emitOpError("expected lhs/rhs contraction dimensions to be compatible");
-  }
-  return success();
-}
-
-unsigned MatmulOp::getLeadingSize() {
-  auto lhsRank = getLhs().getType().getRank();
-  auto rhsRank = getRhs().getType().getRank();
-
-  size_t leadingSize;
-  if (lhsRank < rhsRank) {
-    assert(rhsRank >= 2 && "expected rank >= 2");
-    // (1) * k @ k * n => (1) * n
-    leadingSize = lhsRank - 1;
-  } else if (lhsRank > rhsRank) {
-    assert(lhsRank >= 2 && "expected rank >= 2");
-    // m * k @ k * (1) => m * (1)
-    leadingSize = rhsRank - 1;
-  } else {
-    assert(lhsRank >= 2 && "expected rank >= 2");
-    leadingSize = lhsRank - 2;
-  }
-  return leadingSize;
-}
-
-Operation *MatmulOp::unroll(OpBuilder &builder, UnrollOptions options,
-                            UnrollState &state) {
-  UnrollOptions lhsOptions = options;
-  UnrollOptions rhsOptions = options;
-
-  size_t leadingSize = getLeadingSize();
-  auto lhsRank = getLhs().getType().getRank();
-  auto rhsRank = getRhs().getType().getRank();
-
-  auto unrollIdx = options.getUnrollIdx();
-  /// If use elementwise mul & reduction to compute the result.
-  bool useDot = false;
-
-  if (unrollIdx == leadingSize) {
-    if (lhsRank < rhsRank) {
-      // (1) * k @ k * n => (1) * n, unrolling on `n`.
-      lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-      rhsOptions.overrideUnrollIdx(rhsRank - 1);
-      if (options.shouldReduce()) {
-        useDot = true;
-      }
-    } else if (lhsRank > rhsRank) {
-      // m * k @ k * (1) => m * (1), unrolling on `m`.
-      lhsOptions.overrideUnrollIdx(lhsRank - 2);
-      rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-      if (options.shouldReduce()) {
-        useDot = true;
-      }
-    } else {
-      // result: m * n, unrolling on `m`
-      lhsOptions.overrideUnrollIdx(lhsRank - 2);
-      rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-    }
-  } else if (unrollIdx == leadingSize + 1) {
-    // Unrolling on `n`.
-    assert(lhsRank == rhsRank && lhsRank >= 2 &&
-           "expected lhs and rhs to have the same rank >= 2");
-    lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-    rhsOptions.overrideUnrollIdx(rhsRank - 1);
-  } else if (unrollIdx < leadingSize) {
-    // Unrolling the shared leading dims.
-  } else {
-    // Canonicalize the unroll index.
-    options.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  }
-
-  auto lhs = getUnrolledValue(builder, getLhs(), lhsOptions, state);
-  auto rhs = getUnrolledValue(builder, getRhs(), rhsOptions, state);
-
-  if (useDot) {
-    Value mul;
-    if (isa<FloatType>(getLhs().getType().getElementType())) {
-      mul = arith::MulFOp::create(builder, getLoc(), lhs, rhs);
-    } else {
-      mul = arith::MulIOp::create(builder, getLoc(), lhs, rhs);
-    }
-    SmallVector<int64_t> dims{static_cast<int64_t>(leadingSize)};
-    auto reduction = ReductionOp::create(builder, getLoc(), CombiningKind::ADD,
-                                                 mul, dims, /*init=*/nullptr);
-    return reduction;
-  } else {
-    auto matmulOp = MatmulOp::create(builder, getLoc(), lhs, rhs);
-    return matmulOp;
-  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -469,46 +372,6 @@ LogicalResult ReductionOp::verify() {
   return success();
 }
 
-Operation *ReductionOp::unroll(OpBuilder &builder, UnrollOptions options,
-                               UnrollState &state) {
-  auto resultRank = getResult().getType().getRank();
-  SetVector<int64_t> reductionDimSet(getDims().begin(), getDims().end());
-
-  auto unrollIdx = options.getUnrollIdx();
-  if (unrollIdx < resultRank) {
-    // Compute which dimension in the original tile corresponds to the unrolled
-    // dimension in the result.
-    unrollIdx = computeUnreducedIdx(
-        unrollIdx, getTile().getType().getRank(),
-        [&](unsigned dim) { return reductionDimSet.contains(dim); });
-  } else {
-    // Canonicalize the unroll index.
-    options.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  }
-
-  SmallVector<int64_t> newDims(getDims().begin(), getDims().end());
-  for (size_t i = 0, e = newDims.size(); i < e; ++i) {
-    if (newDims[i] > unrollIdx) {
-      // There is a dimension before this that is unrolled, so this minor index
-      // needs to be adjusted.
-      newDims[i] -= 1;
-    }
-  }
-
-  UnrollOptions newOptions = options;
-  newOptions.overrideUnrollIdx(unrollIdx);
-
-  Value tile = getUnrolledValue(builder, getTile(), newOptions, state);
-  Value init = getInit();
-  if (init) {
-    init = getUnrolledValue(builder, init, options, state);
-  }
-
-  auto reductionOp =
-      ReductionOp::create(builder, getLoc(), getKind(), tile, newDims, init);
-  return reductionOp;
-}
-
 //===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
@@ -523,27 +386,11 @@ LogicalResult LoadOp::inferReturnTypes(MLIRContext *context,
   return success();
 }
 
-LogicalResult LoadOp::verify() {
-  return success();
-}
-
-Operation *LoadOp::unroll(OpBuilder &builder, UnrollOptions options,
-                          UnrollState &state) {
-  auto memref = getUnrolledMemref(builder, getBase(), options, state);
-  auto loadOp = LoadOp::create(builder, getLoc(), memref);
-  return loadOp;
-}
+LogicalResult LoadOp::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
 // StoreOp
 //===----------------------------------------------------------------------===//
-
-Operation *StoreOp::unroll(OpBuilder &builder, UnrollOptions options,
-                           UnrollState &state) {
-  auto memref = getUnrolledMemref(builder, getBase(), options, state);
-  auto value = getUnrolledValue(builder, getValue(), options, state);
-  return StoreOp::create(builder, getLoc(), value, memref);
-}
 
 //===----------------------------------------------------------------------===//
 // DimOp
@@ -604,7 +451,8 @@ LogicalResult ExtractOp::inferReturnTypes(MLIRContext *context,
                                           std::optional<Location> location,
                                           Adaptor adaptor,
                                           SmallVectorImpl<Type> &inferred) {
-  inferred.push_back(cast<TileType>(adaptor.getTile().getType()).getElementType());
+  inferred.push_back(
+      cast<TileType>(adaptor.getTile().getType()).getElementType());
   return success();
 }
 
@@ -647,6 +495,42 @@ LogicalResult SplatOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult SplatOp::verify() {
+  if (failed(verifyDynamicStaticIndexList((*this), getStaticDims(), getDims(),
+                                          "dimension"))) {
+    return failure();
+  }
+
+  auto resultType = getResult().getType();
+  unsigned operandRank = 0;
+  if (auto operandType = dyn_cast<TileType>(getValue().getType())) {
+    operandRank = operandType.getRank();
+    if (resultType.getRank() < operandRank) {
+      return emitOpError(
+          "expected result rank to include the operand tile rank as a suffix");
+    }
+    if (failed(verifyExactTileShape(
+            (*this), resultType.getShape().take_back(operandRank),
+            operandType.getShape(),
+            "result suffix shape to match the operand tile shape exactly"))) {
+      return failure();
+    }
+  }
+
+  unsigned prefixRank = getStaticDims().size();
+  if (resultType.getRank() != prefixRank + operandRank) {
+    return emitOpError() << "expected result rank " << resultType.getRank()
+                         << " to equal prefix rank " << prefixRank
+                         << " plus operand rank " << operandRank;
+  }
+
+  for (auto [dim, staticDim] : llvm::enumerate(getStaticDims())) {
+    int64_t resultDim = resultType.getShape()[dim];
+    if (!TileType::isDimCompatible(resultDim, staticDim)) {
+      return emitOpError() << "expected result prefix dimension " << dim
+                           << " to match the specified broadcast size";
+    }
+  }
+
   return success();
 }
 
@@ -670,160 +554,6 @@ void SplatOp::build(OpBuilder &builder, OperationState &result, Value value,
 SmallVector<OpFoldResult> SplatOp::getMixedDims() {
   Builder builder((*this)->getContext());
   return getMixedValues(getStaticDims(), getDims(), builder);
-}
-
-Operation *SplatOp::unroll(OpBuilder &builder, UnrollOptions options,
-                           UnrollState &state) {
-  auto dims = getMixedDims();
-  auto value = getValue();
-  auto resultRank = getResult().getType().getRank();
-
-  auto unrollIdx = options.getUnrollIdx();
-  SmallVector<OpFoldResult> newDims;
-  if (unrollIdx >= dims.size() && unrollIdx < resultRank) {
-    options.overrideUnrollIdx(unrollIdx - dims.size());
-    newDims = dims;
-  } else {
-    for (size_t i = 0, e = dims.size(); i < e; ++i) {
-      if (i == unrollIdx) {
-        if (!options.shouldReduce()) {
-          newDims.push_back(options.getChunkSize());
-        }
-      } else {
-        if (auto dimVal = dims[i].dyn_cast<Value>()) {
-          newDims.push_back(getUnrolledValue(builder, dimVal, options, state));
-        } else {
-          newDims.push_back(dims[i]);
-        }
-      }
-    }
-  }
-
-  if (unrollIdx < dims.size()) {
-    options.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  }
-
-  Value unrolledValue = getUnrolledValue(builder, value, options, state);
-  auto splatOp = SplatOp::create(builder, getLoc(), unrolledValue, newDims);
-  return splatOp;
-}
-
-//===----------------------------------------------------------------------===//
-// OuterOp
-//===----------------------------------------------------------------------===//
-
-LogicalResult OuterOp::inferReturnTypes(MLIRContext *context,
-                                        std::optional<Location> location,
-                                        Adaptor adaptor,
-                                        SmallVectorImpl<Type> &inferred) {
-  auto lhsType = cast<TileType>(adaptor.getLhs().getType());
-  auto rhsType = cast<TileType>(adaptor.getRhs().getType());
-
-  int64_t lhsRank = lhsType.getRank();
-  int64_t rhsRank = rhsType.getRank();
-
-  if (std::abs(lhsRank - rhsRank) > 1) {
-    return emitOptionalError(
-        location,
-        "expected the rank of the lhs and rhs to differ by at most one");
-  }
-  if (lhsRank == 0 && rhsRank == 0) {
-    // Row-splitting before VP can legitimately reduce an outer product all the
-    // way to scalar x scalar. Treat that as a rank-0 tile result.
-    inferred.push_back(TileType::get({}, lhsType.getElementType()));
-    return success();
-  }
-  unsigned leadingRank = lhsRank;
-  if (lhsRank >= rhsRank) {
-    leadingRank -= 1; // Ignore the last dimension.
-  }
-
-  auto lhsShape = lhsType.getShape();
-  auto rhsShape = rhsType.getShape();
-  if (!TileType::isShapeCompatible(lhsShape.take_front(leadingRank),
-                                   rhsShape.take_front(leadingRank))) {
-    return emitOptionalError(
-        location,
-        "expected the leading dimensions of the lhs and rhs to be compatible");
-  }
-  SmallVector<int64_t> resultShape{lhsShape.begin(), lhsShape.end()};
-  if (lhsRank <= rhsRank) {
-    resultShape.push_back(rhsShape.back());
-  }
-  inferred.push_back(TileType::get(resultShape, lhsType.getElementType()));
-  return success();
-}
-
-LogicalResult OuterOp::verify() {
-  int64_t lhsRank = getLhs().getType().getRank();
-  int64_t rhsRank = getRhs().getType().getRank();
-  if (std::abs(lhsRank - rhsRank) > 1) {
-    return emitOpError(
-        "expected the rank of the lhs and rhs to differ by at most one");
-  }
-  if (lhsRank == 0 && rhsRank == 0) {
-    // See `inferReturnTypes`: scalar x scalar is a valid fully unrolled outer.
-    return success();
-  }
-  unsigned leadingRank = lhsRank;
-  if (lhsRank >= rhsRank) {
-    leadingRank -= 1;
-  }
-  if (!TileType::isShapeCompatible(getLhs().getType().getShape().take_front(leadingRank),
-                                   getRhs().getType().getShape().take_front(leadingRank))) {
-    return emitOpError(
-        "expected lhs and rhs leading dimensions to be compatible");
-  }
-  return success();
-}
-
-Operation *OuterOp::unroll(OpBuilder &builder, UnrollOptions options,
-                           UnrollState &state) {
-  auto lhsRank = getLhs().getType().getRank();
-  auto rhsRank = getRhs().getType().getRank();
-  auto resultRank = getResult().getType().getRank();
-  auto leadingRank = lhsRank;
-  if (lhsRank >= rhsRank) {
-    leadingRank -= 1; // Ignore the last dimension.
-  }
-
-  auto unrollIdx = options.getUnrollIdx();
-
-  UnrollOptions lhsOptions = options;
-  UnrollOptions rhsOptions = options;
-
-  if (unrollIdx < leadingRank) {
-    // Unrolling on shared leading dimensions.
-  } else if (unrollIdx < resultRank) {
-    // Unrolling on the last two/one dimensions.
-    if (lhsRank == rhsRank) {
-      if (unrollIdx == resultRank - 1) {
-        // Unrolling on rhs last dimension.
-        lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-        rhsOptions.overrideUnrollIdx(unrollIdx - 1);
-      } else {
-        assert(unrollIdx == resultRank - 2);
-        // Unrolling on lhs  last dimension.
-        rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-      }
-    } else if (lhsRank < rhsRank) {
-      assert(unrollIdx == resultRank - 1);
-      // Unrolling on rhs last dimension.
-      lhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-    } else if (lhsRank > rhsRank) {
-      assert(unrollIdx == resultRank - 1);
-      // Unrolling on lhs last dimension.
-      rhsOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-    }
-  } else {
-    options.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  }
-
-  auto lhs = getUnrolledValue(builder, getLhs(), lhsOptions, state);
-  auto rhs = getUnrolledValue(builder, getRhs(), rhsOptions, state);
-
-  auto outerOp = OuterOp::create(builder, getLoc(), getKind(), lhs, rhs);
-  return outerOp;
 }
 
 //===----------------------------------------------------------------------===//
@@ -864,74 +594,34 @@ SmallVector<OpFoldResult> StepOp::getMixedSizes() {
 }
 
 LogicalResult StepOp::verify() {
+  if (failed(verifyDynamicStaticIndexList((*this), getStaticSizes(), getSizes(),
+                                          "size"))) {
+    return failure();
+  }
+
+  auto resultType = getResult().getType();
+  if (getStaticSizes().size() != resultType.getRank()) {
+    return emitOpError("expected one size entry per result dimension");
+  }
+  int64_t dim = getDim().getSExtValue();
+  if (dim < 0 || dim >= static_cast<int64_t>(resultType.getRank())) {
+    return emitOpError() << "expected dim to be in range [0, "
+                         << resultType.getRank() << ")";
+  }
+  if (getStart().getType() != resultType.getElementType()) {
+    return emitOpError("expected result element type to match the start type");
+  }
+  if (!isSignlessIntegerOrIndex(resultType.getElementType())) {
+    return emitOpError(
+        "expected result element type to be signless integer or index");
+  }
+  for (auto [idx, staticSize] : llvm::enumerate(getStaticSizes())) {
+    if (!TileType::isDimCompatible(resultType.getShape()[idx], staticSize)) {
+      return emitOpError() << "expected result size " << idx
+                           << " to match the specified mixed size list";
+    }
+  }
   return success();
-}
-
-Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
-                          UnrollState &state) {
-  auto dim = getDim().getZExtValue();
-  auto sizes = getMixedSizes();
-  for (auto &size : sizes) {
-    if (auto val = size.dyn_cast<Value>()) {
-      size = getUnrolledValue(builder, val, options, state);
-    }
-  }
-  auto start = getUnrolledValue(builder, getStart(), options, state);
-  auto unrollIdx = options.getUnrollIdx();
-
-  SmallVector<OpFoldResult> newSizes;
-  for (auto [i, size] : llvm::enumerate(sizes)) {
-    if (i == unrollIdx) {
-      if (!options.shouldReduce()) {
-        newSizes.push_back(options.getChunkSize());
-      }
-    } else {
-      newSizes.push_back(size);
-    }
-  }
-
-  if (dim == unrollIdx) {
-    // compute new start and splat.
-    Value increment = start;
-    if (auto offset = options.getOffset().dyn_cast<Value>()) {
-      if (offset.getType() != start.getType()) {
-        if (isa<IndexType>(offset.getType()) ||
-            isa<IndexType>(start.getType())) {
-          offset = arith::IndexCastOp::create(builder, getLoc(), start.getType(),
-                                                      offset);
-        } else if (offset.getType().getIntOrFloatBitWidth() >
-                   start.getType().getIntOrFloatBitWidth()) {
-          offset = arith::TruncIOp::create(builder, getLoc(), start.getType(),
-                                                   offset);
-        } else {
-          offset =
-              arith::ExtUIOp::create(builder, getLoc(), start.getType(), offset);
-        }
-      }
-      increment = arith::AddIOp::create(builder, getLoc(), start, offset);
-    } else {
-      auto offsetInt =
-          cast<IntegerAttr>(options.getOffset().dyn_cast<Attribute>()).getInt();
-      auto offsetValue = arith::ConstantOp::create(builder, 
-          getLoc(), start.getType(),
-          builder.getIntegerAttr(start.getType(), offsetInt));
-      increment = arith::AddIOp::create(builder, getLoc(), start, offsetValue);
-    }
-
-    if (options.shouldReduce()) {
-      auto splatOp = SplatOp::create(builder, getLoc(), increment, newSizes);
-      return splatOp;
-    } else {
-      auto stepOp = StepOp::create(builder, getLoc(), increment, dim, newSizes);
-      return stepOp;
-    }
-  } else {
-    if (dim > unrollIdx && options.shouldReduce()) {
-      dim -= 1;
-    }
-    auto stepOp = StepOp::create(builder, getLoc(), start, dim, newSizes);
-    return stepOp;
-  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -939,16 +629,15 @@ Operation *StepOp::unroll(OpBuilder &builder, UnrollOptions options,
 //===----------------------------------------------------------------------===//
 
 LogicalResult CastOp::verify() {
-  // TODO: Verify the types.
-  return success();
-}
-
-Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
-                          UnrollState &state) {
-  auto tile = getUnrolledValue(builder, getTile(), options, state);
-  auto targetType = getUnrolledTileType(getResult().getType(), options);
-  auto castOp = CastOp::create(builder, getLoc(), targetType, getKind(), tile);
-  return castOp;
+  auto sourceType = getTile().getType();
+  auto resultType = getResult().getType();
+  if (failed(verifyExactTileShape(
+          (*this), sourceType.getShape(), resultType.getShape(),
+          "input and result tile shapes to be equal"))) {
+    return failure();
+  }
+  return verifyCastKind((*this), getKind(), sourceType.getElementType(),
+                        resultType.getElementType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -956,16 +645,25 @@ Operation *CastOp::unroll(OpBuilder &builder, UnrollOptions options,
 //===----------------------------------------------------------------------===//
 
 LogicalResult SelectOp::verify() {
+  auto condType = getCond().getType();
+  auto lhsType = getLhs().getType();
+  auto rhsType = getRhs().getType();
+  auto resultType = getResult().getType();
+  if (condType.getElementType() != IntegerType::get(getContext(), 1)) {
+    return emitOpError("expected the condition tile element type to be i1");
+  }
+  if (condType.getShape() != lhsType.getShape() ||
+      lhsType.getShape() != rhsType.getShape() ||
+      rhsType.getShape() != resultType.getShape()) {
+    return emitOpError(
+        "expected condition, lhs, rhs, and result shapes to match exactly");
+  }
+  if (lhsType.getElementType() != rhsType.getElementType() ||
+      rhsType.getElementType() != resultType.getElementType()) {
+    return emitOpError(
+        "expected lhs, rhs, and result element types to match exactly");
+  }
   return success();
-}
-
-Operation *SelectOp::unroll(OpBuilder &builder, UnrollOptions options,
-                            UnrollState &state) {
-  auto cond = getUnrolledValue(builder, getCond(), options, state);
-  auto lhs = getUnrolledValue(builder, getLhs(), options, state);
-  auto rhs = getUnrolledValue(builder, getRhs(), options, state);
-  auto selectOp = SelectOp::create(builder, getLoc(), cond, lhs, rhs);
-  return selectOp;
 }
 
 //===----------------------------------------------------------------------===//
@@ -995,21 +693,8 @@ LogicalResult GatherOp::verify() {
     return emitOpError("expected the number of indices to be the same as the "
                        "rank of the base memref");
   }
-  return verifyGatherScatterIndexShapes((*this), indices, getResult().getType());
-}
-
-Operation *GatherOp::unroll(OpBuilder &builder, UnrollOptions options,
-                            UnrollState &state) {
-  auto memrefOptions = options;
-  memrefOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-  auto memref = getUnrolledMemref(builder, getBase(), memrefOptions, state);
-  auto indices = getIndices();
-  SmallVector<Value> unrolledIndices;
-  for (auto index : indices) {
-    unrolledIndices.push_back(getUnrolledValue(builder, index, options, state));
-  }
-  auto gatherOp = GatherOp::create(builder, getLoc(), memref, unrolledIndices);
-  return gatherOp;
+  return verifyGatherScatterIndexShapes((*this), indices,
+                                        getResult().getType());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1024,21 +709,6 @@ LogicalResult ScatterOp::verify() {
                        "rank of the base memref");
   }
   return verifyGatherScatterIndexShapes((*this), indices, getValue().getType());
-}
-
-Operation *ScatterOp::unroll(OpBuilder &builder, UnrollOptions options,
-                             UnrollState &state) {
-  auto memrefOptions = options;
-  memrefOptions.overrideUnrollIdx(UnrollOptions::kNoUnrollIdx);
-
-  auto memref = getUnrolledMemref(builder, getBase(), memrefOptions, state);
-  auto value = getUnrolledValue(builder, getValue(), options, state);
-  auto indices = getIndices();
-  SmallVector<Value> unrolledIndices;
-  for (auto index : indices) {
-    unrolledIndices.push_back(getUnrolledValue(builder, index, options, state));
-  }
-  return ScatterOp::create(builder, getLoc(), value, memref, unrolledIndices);
 }
 
 //===----------------------------------------------------------------------===//

@@ -13,7 +13,7 @@ struct LowerDynoPass : PassWrapper<LowerDynoPass, OperationPass<ModuleOp>> {
 
   StringRef getArgument() const override { return "lower-dyno"; }
   StringRef getDescription() const override {
-    return "Lower Dyno operations to target-ranked operations";
+    return "Structurally slice Dyno effect roots to a target rank";
   }
 
   LowerDynoPass() = default;

@@ -18,16 +18,12 @@ func.func @masked_add(%a: memref<?xf32>, %b: memref<?xf32>, %m: memref<?xi1>,
 // CHECK: vp.predicate %{{.*}} : index, mask = %{{.*}} : vector<[8]xi1>, passthru = none, maskedoff = %{{.*}} : vector<[8]xf32> {
 // CHECK: arith.addf
 
-// CHECK-LABEL: func.func @outer_row_scalarization
+// CHECK-LABEL: func.func @row_pack_store
 // CHECK: scf.for
-// CHECK: memref.load %{{.*}}[] : memref<f32
-// CHECK: vector.broadcast
-// CHECK-NOT: vector.extract
-func.func @outer_row_scalarization(%lhs: memref<2xf32>, %rhs: memref<?xf32>,
-                                   %dst: memref<2x?xf32>) {
-  %lhs_tile = dyno.load %lhs : memref<2xf32>
-  %rhs_tile = dyno.load %rhs : memref<?xf32>
-  %res = dyno.outer <mul> %lhs_tile, %rhs_tile : !dyno.tile<2xf32>, !dyno.tile<?xf32>
-  dyno.store %res, %dst : !dyno.tile<2x?xf32>, memref<2x?xf32>
+// CHECK: vp.load
+// CHECK: vp.store
+func.func @row_pack_store(%src: memref<2x?xf32>, %dst: memref<2x?xf32>) {
+  %tile = dyno.load %src : memref<2x?xf32>
+  dyno.store %tile, %dst : !dyno.tile<2x?xf32>, memref<2x?xf32>
   return
 }

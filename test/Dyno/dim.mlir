@@ -44,19 +44,19 @@ func.func @dim_forwarding(%a: memref<?x?xf32>, %b: memref<?x?xf32>,
   return %d0, %d1, %s0, %s1 : index, index, index, index
 }
 
-// RESOLVE-LABEL: func.func @dim_matmul_and_reduction
-func.func @dim_matmul_and_reduction(%lhs: memref<?x?xf32>, %rhs: memref<?x?xf32>,
-                                    %src: memref<?x?xf32>) -> (index, index, index) {
-  %lhs_tile = dyno.load %lhs : memref<?x?xf32>
-  %rhs_tile = dyno.load %rhs : memref<?x?xf32>
-  %src_tile = dyno.load %src : memref<?x?xf32>
-  %mm = dyno.matmul %lhs_tile, %rhs_tile : !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
-  %red = dyno.reduction <add> %src_tile [1] : !dyno.tile<?x?xf32>
-  %m = dyno.dim %mm, 0 : !dyno.tile<?x?xf32>
-  %n = dyno.dim %mm, 1 : !dyno.tile<?x?xf32>
-  %r = dyno.dim %red, 0 : !dyno.tile<?xf32>
+// RESOLVE-LABEL: func.func @dim_reduction_and_splat
+func.func @dim_reduction_and_splat(%src: memref<?x?x?xf32>,
+                                   %init: memref<?x?xf32>) -> (index, index, index) {
+  %src_tile = dyno.load %src : memref<?x?x?xf32>
+  %init_tile = dyno.load %init : memref<?x?xf32>
+  %red = dyno.reduction <add> %src_tile [1], %init_tile :
+      !dyno.tile<?x?x?xf32>, !dyno.tile<?x?xf32>
+  %red0 = dyno.dim %red, 0 : !dyno.tile<?x?xf32>
+  %red1 = dyno.dim %red, 1 : !dyno.tile<?x?xf32>
+  %splat = dyno.splat %red [3] : !dyno.tile<?x?xf32>
+  %sp0 = dyno.dim %splat, 0 : !dyno.tile<3x?x?xf32>
   // RESOLVE-NOT: dyno.dim
-  return %m, %n, %r : index, index, index
+  return %red0, %red1, %sp0 : index, index, index
 }
 
 // VP-LABEL: func.func @vp_resolve_load_dim_before_erase
