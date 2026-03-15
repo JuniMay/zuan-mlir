@@ -8,7 +8,7 @@ dyno_add_direct_dyno_kernel(
   INPUT ${CMAKE_CURRENT_SOURCE_DIR}/matmul.mlir
   VF 16
   UF 2
-  EXTRA_FLAGS -O3 -g ${CLANG_FLAGS_LIST}
+  EXTRA_FLAGS -O3 -g
 )
 
 target_link_libraries(dyno-matmul-benchmark PRIVATE dyno-matmul-kernel)

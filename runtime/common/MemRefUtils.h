@@ -54,6 +54,7 @@ template <typename T, size_t N> struct MemRef {
 
   /// Given the linearized index, return the reference to the element.
   T &operator[](int64_t idx) { return data[offset + idx]; }
+  const T &operator[](int64_t idx) const { return data[offset + idx]; }
 
   int64_t getTotalSize() const {
     return std::accumulate(sizes, sizes + N, 1, std::multiplies<int64_t>());

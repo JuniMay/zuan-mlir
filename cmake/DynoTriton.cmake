@@ -1,56 +1,55 @@
 include_guard(GLOBAL)
 
-set(DYNO_TRITON_UPSTREAM_SOURCE_DIR
-  "${DYNO_SOURCE_DIR}/third_party/triton"
-  CACHE PATH "Path to the upstream Triton source checkout used by Triton Shared")
+#-------------------------------------------------------------------------------
+# Default path configuration
+#-------------------------------------------------------------------------------
 
-set(DYNO_TRITON_CPU_SOURCE_DIR
-  "${DYNO_SOURCE_DIR}/third_party/triton-cpu"
-  CACHE PATH "Path to the Triton CPU source checkout")
+if (NOT DEFINED DYNO_TRITON_UPSTREAM_SOURCE_DIR)
+  set(DYNO_TRITON_UPSTREAM_SOURCE_DIR "${DYNO_SOURCE_DIR}/third_party/triton")
+endif()
 
-set(DYNO_TRITON_SHARED_SOURCE_DIR
-  "${DYNO_SOURCE_DIR}/third_party/triton_shared"
-  CACHE PATH "Path to the Triton Shared source checkout")
+if (NOT DEFINED DYNO_TRITON_CPU_SOURCE_DIR)
+  set(DYNO_TRITON_CPU_SOURCE_DIR "${DYNO_SOURCE_DIR}/third_party/triton-cpu")
+endif()
 
-set(DYNO_TRITON_ROOT_DIR
-  "${DYNO_BINARY_DIR}/third_party/triton"
-  CACHE PATH "Root directory for build-local Triton artifacts")
+if (NOT DEFINED DYNO_TRITON_SHARED_SOURCE_DIR)
+  set(DYNO_TRITON_SHARED_SOURCE_DIR "${DYNO_SOURCE_DIR}/third_party/triton_shared")
+endif()
 
-set(DYNO_TRITON_SHARED_ROOT_DIR
-  "${DYNO_TRITON_ROOT_DIR}/shared"
-  CACHE PATH "Root directory for Triton Shared build artifacts")
+if (NOT DEFINED DYNO_TRITON_ROOT_DIR)
+  set(DYNO_TRITON_ROOT_DIR "${DYNO_BINARY_DIR}/third_party/triton")
+endif()
 
-set(DYNO_TRITON_SHARED_BUILD_DIR
-  "${DYNO_TRITON_SHARED_ROOT_DIR}/build"
-  CACHE PATH "Path to the upstream Triton build directory used by Triton Shared")
+set(DYNO_TRITON_SHARED_ROOT_DIR "${DYNO_TRITON_ROOT_DIR}/shared")
 
-set(DYNO_TRITON_VENV_DIR
-  "${DYNO_TRITON_SHARED_ROOT_DIR}/venv"
-  CACHE PATH "Path to the Triton Python virtual environment")
+set(DYNO_TRITON_SHARED_BUILD_DIR "${DYNO_TRITON_SHARED_ROOT_DIR}/build")
 
-set(DYNO_TRITON_SHARED_OPT
-  "${DYNO_TRITON_SHARED_BUILD_DIR}/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt"
-  CACHE FILEPATH "Path to triton-shared-opt")
+set(DYNO_TRITON_VENV_DIR "${DYNO_TRITON_SHARED_ROOT_DIR}/venv")
 
-set(DYNO_TRITON_LLVM_BINARY_DIR
-  "${DYNO_TRITON_SHARED_ROOT_DIR}/llvm/bin"
-  CACHE PATH "Path to the LLVM bin directory used by Triton Shared")
+if (NOT DEFINED DYNO_TRITON_SHARED_OPT OR DYNO_TRITON_SHARED_OPT STREQUAL "")
+  set(DYNO_TRITON_SHARED_OPT
+    "${DYNO_TRITON_SHARED_BUILD_DIR}/third_party/triton_shared/tools/triton-shared-opt/triton-shared-opt")
+endif()
 
-set(DYNO_TRITON_CPU_ROOT_DIR
-  "${DYNO_TRITON_ROOT_DIR}/cpu"
-  CACHE PATH "Root directory for Triton CPU build artifacts")
+if (NOT DEFINED DYNO_TRITON_LLVM_BINARY_DIR OR DYNO_TRITON_LLVM_BINARY_DIR STREQUAL "")
+  set(DYNO_TRITON_LLVM_BINARY_DIR "${DYNO_TRITON_SHARED_ROOT_DIR}/llvm/bin")
+endif()
 
-set(DYNO_TRITON_CPU_BUILD_DIR
-  "${DYNO_TRITON_CPU_ROOT_DIR}/build"
-  CACHE PATH "Path to the Triton CPU build directory")
+set(DYNO_TRITON_CPU_ROOT_DIR "${DYNO_TRITON_ROOT_DIR}/cpu")
 
-set(DYNO_TRITON_CPU_OPT
-  "${DYNO_TRITON_CPU_BUILD_DIR}/bin/triton-opt"
-  CACHE FILEPATH "Path to triton-opt")
+set(DYNO_TRITON_CPU_BUILD_DIR "${DYNO_TRITON_CPU_ROOT_DIR}/build")
 
-set(DYNO_TRITON_CPU_LLVM_BINARY_DIR
-  "${DYNO_TRITON_CPU_ROOT_DIR}/llvm/bin"
-  CACHE PATH "Path to the LLVM bin directory used by Triton CPU")
+if (NOT DEFINED DYNO_TRITON_CPU_OPT OR DYNO_TRITON_CPU_OPT STREQUAL "")
+  set(DYNO_TRITON_CPU_OPT "${DYNO_TRITON_CPU_BUILD_DIR}/bin/triton-opt")
+endif()
+
+if (NOT DEFINED DYNO_TRITON_CPU_LLVM_BINARY_DIR OR DYNO_TRITON_CPU_LLVM_BINARY_DIR STREQUAL "")
+  set(DYNO_TRITON_CPU_LLVM_BINARY_DIR "${DYNO_TRITON_CPU_ROOT_DIR}/llvm/bin")
+endif()
+
+#-------------------------------------------------------------------------------
+# Default tool discovery
+#-------------------------------------------------------------------------------
 
 if (NOT DEFINED DYNO_TRITON_PYTHON_EXECUTABLE
     OR DYNO_TRITON_PYTHON_EXECUTABLE STREQUAL "")
@@ -62,12 +61,23 @@ if (NOT DEFINED DYNO_TRITON_PYTHON_EXECUTABLE
     find_program(_dyno_triton_python NAMES python3 python)
   endif()
 
-  set(DYNO_TRITON_PYTHON_EXECUTABLE
-    "${_dyno_triton_python}"
-    CACHE FILEPATH "Python executable used to generate Triton benchmark TTIR"
-    FORCE)
+  set(DYNO_TRITON_PYTHON_EXECUTABLE "${_dyno_triton_python}")
 endif()
 
+#-------------------------------------------------------------------------------
+# Public validation
+#-------------------------------------------------------------------------------
+
+# Validate that the optional Triton benchmark toolchain is present and usable.
+#
+# Checks:
+# - resolved host MLIR/LLVM tools from the shared kernel-build configuration
+# - upstream Triton, Triton CPU, and Triton Shared source checkouts
+# - the Python executable used to generate TTIR
+# - the Triton Shared and Triton CPU optimizer/translator binaries
+#
+# This function is called only when `ENABLE_TRITON_BENCHMARKS=ON` so the normal
+# build remains independent from the Triton setup.
 function(dyno_validate_triton_benchmarks)
   set(_missing)
 
@@ -139,6 +149,6 @@ function(dyno_validate_triton_benchmarks)
       "ENABLE_TRITON_BENCHMARKS=ON, but the Triton benchmark toolchain is not ready:\n"
       "  ${_formatted_missing}\n"
       "Run ${DYNO_SOURCE_DIR}/scripts/setup-triton.sh ${DYNO_BINARY_DIR}\n"
-      "or override the DYNO_TRITON_* cache entries.")
+      "or override the relevant DYNO_TRITON_* variables with -D.")
   endif()
 endfunction()

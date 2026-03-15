@@ -88,3 +88,46 @@ The Triton setup is split on purpose:
 
 This avoids having to patch any Triton source tree locally just to make the
 benchmarks compile.
+
+## Running Tests and Benchmarks
+
+### IR `lit` tests
+
+Run the compiler IR regression suite from the host build:
+
+```bash
+cmake --build build --target check-dyno
+```
+
+or use `ninja`
+
+```bash
+ninja -C build check-dyno
+```
+
+### Runtime regressions
+
+Run the runtime regression suite from the RISC-V build:
+
+```bash
+ctest --test-dir build-riscv -L runtime-regression --output-on-failure
+```
+
+Or use the convenience target:
+
+```bash
+cmake --build build-riscv --target check-dyno-runtime-regressions
+```
+
+### Benchmarks
+
+Benchmarks are built as executables under `build-riscv/benchmarks/...`. Run
+them directly, for example:
+
+```bash
+build-riscv/benchmarks/linalg/matmul/linalg-matmul-benchmark
+build-riscv/benchmarks/dyno/matmul/dyno-matmul-benchmark
+build-riscv/benchmarks/triton/matmul/triton-matmul-benchmark
+```
+
+`qemu-riscv64` may be required to run these benchmarks on a non-RISC-V machine.

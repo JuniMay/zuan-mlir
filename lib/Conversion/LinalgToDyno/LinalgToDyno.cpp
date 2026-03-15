@@ -77,8 +77,11 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
   }
 
   if (isa<arith::ConstantOp>(op)) {
-    // Just clone, not sure if it will be used as scalar in the future.
-    builder.clone(*op);
+    // TODO: verify if this is correct.
+    // Region-local constants must be remapped so later ops can reuse the
+    // cloned SSA value instead of looking up the original region value.
+    Operation *cloned = builder.clone(*op);
+    state.valueMap.map(op->getResults(), cloned->getResults());
     return success();
   }
 

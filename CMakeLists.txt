@@ -10,12 +10,8 @@ include(CTest)
 option(ENABLE_RISCV_GNU_TOOLCHAIN "Build the RISC-V GNU toolchain" OFF)
 option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
 option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
-option(ENABLE_DYNO_RUNTIME_REGRESSIONS
-       "Enable runtime regression targets under regression/"
-       OFF)
-option(DYNO_BENCHMARK_DUMP_IR
-       "Dump benchmark MLIR after every pass with -mlir-print-ir-after-all"
-       OFF)
+option(ENABLE_RUNTIME_REGRESSIONS "Enable regression testing" OFF)
+option(DYNO_BENCHMARK_DUMP_IR "Dump MLIR after each pass" OFF)
 
 #-------------------------------------------------------------------------------
 # Options and settings
@@ -63,13 +59,14 @@ include_directories(${DYNO_SOURCE_DIR}/runtime)
 
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
-
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(tools)
 if (BUILD_TESTING)
   add_subdirectory(test)
-  add_subdirectory(regression)
+  if (ENABLE_RUNTIME_REGRESSIONS)
+    add_subdirectory(regression)
+  endif()
 endif()
 
 #-------------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/TypeID.h"
+#include <string>
 namespace mlir {
 namespace dyno {
 
@@ -34,6 +35,14 @@ struct DynoStripminingPass
   Option<bool> scalable{*this, "scalable",
                         llvm::cl::desc("Use scalable vectors"),
                         llvm::cl::init(true)};
+  Option<std::string> fpPolicy{
+      *this, "fp-policy",
+      llvm::cl::desc("Floating-point reduction policy: strict, relaxed"),
+      llvm::cl::init("strict")};
+  Option<std::string> reductionMode{
+      *this, "reduction-mode",
+      llvm::cl::desc("1-D reduction lowering mode: auto, sequential, parallel"),
+      llvm::cl::init("auto")};
 };
 
 struct ConvertDynoToVPPass

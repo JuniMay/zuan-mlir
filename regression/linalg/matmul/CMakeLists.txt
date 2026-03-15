@@ -1,0 +1,10 @@
+add_linalg_runtime_regression(
+  NAME runtime-linalg-matmul
+  MLIR_FILE ${DYNO_SOURCE_DIR}/benchmarks/linalg/matmul/matmul.mlir
+  DRIVER ${CMAKE_CURRENT_SOURCE_DIR}/driver.cpp
+  DYNO_VF 16
+  DYNO_UF 2
+  DYNO_REDUCTION_MODE sequential
+  DYNO_FP_POLICY strict
+  EPSILON 0.0001
+)

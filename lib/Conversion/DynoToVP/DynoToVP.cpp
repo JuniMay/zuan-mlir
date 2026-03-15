@@ -14,19 +14,50 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/StringSwitch.h"
 
 namespace mlir {
 namespace dyno {
 
 namespace {
 
+enum class FloatingPointPolicy {
+  Strict,
+  Relaxed,
+};
+
+enum class ReductionModeKind {
+  Auto,
+  Sequential,
+  Parallel,
+};
+
+static std::optional<FloatingPointPolicy>
+parseFloatingPointPolicy(StringRef policy) {
+  return llvm::StringSwitch<std::optional<FloatingPointPolicy>>(policy)
+      .Case("strict", FloatingPointPolicy::Strict)
+      .Case("relaxed", FloatingPointPolicy::Relaxed)
+      .Default(std::nullopt);
+}
+
+static std::optional<ReductionModeKind> parseReductionModeKind(StringRef mode) {
+  return llvm::StringSwitch<std::optional<ReductionModeKind>>(mode)
+      .Case("auto", ReductionModeKind::Auto)
+      .Case("sequential", ReductionModeKind::Sequential)
+      .Case("parallel", ReductionModeKind::Parallel)
+      .Default(std::nullopt);
+}
+
 struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
   DynoStripminingReduction1DPattern(MLIRContext *context, unsigned vf,
-                                    bool scalable)
-      : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable) {}
+                                    bool scalable,
+                                    ReductionModeKind reductionMode,
+                                    FloatingPointPolicy fpPolicy)
+      : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable),
+        reductionMode(reductionMode), fpPolicy(fpPolicy) {}
 
-  static LogicalResult rewriteReduction(ReductionOp op, RewriterBase &rewriter,
-                                        unsigned vf, bool scalable) {
+  static LogicalResult isStripminableReduction(ReductionOp op,
+                                               RewriterBase &rewriter) {
     if (op->hasAttr("dyno.stripmined")) {
       return failure();
     }
@@ -44,6 +75,21 @@ struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
       if (isa<vp::GetVLOp>(value.getDefiningOp())) {
         return failure();
       }
+    }
+    return success();
+  }
+
+  static LogicalResult rewriteParallelReduction(ReductionOp op,
+                                                RewriterBase &rewriter,
+                                                unsigned vf, bool scalable) {
+    if (failed(isStripminableReduction(op, rewriter))) {
+      return failure();
+    }
+
+    auto tile = op.getTile();
+    auto dim = reifyDynoDim(rewriter, tile, 0);
+    if (failed(dim)) {
+      return failure();
     }
 
     auto loc = op.getLoc();
@@ -106,9 +152,20 @@ struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
     return success();
   }
 
+  static LogicalResult rewriteReduction(ReductionOp op, RewriterBase &rewriter,
+                                        unsigned vf, bool scalable,
+                                        ReductionModeKind reductionMode,
+                                        FloatingPointPolicy fpPolicy) {
+    (void)reductionMode;
+    (void)fpPolicy;
+    return rewriteParallelReduction(op, rewriter, vf, scalable);
+  }
+
   LogicalResult matchAndRewrite(ReductionOp op,
                                 PatternRewriter &rewriter) const final {
-    if (failed(rewriteReduction(op, rewriter, vf, scalable))) {
+    if (failed(
+            rewriteReduction(op, rewriter, vf, scalable, reductionMode,
+                             fpPolicy))) {
       return rewriter.notifyMatchFailure(op,
                                          "not a stripminable 1-D reduction");
     }
@@ -118,6 +175,8 @@ struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
 private:
   unsigned vf;
   bool scalable;
+  ReductionModeKind reductionMode;
+  FloatingPointPolicy fpPolicy;
 };
 
 static bool isEffectOnlyMaskRoot(MaskOp op) {
@@ -364,6 +423,7 @@ static LogicalResult convertSliceToVP(RootOp op, PatternRewriter &rewriter,
     return failure();
   }
   onSuccess(state);
+  slice.remove(op.getOperation());
   cleanupConvertedSlice(slice.getArrayRef(), rewriter);
   return success();
 }
@@ -530,6 +590,24 @@ private:
 } // namespace
 
 void DynoStripminingPass::runOnOperation() {
+  auto parsedReductionMode = parseReductionModeKind(reductionMode);
+  if (!parsedReductionMode) {
+    getOperation()->emitError()
+        << "unsupported dyno-stripmining reduction-mode `" << reductionMode
+        << "`; expected one of: auto, sequential, parallel";
+    signalPassFailure();
+    return;
+  }
+
+  auto parsedFpPolicy = parseFloatingPointPolicy(fpPolicy);
+  if (!parsedFpPolicy) {
+    getOperation()->emitError()
+        << "unsupported dyno-stripmining fp-policy `" << fpPolicy
+        << "`; expected one of: strict, relaxed";
+    signalPassFailure();
+    return;
+  }
+
   auto applyOuterNormalization = [&]() -> LogicalResult {
     RewritePatternSet outerNormalizationPatterns(&getContext());
     outerNormalizationPatterns
@@ -550,7 +628,8 @@ void DynoStripminingPass::runOnOperation() {
     }
     rewriter.setInsertionPoint(reductionOp);
     (void)DynoStripminingReduction1DPattern::rewriteReduction(
-        reductionOp, rewriter, vf, scalable);
+        reductionOp, rewriter, vf, scalable, *parsedReductionMode,
+        *parsedFpPolicy);
   }
 
   if (failed(applyOuterNormalization())) {

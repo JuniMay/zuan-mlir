@@ -1,0 +1,7 @@
+add_subdirectory(matmul)
+add_subdirectory(matmul-transpose-a)
+add_subdirectory(reduce-sequential)
+add_subdirectory(reduce-parallel)
+add_subdirectory(reduce-2d-ordered)
+add_subdirectory(reduce-2d-factorized)
+add_subdirectory(relu)

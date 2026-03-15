@@ -22,6 +22,9 @@ function(add_triton_benchmark benchmark_name python_args)
   set(triton_cpu_llvm ${generated_file_prefix}_cpu.ll)
   set(triton_cpu_obj ${generated_file_prefix}_cpu.o)
 
+  dyno_configure_ir_dump(_dyno_triton_dump_setup _dyno_triton_dump_args
+                         "${mlir_file}")
+
   add_custom_command(
     OUTPUT ${ttir_file} ${launcher_header}
     COMMAND ${CMAKE_COMMAND} -E env
@@ -42,6 +45,7 @@ function(add_triton_benchmark benchmark_name python_args)
 
   add_custom_command(
     OUTPUT ${mlir_file}
+    ${_dyno_triton_dump_setup}
     COMMAND ${DYNO_TRITON_SHARED_OPT}
       -triton-to-structured
       -cse
@@ -54,7 +58,7 @@ function(add_triton_benchmark benchmark_name python_args)
       -reconcile-unrealized-casts
       -cse
       -canonicalize
-      ${DYNO_BENCHMARK_DUMP_IR_FLAG}
+      ${_dyno_triton_dump_args}
       ${ttir_file}
       -o ${mlir_file}
     DEPENDS ${ttir_file}
@@ -74,7 +78,7 @@ function(add_triton_benchmark benchmark_name python_args)
   dyno_compile_llvm_ir_to_object(
     INPUT ${scalar_llvm}
     OUTPUT ${scalar_obj}
-    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
+    EXTRA_FLAGS -O2 -g
   )
 
   dyno_lower_dyno_mlir_to_llvm_ir(
@@ -94,7 +98,7 @@ function(add_triton_benchmark benchmark_name python_args)
   dyno_compile_llvm_ir_to_object(
     INPUT ${dyno_llvm}
     OUTPUT ${dyno_obj}
-    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
+    EXTRA_FLAGS -O2 -g
   )
 
   dyno_rewrite_mlir_kernel(
@@ -120,7 +124,7 @@ function(add_triton_benchmark benchmark_name python_args)
       -triton-cpu-convert-elem-manip-ops
       -triton-cpu-convert-dot-op
       -triton-cpu-convert-histogram-op
-      "-triton-cpu-convert-reduction=use-multidim-reduction-op=false\\;use-reduction-op=true"
+      "-triton-cpu-convert-reduction=use-multidim-reduction-op=false use-reduction-op=true"
       -triton-cpu-convert-scan
       -triton-cpu-convert-control-flow-op
       -triton-cpu-convert-atomic-ops
@@ -132,14 +136,14 @@ function(add_triton_benchmark benchmark_name python_args)
       -triton-cpu-optimize-masks
       -canonicalize
       -triton-cpu-convert-dot-generic
-      "-triton-cpu-add-casts-for-unsupported-ops=promote-bf16-to-fp32=false\\;convert-mixed-precision-matmul=true\\;promote-lib-math-to-fp32=true"
-      "-triton-cpu-decompose-fp-conversions=decompose-bf16-conversions=false\\;decompose-fp8-conversions=true"
+      "-triton-cpu-add-casts-for-unsupported-ops=promote-bf16-to-fp32=false convert-mixed-precision-matmul=true promote-lib-math-to-fp32=true"
+      "-triton-cpu-decompose-fp-conversions=decompose-bf16-conversions=false decompose-fp8-conversions=true"
       -cse
       -symbol-dce
       -canonicalize
       -triton-cpu-lower-multi-reduction
       -expand-strided-metadata
-      "-convert-vector-to-scf=full-unroll=true\\;target-rank=1\\;lower-tensors=false"
+      "-convert-vector-to-scf=full-unroll=true target-rank=1 lower-tensors=false"
       -lower-affine
       -convert-scf-to-cf
       -convert-index-to-llvm
@@ -179,7 +183,7 @@ function(add_triton_benchmark benchmark_name python_args)
   dyno_compile_llvm_ir_to_object(
     INPUT ${triton_cpu_llvm}
     OUTPUT ${triton_cpu_obj}
-    EXTRA_FLAGS -O2 -g ${CLANG_FLAGS_LIST}
+    EXTRA_FLAGS -O2 -g
     DEPENDS
       ${DYNO_TRITON_CPU_OPT}
       ${DYNO_TRITON_CPU_LLVM_BINARY_DIR}/mlir-translate

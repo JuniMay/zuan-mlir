@@ -1,3 +1,7 @@
+#-------------------------------------------------------------------------------
+# lit configuration
+#-------------------------------------------------------------------------------
+
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
   ${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg.py
@@ -10,6 +14,10 @@ set(DYNO_TEST_DEPENDS
   dyno-opt
   dyno-translate
 )
+
+#-------------------------------------------------------------------------------
+# lit targets
+#-------------------------------------------------------------------------------
 
 add_lit_testsuite(check-dyno "Running the dyno compiler regression tests"
   ${CMAKE_CURRENT_BINARY_DIR}
