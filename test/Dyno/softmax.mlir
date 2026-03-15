@@ -1,4 +1,8 @@
-// RUN: dyno-opt -lower-dyno='target-rank=2' -dyno-stripmining='vf=8 scalable=true reduction-mode=parallel fp-policy=relaxed' %s | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -lower-dyno='target-rank=2' \
+// RUN:   -dyno-stripmining='vf=8 scalable=true reduction-mode=parallel \
+// RUN:                     fp-policy=relaxed' \
+// RUN: | FileCheck %s
 
 // CHECK-LABEL: func.func @softmax
 func.func @softmax(%src: memref<?xf32>, %dst: memref<?xf32>) {

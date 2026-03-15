@@ -1,5 +1,15 @@
-// RUN: dyno-opt -resolve-dyno-dims %s | FileCheck %s --check-prefix=RESOLVE
-// RUN: dyno-opt -convert-dyno-to-vp='vf=8 scalable=true' %s | FileCheck %s --check-prefix=VP
+// RUN: dyno-opt %s \
+// RUN:   -resolve-dyno-dims \
+// RUN: | tee %t.resolve.mlir \
+// RUN: | FileCheck %s --check-prefix=RESOLVE \
+// RUN: && mv -f %t.resolve.mlir \
+// RUN:   $(dirname %t)/dim.resolve.mlir
+// RUN: dyno-opt %s \
+// RUN:   -convert-dyno-to-vp='vf=8 scalable=true' \
+// RUN: | tee %t.lowered.mlir \
+// RUN: | FileCheck %s --check-prefix=VP \
+// RUN: && mv -f %t.lowered.mlir \
+// RUN:   $(dirname %t)/dim.lowered.mlir
 
 // RESOLVE-LABEL: func.func @dim_static
 func.func @dim_static(%arg0: !dyno.tile<4x?xf32>) -> index {

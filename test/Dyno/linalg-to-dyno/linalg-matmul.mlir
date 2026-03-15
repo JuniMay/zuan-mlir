@@ -1,4 +1,9 @@
-// RUN: dyno-opt -convert-linalg-to-dyno %s | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -convert-linalg-to-dyno \
+// RUN: | tee %t.lowered.mlir \
+// RUN: | FileCheck %s \
+// RUN: && mv -f %t.lowered.mlir \
+// RUN:   $(dirname %t)/linalg-matmul.lowered.mlir
 
 // CHECK-LABEL: func.func @linalg_matmul
 func.func @linalg_matmul(%a: memref<?x?xf32>, %b: memref<?x?xf32>,

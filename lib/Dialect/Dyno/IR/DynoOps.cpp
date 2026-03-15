@@ -32,6 +32,7 @@
 #include <optional>
 
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/ReductionSemantics.h"
 #include "Dyno/Utils/ShapeInference.h"
 
 #define GET_OP_CLASSES
@@ -39,22 +40,6 @@
 
 namespace mlir {
 namespace dyno {
-
-static LogicalResult verifyDistinctInRangeDims(Operation *op, int64_t rank,
-                                               ArrayRef<int64_t> dims,
-                                               StringRef desc) {
-  llvm::SmallDenseSet<int64_t> seen;
-  for (int64_t dim : dims) {
-    if (dim < 0 || dim >= rank) {
-      return op->emitOpError()
-             << "expected " << desc << " to be in range [0, " << rank << ")";
-    }
-    if (!seen.insert(dim).second) {
-      return op->emitOpError() << "expected " << desc << " to be unique";
-    }
-  }
-  return success();
-}
 
 static LogicalResult verifyGatherScatterIndexShapes(Operation *op,
                                                     ValueRange indices,
@@ -359,15 +344,23 @@ LogicalResult ReductionOp::inferReturnTypes(MLIRContext *context,
 }
 
 LogicalResult ReductionOp::verify() {
-  if (failed(verifyDistinctInRangeDims((*this), getTile().getType().getRank(),
-                                       getDims(), "reduction dims"))) {
+  auto tileType = getTile().getType();
+  if (failed(verifyCanonicalReductionDims((*this), tileType.getRank(),
+                                          getDims()))) {
     return failure();
   }
+  if (!isReductionTypeSupported(getKind(), tileType.getElementType())) {
+    return emitOpError(
+        "expected the combiner to support the tile element type");
+  }
   if (auto init = getInit()) {
-    if (!TileType::isCompatible(init.getType(), getResult().getType())) {
+    if (init.getType() != getResult().getType()) {
       return emitOpError(
           "expected init tile type to match the reduction result type");
     }
+  } else if (!hasImplicitIdentity(getKind(), tileType.getElementType())) {
+    return emitOpError("expected an explicit init when the combiner has no "
+                       "implicit identity for the tile element type");
   }
   return success();
 }

@@ -12,9 +12,6 @@ option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
 option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
 option(ENABLE_RUNTIME_REGRESSIONS "Enable regression testing" OFF)
 option(DYNO_BENCHMARK_DUMP_IR "Dump MLIR after each pass" OFF)
-option(DYNO_ENABLE_EXPERIMENTAL_REDUCTION_EXECUTABLES
-       "Build executable targets that rely on the current temporary Dyno reduction lowering"
-       OFF)
 
 #-------------------------------------------------------------------------------
 # Options and settings

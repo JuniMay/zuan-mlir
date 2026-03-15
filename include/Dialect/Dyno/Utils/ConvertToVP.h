@@ -12,21 +12,14 @@ namespace dyno {
 struct VPShapePlan {
   enum class Kind {
     Scalar,
-    Vector1D,
-    RowPack2D,
-    DynamicOuterLoopAndVector
+    Vector1D
   };
 
   Kind kind = Kind::Scalar;
-  int64_t staticRows = 1;
-  Value dynamicRows = nullptr;
   Value evl = nullptr;
   unsigned rank = 0;
 
-  bool hasStaticRows() const { return dynamicRows == nullptr; }
-  bool hasVector() const {
-    return kind != Kind::Scalar;
-  }
+  bool hasVector() const { return kind == Kind::Vector1D; }
 };
 
 struct VPConversionState {

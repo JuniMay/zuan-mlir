@@ -14,11 +14,13 @@
 #include <cassert>
 #include <cstdint>
 
-#include "VP/IR/VP.h"
 #include "Dyno/IR/Dyno.h"
 #include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ConvertToVP.h"
+#include "Dyno/Utils/ReductionAttrs.h"
+#include "Dyno/Utils/ReductionSemantics.h"
 #include "Dyno/Utils/ShapeInference.h"
+#include "VP/IR/VP.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 
 #define DEBUG_TYPE "dyno-to-vp"
@@ -118,39 +120,10 @@ static FailureOr<VPShapePlan> planVPShape(OpBuilder &builder, Location loc,
     plan.evl = *evl;
     return plan;
   }
-  if (shape.size() == 2) {
-    if (auto rows = getConstantDynoIntValue(shape[0])) {
-      // A static outer dimension is represented as a row-pack in the current
-      // emitter. This is a legality classification, not a profitability model:
-      // cost control is expected to happen earlier via tiling and slicing.
-      auto evl = materializeDimValue(builder, loc, shape[1], state);
-      if (failed(evl)) {
-        return failure();
-      }
-      plan.kind = VPShapePlan::Kind::RowPack2D;
-      plan.staticRows = *rows;
-      plan.evl = *evl;
-      return plan;
-    }
-    auto dynamicRows = materializeDimValue(builder, loc, shape[0], state);
-    auto evl = materializeDimValue(builder, loc, shape[1], state);
-    if (failed(dynamicRows) || failed(evl)) {
-      return failure();
-    }
-    plan.kind = VPShapePlan::Kind::DynamicOuterLoopAndVector;
-    plan.dynamicRows = *dynamicRows;
-    plan.evl = *evl;
-    return plan;
-  }
   return failure();
 }
 
-static FailureOr<unsigned> getStaticRowCount(const VPShapePlan &plan) {
-  if (!plan.hasStaticRows()) {
-    return failure();
-  }
-  return static_cast<unsigned>(plan.staticRows);
-}
+static unsigned getComponentCount(const VPShapePlan &) { return 1; }
 
 static Value lookupTileComponent(Value value, unsigned rowIdx,
                                  VPConversionState &state) {
@@ -215,25 +188,16 @@ static LogicalResult handleLoad(OpBuilder &builder, Location loc, Value result,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
-    // The current VP emitter stores tiles as a statically-sized row vector list
-    // in `VPConversionState::tileMap`. A 2-D tile with a dynamic outer
-    // dimension must therefore be removed earlier by `-dyno-stripmining`
-    // and `DynoTilingPattern`, or lowered through the loop-based path instead
-    // of the VP path.
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
   auto rank = shape->size();
 
   SmallVector<Value> vectors;
   auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -331,20 +295,14 @@ static LogicalResult handleStoreOp(OpBuilder &builder, StoreOp storeOp,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
-    // See `handleLoad`: the current VP tile representation cannot materialize a
-    // runtime-sized row list.
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
   auto rank = shape->size();
 
   auto zero = arith::ConstantIndexOp::create(builder, loc, 0);
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -409,14 +367,10 @@ static LogicalResult handleSplatOp(OpBuilder &builder, SplatOp splatOp,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
   Value source = splatOp.getValue();
   bool sourceIsTile = isa<TileType>(source.getType());
   if (sourceIsTile) {
@@ -431,7 +385,7 @@ static LogicalResult handleSplatOp(OpBuilder &builder, SplatOp splatOp,
 
   SmallVector<Value> values;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -516,17 +470,13 @@ static LogicalResult handleElementwise(OpBuilder &builder, Operation *op,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   SmallVector<Value> resultValues;
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     SmallVector<Value> operands;
 
     for (auto operand : op->getOperands()) {
@@ -591,21 +541,17 @@ static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   auto lhsValues = state.tileMap[op->getOperand(0)];
   auto rhsValues = state.tileMap[op->getOperand(1)];
 
   SmallVector<Value> resultValues;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     Value lhs = lhsValues[i];
     Value rhs = rhsValues[i];
 
@@ -661,21 +607,17 @@ static LogicalResult handleCmpOp(OpBuilder &builder, CmpOp op,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   auto lhsValues = state.tileMap[op->getOperand(0)];
   auto rhsValues = state.tileMap[op->getOperand(1)];
 
   SmallVector<Value> resultValues;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     Value lhs = lhsValues[i];
     Value rhs = rhsValues[i];
 
@@ -720,10 +662,6 @@ static LogicalResult handleReductionOp(OpBuilder &builder,
   if (failed(plan)) {
     return failure();
   }
-  if (plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector ||
-      plan->kind == VPShapePlan::Kind::RowPack2D) {
-    return failure();
-  }
 
   auto maskPair = getMaskPair(state, 0);
   auto mask = maskPair.first;
@@ -736,6 +674,14 @@ static LogicalResult handleReductionOp(OpBuilder &builder,
       return failure();
     }
     init = lookupTileComponent(init, 0, state);
+  } else {
+    auto identity = buildReductionIdentity(
+        builder, loc, reductionOp.getKind(),
+        reductionOp.getTile().getType().getElementType());
+    if (failed(identity)) {
+      return failure();
+    }
+    init = *identity;
   }
 
   if (plan->kind == VPShapePlan::Kind::Scalar) {
@@ -757,9 +703,24 @@ static LogicalResult handleReductionOp(OpBuilder &builder,
     return success();
   }
 
+  bool isParallelReduction = reductionOp->hasAttr(kDynoParallelReductionAttr);
+  bool isSequentialReduction =
+      reductionOp->hasAttr(kDynoSequentialReductionAttr);
+  // Any other remaining vector Dyno reduction is a structural invariant
+  // violation: higher-rank ordered cases must have been expanded already.
+  if (!isParallelReduction && !isSequentialReduction) {
+    return failure();
+  }
+
   auto vector = lookupTileComponent(reductionOp.getTile(), 0, state);
+  arith::FastMathFlags fastMathFlags = arith::FastMathFlags::none;
+  if (isParallelReduction && reductionOp->hasAttr(kDynoParallelReassocAttr)) {
+    fastMathFlags = arith::FastMathFlags::reassoc;
+  }
+  // The sequential strip-mined path relies on LLVM's no-reassoc floating
+  // vector-reduction semantics, so leave fast-math unset in that case.
   auto reduction = vector::ReductionOp::create(builder, loc, kind, vector, init,
-                                               arith::FastMathFlags::reassoc);
+                                               fastMathFlags);
   auto predOp = vp::predicateOperation(builder, reduction, plan->evl, mask,
                                        nullptr, maskedoff);
   state.tileMap[reductionOp.getResult()] = {predOp->getResult(0)};
@@ -779,20 +740,16 @@ static LogicalResult handleStepOp(OpBuilder &builder, StepOp stepOp,
     return failure();
   }
   auto plan = planVPShape(builder, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   SmallVector<Value> values;
   auto elementType = stepOp.getResult().getType().getElementType();
   auto vectorType = getVectorType(elementType, state);
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -899,18 +856,14 @@ static LogicalResult handleCastOp(OpBuilder &b, CastOp castOp,
     return failure();
   }
   auto plan = planVPShape(b, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   SmallVector<Value> values;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     Value sourceRow = lookupTileComponent(source, i, state);
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
@@ -958,18 +911,14 @@ static LogicalResult handleSelectOp(OpBuilder &b, SelectOp selectOp,
     return failure();
   }
   auto plan = planVPShape(b, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   SmallVector<Value> values;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -1026,16 +975,12 @@ static LogicalResult handleScatterOp(OpBuilder &b, ScatterOp scatterOp,
     return failure();
   }
   auto plan = planVPShape(b, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -1091,18 +1036,14 @@ static LogicalResult handleGatherOp(OpBuilder &b, GatherOp gatherOp,
     return failure();
   }
   auto plan = planVPShape(b, loc, *shape, state);
-  if (failed(plan) ||
-      plan->kind == VPShapePlan::Kind::DynamicOuterLoopAndVector) {
+  if (failed(plan)) {
     return failure();
   }
-  auto rows = getStaticRowCount(*plan);
-  if (failed(rows)) {
-    return failure();
-  }
+  unsigned rows = getComponentCount(*plan);
 
   SmallVector<Value> values;
 
-  for (unsigned i = 0; i < *rows; ++i) {
+  for (unsigned i = 0; i < rows; ++i) {
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;

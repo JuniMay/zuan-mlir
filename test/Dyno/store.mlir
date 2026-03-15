@@ -1,4 +1,7 @@
-// RUN: dyno-opt %s -lower-dyno='target-rank=2' -dyno-stripmining="vf=8 scalable=true" | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -lower-dyno='target-rank=2' \
+// RUN:   -dyno-stripmining="vf=8 scalable=true" \
+// RUN: | FileCheck %s
 
 // CHECK-LABEL: func.func @store
 func.func @store(%from0: memref<?x?x?xf32>, %from1: memref<?x?x?x?xf32>,

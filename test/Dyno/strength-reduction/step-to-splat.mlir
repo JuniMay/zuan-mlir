@@ -1,4 +1,9 @@
-// RUN: dyno-opt -dyno-strength-reduction %s | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -dyno-strength-reduction \
+// RUN: | tee %t.lowered.mlir \
+// RUN: | FileCheck %s \
+// RUN: && mv -f %t.lowered.mlir \
+// RUN:   $(dirname %t)/step-to-splat.lowered.mlir
 
 // CHECK-LABEL: func.func @stepunit
 func.func @stepunit(%arg0: index, %size: index, %arg3: memref<1x?xindex>) {

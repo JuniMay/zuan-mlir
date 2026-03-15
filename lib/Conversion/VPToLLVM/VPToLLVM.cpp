@@ -35,6 +35,7 @@
 #include <optional>
 
 #include "Conversion/VPToLLVM.h"
+#include "Dyno/Utils/ReductionSemantics.h"
 #include "VP/IR/VP.h"
 
 using namespace mlir;
@@ -426,7 +427,15 @@ public:
           if (acc) {
             acc = materializeOperand(rewriter, typeConverter, acc);
           } else {
-            acc = LLVM::ZeroOp::create(rewriter, loc, targetResType);
+            auto identity = dyno::buildReductionIdentity(
+                rewriter, loc, static_cast<dyno::CombiningKind>(redOp.getKind()),
+                redOp.getResult().getType());
+            if (failed(identity)) {
+              loweredOp =
+                  rewriter.notifyMatchFailure(op, "missing reduction identity");
+              return;
+            }
+            acc = materializeOperand(rewriter, typeConverter, *identity);
           }
           if (!mask) {
             mask = buildAllTrueMask(rewriter, loc, redOp.getSourceVectorType());
@@ -482,7 +491,9 @@ public:
             intrName = "llvm.vp.reduce.umin";
             break;
           }
-          // Propaget fastmath flags.
+          // Preserve the source fast-math contract exactly: the sequential
+          // strip-mined Dyno path depends on the absence of `reassoc` here so
+          // `llvm.vp.reduce.fadd` / `fmul` keep LLVM's ordered semantics.
           auto llvmFmf = mlir::arith::convertArithFastMathAttrToLLVM(
               redOp.getFastmathAttr());
 

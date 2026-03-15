@@ -16,9 +16,25 @@ func.func @reduction_out_of_range(%arg0: !dyno.tile<?x?xf32>) {
 
 // -----
 
+func.func @reduction_non_canonical_dims(%arg0: !dyno.tile<?x?xf32>) {
+  // expected-error@+1 {{expected reduction dims to be in canonical ascending order}}
+  %0 = dyno.reduction <add> %arg0 [1, 0] : !dyno.tile<?x?xf32>
+  return
+}
+
+// -----
+
 func.func @reduction_bad_init(%arg0: !dyno.tile<?xf32>, %init: !dyno.tile<?xf32>) {
   // expected-error@+1 {{'dyno.reduction' op failed to verify that result and the init have the same type}}
   %0 = dyno.reduction <add> %arg0 [0], %init : !dyno.tile<?xf32>, !dyno.tile<?xf32>
+  return
+}
+
+// -----
+
+func.func @reduction_unsupported_combiner_type(%arg0: !dyno.tile<?xf32>) {
+  // expected-error@+1 {{expected the combiner to support the tile element type}}
+  %0 = dyno.reduction <and> %arg0 [0] : !dyno.tile<?xf32>
   return
 }
 

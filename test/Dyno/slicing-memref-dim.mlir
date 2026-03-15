@@ -1,4 +1,9 @@
-// RUN: dyno-opt -lower-dyno='target-rank=1' %s | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -lower-dyno='target-rank=1' \
+// RUN: | tee %t.lowered.mlir \
+// RUN: | FileCheck %s \
+// RUN: && mv -f %t.lowered.mlir \
+// RUN:   $(dirname %t)/slicing-memref-dim.lowered.mlir
 
 // CHECK-LABEL: func.func @scalar_expr_uses_sliced_dims
 func.func @scalar_expr_uses_sliced_dims(%dst: memref<?x?xindex>) {

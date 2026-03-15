@@ -1,4 +1,9 @@
-// RUN: dyno-opt -lower-dyno='target-rank=2' %s | FileCheck %s
+// RUN: dyno-opt %s \
+// RUN:   -lower-dyno='target-rank=2' \
+// RUN: | tee %t.lowered.mlir \
+// RUN: | FileCheck %s \
+// RUN: && mv -f %t.lowered.mlir \
+// RUN:   $(dirname %t)/matmul.lowered.mlir
 
 // CHECK-LABEL: func.func @matmul_style
 func.func @matmul_style(%a: memref<?x?xf32>, %b: memref<?x?xf32>,

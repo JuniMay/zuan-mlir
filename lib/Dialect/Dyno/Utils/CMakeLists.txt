@@ -3,6 +3,7 @@ add_mlir_library(
 
   Builders.cpp
   ConvertToVP.cpp
+  ReductionSemantics.cpp
   ShapeInference.cpp
   Slicing.cpp
 )

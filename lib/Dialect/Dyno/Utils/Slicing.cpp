@@ -249,6 +249,14 @@ static FailureOr<Operation *> sliceSCFForOp(OpBuilder &builder, scf::ForOp forOp
 
   auto newForOp =
       scf::ForOp::create(builder, forOp.getLoc(), *lb, *ub, *step, newInits);
+  if (!newForOp.getBody()->mightHaveTerminator() ||
+      newForOp.getBody()->empty()) {
+    // Keep the fresh loop body structurally valid before querying its
+    // terminator below.
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(newForOp.getBody());
+    scf::YieldOp::create(builder, forOp.getLoc(), ValueRange{});
+  }
 
   SliceState bodyState;
   bodyState.valueMap = IRMapping(state.valueMap);
@@ -270,8 +278,10 @@ static FailureOr<Operation *> sliceSCFForOp(OpBuilder &builder, scf::ForOp forOp
     }
     newYields.push_back(*mapped);
   }
-  oldYield->erase();
+  // Materialize the replacement yield before erasing the placeholder so the
+  // loop body never transiently lacks an SCF terminator.
   scf::YieldOp::create(builder, forOp.getLoc(), newYields);
+  oldYield->erase();
   return mapResults(forOp, newForOp, state);
 }
 

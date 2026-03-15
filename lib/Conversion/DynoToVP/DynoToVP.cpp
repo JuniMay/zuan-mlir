@@ -1,11 +1,12 @@
 #include "Conversion/DynoToVP.h"
-
-#include "VP/IR/VP.h"
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/ReductionAttrs.h"
 #include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ConvertToVP.h"
+#include "Dyno/Utils/ReductionSemantics.h"
 #include "Dyno/Utils/ShapeInference.h"
 #include "Dyno/Utils/Slicing.h"
+#include "VP/IR/VP.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -21,17 +22,6 @@ namespace mlir {
 namespace dyno {
 
 namespace {
-
-enum class FloatingPointPolicy {
-  Strict,
-  Relaxed,
-};
-
-enum class ReductionModeKind {
-  Auto,
-  Sequential,
-  Parallel,
-};
 
 static std::optional<FloatingPointPolicy>
 parseFloatingPointPolicy(StringRef policy) {
@@ -49,151 +39,458 @@ static std::optional<ReductionModeKind> parseReductionModeKind(StringRef mode) {
       .Default(std::nullopt);
 }
 
-struct DynoStripminingReduction1DPattern : OpRewritePattern<ReductionOp> {
-  DynoStripminingReduction1DPattern(MLIRContext *context, unsigned vf,
-                                    bool scalable,
-                                    ReductionModeKind reductionMode,
-                                    FloatingPointPolicy fpPolicy)
-      : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable),
-        reductionMode(reductionMode), fpPolicy(fpPolicy) {}
+// Only relaxed floating add/mul may carry the reassociation marker on the
+// final register reduction emitted by the parallel strip-mined path.
+static bool usesRelaxedParallelReassociation(CombiningKind kind,
+                                             Type elementType) {
+  if (!isa<FloatType>(elementType)) {
+    return false;
+  }
+  return kind == CombiningKind::ADD || kind == CombiningKind::MUL;
+}
 
-  static LogicalResult isStripminableReduction(ReductionOp op,
+// Build the carried reduction init as a tile-shaped value, materializing the
+// implicit identity when the source op omits an explicit init.
+static FailureOr<Value> buildReductionInitTile(OpBuilder &builder,
+                                               ReductionOp op) {
+  if (Value init = op.getInit()) {
+    return init;
+  }
+
+  auto identity =
+      buildReductionIdentity(builder, op.getLoc(), op.getKind(),
+                             op.getResult().getType().getElementType());
+  if (failed(identity)) {
+    return failure();
+  }
+
+  auto resultShape = reifyDynoShape(builder, op.getResult());
+  if (failed(resultShape)) {
+    return failure();
+  }
+  return Value(dyno::SplatOp::create(builder, op.getLoc(), *identity,
+                                     ArrayRef<OpFoldResult>(*resultShape)));
+}
+
+// Slice one lexicographic reduction coordinate out of the source tile and
+// rank-reduce the reduced dimensions to scalars.
+static FailureOr<Value> sliceReductionCoordinate(OpBuilder &builder,
+                                                 ReductionOp op,
+                                                 ArrayRef<int64_t> reducedDims,
+                                                 ValueRange coordinates) {
+  auto sourceShape = reifyDynoShape(builder, op.getTile());
+  if (failed(sourceShape) || reducedDims.size() != coordinates.size()) {
+    return failure();
+  }
+
+  SliceSpec spec;
+  spec.offsets.reserve(sourceShape->size());
+  spec.sizes.reserve(sourceShape->size());
+  spec.droppedDims.reserve(sourceShape->size());
+
+  unsigned reducedIndex = 0;
+  for (auto [sourceDim, dimSize] : llvm::enumerate(*sourceShape)) {
+    if (reducedIndex < reducedDims.size() &&
+        static_cast<int64_t>(sourceDim) == reducedDims[reducedIndex]) {
+      spec.offsets.push_back(coordinates[reducedIndex]);
+      spec.sizes.push_back(builder.getIndexAttr(1));
+      spec.droppedDims.push_back(true);
+      ++reducedIndex;
+      continue;
+    }
+    spec.offsets.push_back(builder.getIndexAttr(0));
+    spec.sizes.push_back(dimSize);
+    spec.droppedDims.push_back(false);
+  }
+
+  SliceState state;
+  state.initialize(op);
+  return sliceValue(builder, op.getTile(), spec, state);
+}
+
+// Materialize the exact lexicographic traversal required for ordered
+// higher-dimensional reductions.
+static FailureOr<Value> buildOrderedReductionTraversal(
+    RewriterBase &rewriter, ReductionOp op, ArrayRef<int64_t> reducedDims,
+    unsigned depth, SmallVectorImpl<Value> &coordinates, Value initAcc) {
+  auto loc = op.getLoc();
+  if (depth == reducedDims.size()) {
+    auto frontier =
+        sliceReductionCoordinate(rewriter, op, reducedDims, coordinates);
+    if (failed(frontier)) {
+      return failure();
+    }
+    return createCombiningOp(rewriter, loc, op.getKind(), initAcc, *frontier);
+  }
+
+  auto sourceShape = reifyDynoShape(rewriter, op.getTile());
+  if (failed(sourceShape)) {
+    return failure();
+  }
+
+  Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+  Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
+  Value upper =
+      getOrCreateIndexValue(rewriter, (*sourceShape)[reducedDims[depth]], loc);
+  auto loop =
+      scf::ForOp::create(rewriter, loc, zero, upper, one, ValueRange{initAcc});
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(loop.getBody());
+    coordinates.push_back(loop.getInductionVar());
+    auto nested = buildOrderedReductionTraversal(
+        rewriter, op, reducedDims, depth + 1, coordinates,
+        loop.getRegionIterArgs().front());
+    coordinates.pop_back();
+    if (failed(nested)) {
+      rewriter.eraseOp(loop);
+      return failure();
+    }
+    scf::YieldOp::create(rewriter, loc, *nested);
+  }
+  return loop.getResult(0);
+}
+
+// Rewrite a reduction into the explicit ordered traversal form from the
+// formalism, preserving one carried accumulator through the whole traversal.
+static LogicalResult rewriteOrderedReduction(ReductionOp op,
+                                             RewriterBase &rewriter) {
+  auto init = buildReductionInitTile(rewriter, op);
+  if (failed(init)) {
+    return failure();
+  }
+
+  SmallVector<Value> coordinates;
+  auto reduced = buildOrderedReductionTraversal(rewriter, op, op.getDims(), 0,
+                                                coordinates, *init);
+  if (failed(reduced)) {
+    return failure();
+  }
+  rewriter.replaceOp(op, *reduced);
+  return success();
+}
+
+// Restrict strip-mining to unprocessed rank-1 reductions over source dim 0 so
+// the VP boundary only sees the normalized 1-D forms.
+static LogicalResult isRank1StripmineCandidate(ReductionOp op,
                                                RewriterBase &rewriter) {
-    if (op->hasAttr("dyno.stripmined")) {
-      return failure();
-    }
-    auto tile = op.getTile();
-    if (op.getDims().size() != 1 || op.getDims()[0] != 0 ||
-        tile.getType().getRank() != 1) {
-      return failure();
-    }
-
-    auto dim = reifyDynoDim(rewriter, tile, 0);
-    if (failed(dim)) {
-      return failure();
-    }
-    if (auto value = dim->dyn_cast<Value>()) {
-      if (isa<vp::GetVLOp>(value.getDefiningOp())) {
-        return failure();
-      }
-    }
-    return success();
+  if (op->hasAttr(kDynoStripminedAttr) ||
+      op->hasAttr(kDynoParallelReductionAttr)) {
+    return failure();
+  }
+  auto tile = op.getTile();
+  if (op.getDims().size() != 1 || op.getDims().front() != 0 ||
+      tile.getType().getRank() != 1) {
+    return failure();
   }
 
-  static LogicalResult rewriteParallelReduction(ReductionOp op,
-                                                RewriterBase &rewriter,
-                                                unsigned vf, bool scalable) {
-    if (failed(isStripminableReduction(op, rewriter))) {
+  auto dim = reifyDynoDim(rewriter, tile, 0);
+  if (failed(dim)) {
+    return failure();
+  }
+  if (auto value = dim->dyn_cast<Value>()) {
+    if (isa<vp::GetVLOp>(value.getDefiningOp())) {
+      return failure();
+    }
+  }
+  return success();
+}
+
+// Emit the formal parallel strip-mined reduction: lane-wise vector
+// accumulation, masked tail preservation, and one final register reduction.
+static LogicalResult
+rewriteParallelRank1Reduction(ReductionOp op, RewriterBase &rewriter,
+                              unsigned vf, bool scalable,
+                              FloatingPointPolicy fpPolicy) {
+  if (failed(isRank1StripmineCandidate(op, rewriter))) {
+    return failure();
+  }
+
+  auto identity =
+      buildReductionIdentity(rewriter, op.getLoc(), op.getKind(),
+                             op.getTile().getType().getElementType());
+  if (failed(identity)) {
+    return failure();
+  }
+
+  auto tile = op.getTile();
+  auto dim = reifyDynoDim(rewriter, tile, 0);
+  if (failed(dim)) {
+    return failure();
+  }
+
+  auto loc = op.getLoc();
+  Type elementType = tile.getType().getElementType();
+  Value dimValue = getOrCreateIndexValue(rewriter, *dim, loc);
+  Value vlmax =
+      vp::GetVLOp::create(rewriter, loc, dimValue, vf, elementType, scalable);
+
+  Value zeroIdx = arith::ConstantIndexOp::create(rewriter, loc, 0);
+  Value initAcc = dyno::SplatOp::create(rewriter, loc, *identity,
+                                        SmallVector<OpFoldResult>{vlmax});
+
+  SmallVector<Value> inits = {dimValue, zeroIdx, initAcc};
+  SmallVector<Type> resultTypes = {dimValue.getType(), zeroIdx.getType(),
+                                   initAcc.getType()};
+  auto whileOp = scf::WhileOp::create(
+      rewriter, loc, resultTypes, inits,
+      [&](OpBuilder &, Location, ValueRange) {},
+      [&](OpBuilder &, Location, ValueRange) {});
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getBeforeBody());
+    Value avl = whileOp.getBeforeArguments()[0];
+    Value cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                                       avl, zeroIdx);
+    scf::ConditionOp::create(rewriter, loc, cond, whileOp.getBeforeArguments());
+  }
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getAfterBody());
+    Value avl = whileOp.getAfterArguments()[0];
+    Value idx = whileOp.getAfterArguments()[1];
+    Value acc = whileOp.getAfterArguments()[2];
+
+    Value vl =
+        vp::GetVLOp::create(rewriter, loc, avl, vf, elementType, scalable);
+    auto spec = SliceSpec::getSingleDimSlice(rewriter, tile, 0, idx, vl,
+                                             /*dropUnitDim=*/false);
+    if (failed(spec)) {
+      rewriter.eraseOp(whileOp);
       return failure();
     }
 
-    auto tile = op.getTile();
-    auto dim = reifyDynoDim(rewriter, tile, 0);
-    if (failed(dim)) {
+    SliceState state;
+    state.initialize(op);
+    auto chunk = sliceValue(rewriter, tile, *spec, state);
+    if (failed(chunk)) {
+      rewriter.eraseOp(whileOp);
       return failure();
     }
 
-    auto loc = op.getLoc();
-    Type type = tile.getType().getElementType();
-    Value dimValue = getOrCreateIndexValue(rewriter, *dim, loc);
-    Value vlmax =
-        vp::GetVLOp::create(rewriter, loc, dimValue, vf, type, scalable);
+    // TODO: Investigate if mask is really necessary here or if the VP lowering
+    // eliminates it. The problem is that for Dyno dialect, the elementwise ops
+    // enforces same shaped operands. An old solution was using
+    // `passthru-operand` as a marker attribute to annotate which operand can be
+    // "longer" (is the accumulator). But this is a quite ad-hoc solution, and
+    // should be treated carefully. Mask here is definitely a performance issue.
+    Value laneIndices = dyno::StepOp::create(rewriter, loc, zeroIdx, 0,
+                                             SmallVector<OpFoldResult>{vlmax});
+    Value activeVL = dyno::SplatOp::create(rewriter, loc, vl,
+                                           SmallVector<OpFoldResult>{vlmax});
+    Value activeMask = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ult, laneIndices, activeVL);
+    auto maskedAcc = dyno::MaskOp::create(
+        rewriter, loc, TypeRange{acc.getType()}, activeMask,
+        [&](OpBuilder &b, Location bodyLoc) {
+          Value combined =
+              createCombiningOp(b, bodyLoc, op.getKind(), acc, *chunk);
+          dyno::MaskYieldOp::create(b, bodyLoc, ValueRange{combined});
+        },
+        acc);
+    Value newAcc = maskedAcc.getResult(0);
 
-    Value zeroIdx = arith::ConstantIndexOp::create(rewriter, loc, 0);
-    Value zeroElem = arith::ConstantOp::create(rewriter, loc, type,
-                                               rewriter.getZeroAttr(type));
-    Value initAcc = dyno::SplatOp::create(rewriter, loc, zeroElem,
-                                          SmallVector<OpFoldResult>{vlmax});
-
-    SmallVector<Value> inits = {dimValue, zeroIdx, initAcc};
-    SmallVector<Type> resultTypes = {dimValue.getType(), zeroIdx.getType(),
-                                     initAcc.getType()};
-
-    auto whileOp = scf::WhileOp::create(
-        rewriter, loc, resultTypes, inits,
-        [&](OpBuilder &, Location, ValueRange) {},
-        [&](OpBuilder &, Location, ValueRange) {});
-    {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(whileOp.getBeforeBody());
-      Value avl = whileOp.getBeforeArguments()[0];
-      Value cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
-                                         avl, zeroIdx);
-      scf::ConditionOp::create(rewriter, loc, cond,
-                               whileOp.getBeforeArguments());
-    }
-    {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(whileOp.getAfterBody());
-      Value avl = whileOp.getAfterArguments()[0];
-      Value idx = whileOp.getAfterArguments()[1];
-      Value acc = whileOp.getAfterArguments()[2];
-
-      Value vl = vp::GetVLOp::create(rewriter, loc, avl, vf, type, scalable);
-      auto spec = SliceSpec::getSingleDimSlice(rewriter, tile, 0, idx, vl,
-                                               /*dropUnitDim=*/false);
-      if (failed(spec)) {
-        rewriter.eraseOp(whileOp);
-        return failure();
-      }
-
-      SliceState state;
-      state.initialize(op);
-      auto newSourceTile = sliceValue(rewriter, tile, *spec, state);
-      if (failed(newSourceTile)) {
-        rewriter.eraseOp(whileOp);
-        return failure();
-      }
-      Value newAcc =
-          createCombiningOp(rewriter, loc, op.getKind(), acc, *newSourceTile);
-      if (auto *newAccOp = newAcc.getDefiningOp()) {
-        newAccOp->setAttr("dyno_passthru_operand", rewriter.getIndexAttr(0));
-      }
-
-      Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
-      Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
-      scf::YieldOp::create(rewriter, loc, ValueRange{newAvl, newIdx, newAcc});
-    }
-
-    Value init = op.getInit();
-    if (init) {
-      SliceState state;
-      state.initialize(op);
-      auto mappedInit = cloneOrReuseValue(rewriter, init, state);
-      if (failed(mappedInit)) {
-        rewriter.eraseOp(whileOp);
-        return failure();
-      }
-      init = *mappedInit;
-    }
-
-    Value finalRed = dyno::ReductionOp::create(
-        rewriter, loc, op.getKind(), whileOp->getResult(2), op.getDims(), init);
-    finalRed.getDefiningOp()->setAttr("dyno.stripmined",
-                                      rewriter.getUnitAttr());
-    rewriter.replaceOp(op, finalRed);
-    return success();
+    Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
+    Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
+    scf::YieldOp::create(rewriter, loc, ValueRange{newAvl, newIdx, newAcc});
   }
 
-  static LogicalResult rewriteReduction(ReductionOp op, RewriterBase &rewriter,
-                                        unsigned vf, bool scalable,
-                                        ReductionModeKind reductionMode,
-                                        FloatingPointPolicy fpPolicy) {
-    // TODO: This pass still uses the temporary compatibility rewrite for
-    // stripminable 1-D reductions. The exact reduction-mode/fp-policy
-    // semantics remain owned by the future reduction task.
-    (void)reductionMode;
-    (void)fpPolicy;
-    return rewriteParallelReduction(op, rewriter, vf, scalable);
+  Value finalReduction = dyno::ReductionOp::create(rewriter, loc, op.getKind(),
+                                                   whileOp->getResult(2),
+                                                   op.getDims(), op.getInit());
+  auto *finalReductionOp = finalReduction.getDefiningOp();
+  finalReductionOp->setAttr(kDynoStripminedAttr, rewriter.getUnitAttr());
+  finalReductionOp->setAttr(kDynoParallelReductionAttr, rewriter.getUnitAttr());
+  if (fpPolicy == FloatingPointPolicy::Relaxed &&
+      usesRelaxedParallelReassociation(op.getKind(), elementType)) {
+    finalReductionOp->setAttr(kDynoParallelReassocAttr, rewriter.getUnitAttr());
   }
+  rewriter.replaceOp(op, finalReduction);
+  return success();
+}
+
+// Emit the exact ordered rank-1 strip-mined reduction: source-order chunking
+// with one chunk-local ordered reduction and no final register reduction.
+static LogicalResult rewriteSequentialRank1Reduction(ReductionOp op,
+                                                     RewriterBase &rewriter,
+                                                     unsigned vf,
+                                                     bool scalable) {
+  if (failed(isRank1StripmineCandidate(op, rewriter))) {
+    return failure();
+  }
+
+  auto loc = op.getLoc();
+  Type elementType = op.getTile().getType().getElementType();
+  auto dim = reifyDynoDim(rewriter, op.getTile(), 0);
+  if (failed(dim)) {
+    return failure();
+  }
+
+  auto initTile = buildReductionInitTile(rewriter, op);
+  if (failed(initTile)) {
+    return failure();
+  }
+
+  Value dimValue = getOrCreateIndexValue(rewriter, *dim, loc);
+  Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
+
+  SmallVector<Value> inits = {dimValue, zero, *initTile};
+  SmallVector<Type> resultTypes = {dimValue.getType(), zero.getType(),
+                                   initTile->getType()};
+  auto whileOp = scf::WhileOp::create(
+      rewriter, loc, resultTypes, inits,
+      [&](OpBuilder &, Location, ValueRange) {},
+      [&](OpBuilder &, Location, ValueRange) {});
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getBeforeBody());
+    Value avl = whileOp.getBeforeArguments()[0];
+    Value cond = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt,
+                                       avl, zero);
+    scf::ConditionOp::create(rewriter, loc, cond, whileOp.getBeforeArguments());
+  }
+  {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(whileOp.getAfterBody());
+    Value avl = whileOp.getAfterArguments()[0];
+    Value idx = whileOp.getAfterArguments()[1];
+    Value acc = whileOp.getAfterArguments()[2];
+    Value vl =
+        vp::GetVLOp::create(rewriter, loc, avl, vf, elementType, scalable);
+
+    auto chunkSpec = SliceSpec::getSingleDimSlice(rewriter, op.getTile(), 0,
+                                                  idx, vl,
+                                                  /*dropUnitDim=*/false);
+    if (failed(chunkSpec)) {
+      rewriter.eraseOp(whileOp);
+      return failure();
+    }
+
+    SliceState state;
+    state.initialize(op);
+    auto chunk = sliceValue(rewriter, op.getTile(), *chunkSpec, state);
+    if (failed(chunk)) {
+      rewriter.eraseOp(whileOp);
+      return failure();
+    }
+
+    // Keep each chunk as an ordered 1-D reduction so the VP boundary can lower
+    // it to an ordered vector reduction without lane scalarization here.
+    Value newAcc =
+        dyno::ReductionOp::create(rewriter, loc, op.getKind(), *chunk,
+                                  op.getDims(), acc);
+    auto *newAccOp = newAcc.getDefiningOp();
+    newAccOp->setAttr(kDynoStripminedAttr, rewriter.getUnitAttr());
+    newAccOp->setAttr(kDynoSequentialReductionAttr, rewriter.getUnitAttr());
+
+    Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
+    Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
+    scf::YieldOp::create(rewriter, loc, ValueRange{newAvl, newIdx, newAcc});
+  }
+
+  rewriter.replaceOp(op, whileOp.getResult(2));
+  return success();
+}
+
+// Normalize higher-dimensional reductions before VP preparation: admissible
+// cases factorize, non-admissible ones become explicit ordered traversal.
+struct NormalizeHigherDimReductionPattern : OpRewritePattern<ReductionOp> {
+  NormalizeHigherDimReductionPattern(MLIRContext *context,
+                                     FloatingPointPolicy fpPolicy)
+      : OpRewritePattern<ReductionOp>(context, 4), fpPolicy(fpPolicy) {}
 
   LogicalResult matchAndRewrite(ReductionOp op,
                                 PatternRewriter &rewriter) const final {
-    if (failed(
-            rewriteReduction(op, rewriter, vf, scalable, reductionMode,
-                             fpPolicy))) {
+    if (op.getDims().size() <= 1 || op->hasAttr(kDynoStripminedAttr)) {
       return rewriter.notifyMatchFailure(op,
-                                         "not a stripminable 1-D reduction");
+                                         "not a higher-dimensional reduction");
+    }
+
+    auto elementType = op.getTile().getType().getElementType();
+    if (!isFactorizationAdmissible(op.getKind(), elementType, fpPolicy)) {
+      if (failed(rewriteOrderedReduction(op, rewriter))) {
+        return rewriter.notifyMatchFailure(op,
+                                           "failed ordered reduction lowering");
+      }
+      return success();
+    }
+
+    SmallVector<int64_t> reducedSourceDims;
+    reducedSourceDims.reserve(op.getDims().size());
+    Value current = op.getTile();
+    for (auto it = op.getDims().rbegin(); it != op.getDims().rend(); ++it) {
+      int64_t sourceDim = *it;
+      unsigned currentDim =
+          mapSourceDimToCurrentReductionDim(sourceDim, reducedSourceDims);
+      Value init = sourceDim == op.getDims().front() ? op.getInit() : Value();
+      current = dyno::ReductionOp::create(
+          rewriter, op.getLoc(), op.getKind(), current,
+          ArrayRef<int64_t>{static_cast<int64_t>(currentDim)}, init);
+      reducedSourceDims.push_back(sourceDim);
+    }
+    rewriter.replaceOp(op, current);
+    return success();
+  }
+
+private:
+  FloatingPointPolicy fpPolicy;
+};
+
+// Any higher-rank reduction that survives normalization must stay in explicit
+// ordered loop form rather than reaching the VP conversion boundary directly.
+struct LowerHigherRankReductionPattern : OpRewritePattern<ReductionOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ReductionOp op,
+                                PatternRewriter &rewriter) const final {
+    if (op->hasAttr(kDynoStripminedAttr) || op.getDims().size() != 1 ||
+        op.getTile().getType().getRank() <= 1) {
+      return rewriter.notifyMatchFailure(
+          op, "not a non-scalar single-dimension reduction");
+    }
+    if (failed(rewriteOrderedReduction(op, rewriter))) {
+      return rewriter.notifyMatchFailure(
+          op, "failed higher-rank reduction lowering");
+    }
+    return success();
+  }
+};
+
+// Select between the explicit parallel and sequential rank-1 lowering modes
+// after consulting the centralized legality helpers.
+struct LowerRank1ReductionPattern : OpRewritePattern<ReductionOp> {
+  LowerRank1ReductionPattern(MLIRContext *context, unsigned vf, bool scalable,
+                             ReductionModeKind reductionMode,
+                             FloatingPointPolicy fpPolicy)
+      : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable),
+        reductionMode(reductionMode), fpPolicy(fpPolicy) {}
+
+  LogicalResult matchAndRewrite(ReductionOp op,
+                                PatternRewriter &rewriter) const final {
+    if (failed(isRank1StripmineCandidate(op, rewriter))) {
+      return rewriter.notifyMatchFailure(op,
+                                         "not a rank-1 stripmine candidate");
+    }
+
+    auto elementType = op.getTile().getType().getElementType();
+    ReductionModeKind selectedMode =
+        chooseReductionMode(op.getKind(), elementType, fpPolicy, reductionMode);
+    if (selectedMode == ReductionModeKind::Parallel &&
+        !isParallelStripmineAdmissible(op.getKind(), elementType, fpPolicy)) {
+      return rewriter.notifyMatchFailure(
+          op, "parallel strip-mining is illegal for the active policy");
+    }
+
+    if (selectedMode == ReductionModeKind::Parallel) {
+      if (failed(rewriteParallelRank1Reduction(op, rewriter, vf, scalable,
+                                               fpPolicy))) {
+        return rewriter.notifyMatchFailure(op, "failed parallel strip-mining");
+      }
+      return success();
+    }
+
+    if (failed(rewriteSequentialRank1Reduction(op, rewriter, vf, scalable))) {
+      return rewriter.notifyMatchFailure(op, "failed sequential strip-mining");
     }
     return success();
   }
@@ -290,10 +587,10 @@ static FailureOr<SmallVector<OpFoldResult>> reifyRootShape(OpBuilder &builder,
 
 static FailureOr<Operation *> sliceRoot(OpBuilder &builder, Operation *op,
                                         Value tile, unsigned dim,
-                                        OpFoldResult offset,
-                                        OpFoldResult size, bool dropUnitDim) {
-  auto spec =
-      SliceSpec::getSingleDimSlice(builder, tile, dim, offset, size, dropUnitDim);
+                                        OpFoldResult offset, OpFoldResult size,
+                                        bool dropUnitDim) {
+  auto spec = SliceSpec::getSingleDimSlice(builder, tile, dim, offset, size,
+                                           dropUnitDim);
   if (failed(spec)) {
     return failure();
   }
@@ -304,7 +601,7 @@ static FailureOr<Operation *> sliceRoot(OpBuilder &builder, Operation *op,
 
 static bool isAlreadyStripminedRoot(Operation *op,
                                     ArrayRef<OpFoldResult> shape) {
-  if (op->hasAttr("dyno.stripmined")) {
+  if (op->hasAttr(kDynoStripminedAttr)) {
     return true;
   }
   if (shape.empty()) {
@@ -317,9 +614,9 @@ static bool isAlreadyStripminedRoot(Operation *op,
 }
 
 template <typename RootOp>
-struct DynoStaticRowNormalizationPattern : OpRewritePattern<RootOp> {
-  DynoStaticRowNormalizationPattern(MLIRContext *context)
-      : OpRewritePattern<RootOp>(context, 3) {}
+struct DynoLowerLeadingDimsPattern : OpRewritePattern<RootOp> {
+  DynoLowerLeadingDimsPattern(MLIRContext *context, unsigned uf)
+      : OpRewritePattern<RootOp>(context, 2), uf(uf) {}
 
   LogicalResult matchAndRewrite(RootOp op,
                                 PatternRewriter &rewriter) const final {
@@ -333,47 +630,59 @@ struct DynoStaticRowNormalizationPattern : OpRewritePattern<RootOp> {
     if (!rootTileType || rootTileType.getRank() < 2) {
       return rewriter.notifyMatchFailure(op, "root is not at least 2-D");
     }
-    int64_t staticRows = rootTileType.getShape().front();
-    if (ShapedType::isDynamic(staticRows) || staticRows < 1) {
-      return rewriter.notifyMatchFailure(op,
-                                         "root leading dimension is not a constant row pack");
-    }
 
     auto loc = op.getLoc();
-    Value dim = arith::ConstantIndexOp::create(rewriter, loc, staticRows);
-
+    auto shape = reifyRootShape(rewriter, op);
+    if (failed(shape) || shape->empty()) {
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to reify leading root extent");
+    }
+    Value dim = getOrCreateIndexValue(rewriter, shape->front(), loc);
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
+    Value step =
+        arith::ConstantIndexOp::create(rewriter, loc, std::max(1u, uf));
 
-    // Normalize any static `N x ...` effect root into `N` rank-reduced row
-    // roots before VP lowering. This keeps the VP path focused on true 1-D
-    // vector tiles instead of the more fragile row-pack representation.
-    auto loop =
-        scf::ForOp::create(rewriter, loc, zero, dim, one, ValueRange{});
+    // Preserve leading dimensions as explicit loops so only scalar or 1-D tiles
+    // survive to the VP boundary.
+    auto outerLoop =
+        scf::ForOp::create(rewriter, loc, zero, dim, step, ValueRange{});
     {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(loop.getBody());
-      // Rank-reduce the unit row so the carried slice becomes `?xf32`
-      // instead of `1x?xf32`, and the corresponding outer lhs becomes a
-      // rank-0 tile that VP lowering can treat as a scalar.
-      if (failed(sliceRoot(rewriter, op, rootTile, 0, loop.getInductionVar(),
+      rewriter.setInsertionPointToStart(outerLoop.getBody());
+      Value candidateEnd = arith::AddIOp::create(
+          rewriter, loc, outerLoop.getInductionVar(), step);
+      Value inBounds = arith::CmpIOp::create(
+          rewriter, loc, arith::CmpIPredicate::slt, candidateEnd, dim);
+      Value blockEnd =
+          arith::SelectOp::create(rewriter, loc, inBounds, candidateEnd, dim);
+      auto innerLoop =
+          scf::ForOp::create(rewriter, loc, outerLoop.getInductionVar(),
+                             blockEnd, one, ValueRange{});
+      rewriter.setInsertionPointToStart(innerLoop.getBody());
+      if (failed(sliceRoot(rewriter, op, rootTile, 0,
+                           innerLoop.getInductionVar(),
                            rewriter.getIndexAttr(1),
                            /*dropUnitDim=*/true))) {
-        rewriter.eraseOp(loop);
-        return rewriter.notifyMatchFailure(op,
-                                           "failed to normalize static row slice");
+        rewriter.eraseOp(innerLoop);
+        rewriter.eraseOp(outerLoop);
+        return rewriter.notifyMatchFailure(
+            op, "failed to lower preserved leading dimension");
       }
     }
 
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  unsigned uf;
 };
 
 static LogicalResult rewriteRootStripmining(Operation *op,
                                             RewriterBase &rewriter, unsigned vf,
                                             bool scalable) {
-  if (op->hasAttr("dyno.stripmined")) {
+  if (op->hasAttr(kDynoStripminedAttr)) {
     return failure();
   }
   if (auto maskOp = dyn_cast<MaskOp>(op)) {
@@ -431,7 +740,7 @@ static LogicalResult rewriteRootStripmining(Operation *op,
     }
     // Mark the materialized inner root so a later greedy visit does not try
     // to stripmine the same trailing-dimension chunk again.
-    (*newRoot)->setAttr("dyno.stripmined", rewriter.getUnitAttr());
+    (*newRoot)->setAttr(kDynoStripminedAttr, rewriter.getUnitAttr());
 
     Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
     Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);
@@ -527,79 +836,6 @@ private:
   bool scalable;
 };
 
-template <typename RootOp> struct DynoTilingPattern : OpRewritePattern<RootOp> {
-  DynoTilingPattern(MLIRContext *context, unsigned uf)
-      : OpRewritePattern<RootOp>(context, 2), uf(uf) {}
-
-  LogicalResult matchAndRewrite(RootOp op,
-                                PatternRewriter &rewriter) const final {
-    if (!isSupportedEffectRoot(op)) {
-      return rewriter.notifyMatchFailure(op, "not a supported effect root");
-    }
-
-    Value rootTile = getRootTileValue(op);
-    auto rootTileType =
-        rootTile ? dyn_cast<TileType>(rootTile.getType()) : nullptr;
-    if (!rootTileType || rootTileType.getRank() < 2) {
-      return rewriter.notifyMatchFailure(op, "root is not at least 2-D");
-    }
-
-    auto shape = reifyRootShape(rewriter, op);
-    if (failed(shape) || shape->size() < 2) {
-      return rewriter.notifyMatchFailure(op,
-                                         "failed to reify tiled root shape");
-    }
-
-    if (auto rows = getConstantDynoIntValue((*shape)[0])) {
-      if (*rows <= uf) {
-        return rewriter.notifyMatchFailure(op, "already tiled");
-      }
-    }
-
-    auto loc = op.getLoc();
-    Value dim = getOrCreateIndexValue(rewriter, (*shape)[0], loc);
-
-    Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
-    Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
-    Value step = arith::ConstantIndexOp::create(rewriter, loc, uf);
-    Value size = arith::ConstantIndexOp::create(rewriter, loc, uf);
-    Value div = arith::DivUIOp::create(rewriter, loc, dim, size);
-    Value ub = arith::MulIOp::create(rewriter, loc, div, size);
-
-    auto loop = scf::ForOp::create(rewriter, loc, zero, ub, step, ValueRange{});
-    {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(loop.getBody());
-      if (failed(sliceRoot(rewriter, op, rootTile, 0, loop.getInductionVar(),
-                           rewriter.getIndexAttr(uf),
-                           /*dropUnitDim=*/false))) {
-        rewriter.eraseOp(loop);
-        return rewriter.notifyMatchFailure(op, "failed to tile root");
-      }
-    }
-
-    if (uf != 1) {
-      auto tailLoop =
-          scf::ForOp::create(rewriter, loc, ub, dim, one, ValueRange{});
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToStart(tailLoop.getBody());
-      if (failed(sliceRoot(rewriter, op, rootTile, 0, tailLoop.getInductionVar(),
-                           rewriter.getIndexAttr(1),
-                           /*dropUnitDim=*/false))) {
-        rewriter.eraseOp(tailLoop);
-        rewriter.eraseOp(loop);
-        return rewriter.notifyMatchFailure(op, "failed to tile tail root");
-      }
-    }
-
-    rewriter.eraseOp(op);
-    return success();
-  }
-
-private:
-  unsigned uf;
-};
-
 template <typename RootOp>
 struct ConvertRootToVPPattern : OpRewritePattern<RootOp> {
   ConvertRootToVPPattern(MLIRContext *context, unsigned vf, bool scalable)
@@ -642,63 +878,59 @@ void DynoStripminingPass::runOnOperation() {
     return;
   }
 
-  auto applyOuterNormalization = [&]() -> LogicalResult {
-    RewritePatternSet outerNormalizationPatterns(&getContext());
-    outerNormalizationPatterns
-        .add<DynoStaticRowNormalizationPattern<StoreOp>,
-             DynoStaticRowNormalizationPattern<ScatterOp>,
-             DynoStaticRowNormalizationPattern<MaskOp>>(&getContext());
-    return applyPatternsGreedily(getOperation(),
-                                 std::move(outerNormalizationPatterns));
-  };
-
-  IRRewriter rewriter(&getContext());
-  SmallVector<Operation *> reductions;
-  getOperation()->walk([&](ReductionOp op) { reductions.push_back(op); });
-  for (Operation *op : reductions) {
-    auto reductionOp = dyn_cast<ReductionOp>(op);
-    if (!reductionOp || !op->getBlock()) {
-      continue;
-    }
-    rewriter.setInsertionPoint(reductionOp);
-    (void)DynoStripminingReduction1DPattern::rewriteReduction(
-        reductionOp, rewriter, vf, scalable, *parsedReductionMode,
-        *parsedFpPolicy);
-  }
-
-  if (failed(applyOuterNormalization())) {
+  RewritePatternSet reductionPatterns(&getContext());
+  reductionPatterns.add<NormalizeHigherDimReductionPattern>(&getContext(),
+                                                            *parsedFpPolicy);
+  reductionPatterns.add<LowerHigherRankReductionPattern>(&getContext());
+  reductionPatterns.add<LowerRank1ReductionPattern>(
+      &getContext(), vf, scalable, *parsedReductionMode, *parsedFpPolicy);
+  if (failed(applyPatternsGreedily(getOperation(),
+                                   std::move(reductionPatterns)))) {
     signalPassFailure();
     return;
   }
 
-  // Some roots already have a constant leading row-pack before any tiling, so
-  // normalize those first.
-  // Leading-dimension tiling is only meaningful once a root still has at least
-  // two dimensions. Rank-1 roots skip tiling and go straight to the shared
-  // last-dimension stripmining pattern below.
+  if (*parsedReductionMode == ReductionModeKind::Parallel) {
+    bool sawIllegalParallel = false;
+    getOperation()->walk([&](ReductionOp op) {
+      if (sawIllegalParallel || op->hasAttr(kDynoParallelReductionAttr)) {
+        return;
+      }
+      auto tileType = op.getTile().getType();
+      if (tileType.getRank() != 1 || op.getDims().size() != 1 ||
+          op.getDims().front() != 0) {
+        return;
+      }
+      if (!isParallelStripmineAdmissible(
+              op.getKind(), tileType.getElementType(), *parsedFpPolicy)) {
+        op.emitOpError(
+            "parallel strip-mining is illegal for this combiner/type "
+            "under the active fp-policy");
+        sawIllegalParallel = true;
+      }
+    });
+    if (sawIllegalParallel) {
+      signalPassFailure();
+      return;
+    }
+  }
+
+  RewritePatternSet leadingDimPatterns(&getContext());
+  leadingDimPatterns.add<DynoLowerLeadingDimsPattern<StoreOp>,
+                         DynoLowerLeadingDimsPattern<ScatterOp>,
+                         DynoLowerLeadingDimsPattern<MaskOp>>(&getContext(),
+                                                              uf);
+  if (failed(applyPatternsGreedily(getOperation(),
+                                   std::move(leadingDimPatterns)))) {
+    signalPassFailure();
+    return;
+  }
+
   bool hasLoopStripminingRoot = false;
   getOperation()->walk([&](Operation *op) {
     hasLoopStripminingRoot |= needsLoopStripmining(op);
   });
   if (!hasLoopStripminingRoot) {
-    return;
-  }
-
-  RewritePatternSet tilingPatterns(&getContext());
-  tilingPatterns.add<DynoTilingPattern<StoreOp>, DynoTilingPattern<ScatterOp>,
-                     DynoTilingPattern<MaskOp>>(&getContext(), uf);
-  if (failed(
-          applyPatternsGreedily(getOperation(), std::move(tilingPatterns)))) {
-    signalPassFailure();
-    return;
-  }
-
-  // Tiling can introduce fresh constant leading row-packs, e.g. a `2 x ?`
-  // store slice in matmul or a `1 x ?` elementwise row slice. Normalize those
-  // newly created roots before the trailing-dimension stripmining and VP
-  // conversion phases.
-  if (failed(applyOuterNormalization())) {
-    signalPassFailure();
     return;
   }
 

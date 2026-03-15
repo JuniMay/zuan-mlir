@@ -12,14 +12,10 @@ constexpr int64_t kN = 139;
 constexpr float kEpsilon = static_cast<float>(DYNO_REGRESSION_EPSILON);
 
 float makeElement(int64_t index) {
-  int64_t lane = index % DYNO_REGRESSION_DYNO_VF;
-  if (lane == 0) {
-    return 100000000.0f;
-  }
-  if (lane == 1) {
-    return -100000000.0f;
-  }
-  return 1.0f;
+  // Keep the lane-grouped relaxed reference exact across targets: a
+  // cancellation-heavy pattern would make the result depend on the backend's
+  // final lane-fold order, which this regression does not intend to test.
+  return static_cast<float>((index % 7) - 3);
 }
 
 void initializeInput(MemRef<float, 1> &source) {
