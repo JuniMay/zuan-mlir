@@ -7,9 +7,8 @@
 #ifndef DYNO_UTILS_SLICING_H
 #define DYNO_UTILS_SLICING_H
 
-#include "Dyno/Utils/ShapeInference.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/OpDefinition.h"
 
 namespace mlir {
 namespace dyno {
@@ -26,14 +25,13 @@ struct SliceSpec {
   bool dropsDim(unsigned dim) const { return droppedDims[dim]; }
 
   static FailureOr<SliceSpec> getIdentity(OpBuilder &builder, Value value);
-  static FailureOr<SliceSpec> getSingleDimSlice(OpBuilder &builder, Value value,
-                                                unsigned dim,
-                                                OpFoldResult offset,
-                                                OpFoldResult size,
-                                                bool dropUnitDim);
   static FailureOr<SliceSpec>
-  getPrefixSlice(OpBuilder &builder, Value value, ArrayRef<OpFoldResult> offsets,
-                 ArrayRef<OpFoldResult> sizes, ArrayRef<bool> droppedDims = {});
+  getSingleDimSlice(OpBuilder &builder, Value value, unsigned dim,
+                    OpFoldResult offset, OpFoldResult size, bool dropUnitDim);
+  static FailureOr<SliceSpec> getPrefixSlice(OpBuilder &builder, Value value,
+                                             ArrayRef<OpFoldResult> offsets,
+                                             ArrayRef<OpFoldResult> sizes,
+                                             ArrayRef<bool> droppedDims = {});
 
   SmallVector<int64_t> getSlicedShape(ArrayRef<int64_t> shape) const;
   TileType getSlicedTileType(TileType type) const;

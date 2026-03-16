@@ -34,7 +34,7 @@ struct LinalgConversionState {
   SmallVector<Value> masks;
 
   /// The indices for gather/scatter.
-  DenseMap<OpOperand*, SmallVector<Value>> nonProjectedPermutationIndices;
+  DenseMap<OpOperand *, SmallVector<Value>> nonProjectedPermutationIndices;
 
   LinalgConversionState() = default;
 

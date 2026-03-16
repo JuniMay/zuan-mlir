@@ -4,16 +4,12 @@
 #include "Dyno/IR/Dyno.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/PatternMatch.h"
 
 namespace mlir {
 namespace dyno {
 
 struct VPShapePlan {
-  enum class Kind {
-    Scalar,
-    Vector1D
-  };
+  enum class Kind { Scalar, Vector1D };
 
   Kind kind = Kind::Scalar;
   Value evl = nullptr;
@@ -76,8 +72,8 @@ private:
   bool active;
 };
 
-Value createCastOp(OpBuilder &b, Location loc, CastKind kind,
-  Type outType, Value source);
+Value createCastOp(OpBuilder &b, Location loc, CastKind kind, Type outType,
+                   Value source);
 
 LogicalResult convertToVP(OpBuilder &builder, Operation *op,
                           VPConversionState &state);

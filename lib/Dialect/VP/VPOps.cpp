@@ -100,15 +100,15 @@ void createPredicateOpRegion(OpBuilder &builder, Operation *predicatedOp) {
                                    predicatedOp->getBlock()->getOperations(),
                                    predicatedOp);
   vector::YieldOp::create(builder, predicatedOp->getLoc(),
-                                  predicatedOp->getResults());
+                          predicatedOp->getResults());
 }
 
 Operation *predicateOperation(OpBuilder &builder, Operation *predicatedOp,
                               Value evl, Value mask, Value passthru,
                               Value maskedoff) {
-  auto predication = PredicateOp::create(builder, 
-      predicatedOp->getLoc(), predicatedOp->getResultTypes(), evl, predicatedOp,
-      createPredicateOpRegion, mask, passthru, maskedoff);
+  auto predication = PredicateOp::create(
+      builder, predicatedOp->getLoc(), predicatedOp->getResultTypes(), evl,
+      predicatedOp, createPredicateOpRegion, mask, passthru, maskedoff);
   return predication;
 }
 

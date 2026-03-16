@@ -6,13 +6,11 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <cassert>
-#include <cstdint>
 
 #include "Dyno/IR/Dyno.h"
 #include "Dyno/Utils/Builders.h"
@@ -524,6 +522,8 @@ static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
   Type elementType =
       cast<TileType>(op->getResult(0).getType()).getElementType();
 
+  // TODO: dyno_passthru_operand is no longer generted by DynoToVP, a better
+  // method of handling is needed.
   bool hasPassthru = op->hasAttr("dyno_passthru_operand");
   auto passthruIdxAttr =
       op->getAttrOfType<IntegerAttr>("dyno_passthru_operand");

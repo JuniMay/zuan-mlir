@@ -8,7 +8,6 @@
 #ifndef DYNO_UTILS_REDUCTIONSEMANTICS_H
 #define DYNO_UTILS_REDUCTIONSEMANTICS_H
 
-#include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 
@@ -32,14 +31,16 @@ enum class ReductionModeKind {
 /// Build the implicit scalar identity for a supported combiner/type pair.
 FailureOr<Value> buildReductionIdentity(OpBuilder &builder, Location loc,
                                         CombiningKind kind, Type elementType);
-/// Return whether the combiner admits an implicit identity for the element type.
+/// Return whether the combiner admits an implicit identity for the element
+/// type.
 bool hasImplicitIdentity(CombiningKind kind, Type elementType);
 /// Return whether the combiner is defined for the given scalar element type.
 bool isReductionTypeSupported(CombiningKind kind, Type elementType);
 /// Return whether repeated 1-D factorization preserves the formal semantics.
 bool isFactorizationAdmissible(CombiningKind kind, Type elementType,
                                FloatingPointPolicy policy);
-/// Return whether lane-wise chunk accumulation plus final lane reduction is legal.
+/// Return whether lane-wise chunk accumulation plus final lane reduction is
+/// legal.
 bool isParallelStripmineAdmissible(CombiningKind kind, Type elementType,
                                    FloatingPointPolicy policy);
 /// Parse the string spelling of a reduction floating-point policy.

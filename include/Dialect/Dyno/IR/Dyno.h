@@ -39,8 +39,7 @@ void createMaskOpRegion(OpBuilder &builder, Location loc, Operation *maskedOp);
 /// original operation. This function does not handle def-use chains, and the
 /// caller is responsible for updating the uses of the original operation.
 Operation *maskOperation(OpBuilder &builder, Location loc, Operation *maskedOp,
-                         Value mask,
-                         Value maskedoff = nullptr);
+                         Value mask, Value maskedoff = nullptr);
 
 } // namespace dyno
 } // namespace mlir

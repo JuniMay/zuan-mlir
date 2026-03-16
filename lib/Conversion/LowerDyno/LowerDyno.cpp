@@ -29,10 +29,10 @@ static bool isEffectOnlyMaskRoot(MaskOp op) {
          isa_and_nonnull<StoreOp, ScatterOp>(op.getMaskedOp());
 }
 
-static FailureOr<Operation *> sliceRoot(PatternRewriter &rewriter, Operation *op,
-                                        Value tile, unsigned dim,
-                                        OpFoldResult offset,
-                                        OpFoldResult size, bool dropUnitDim) {
+static FailureOr<Operation *> sliceRoot(PatternRewriter &rewriter,
+                                        Operation *op, Value tile, unsigned dim,
+                                        OpFoldResult offset, OpFoldResult size,
+                                        bool dropUnitDim) {
   auto spec = SliceSpec::getSingleDimSlice(rewriter, tile, dim, offset, size,
                                            dropUnitDim);
   if (failed(spec)) {
@@ -62,14 +62,15 @@ struct DynoSliceLeadingDimPattern : OpRewritePattern<RootOp> {
     auto loc = op.getLoc();
     auto leadingDim = materializeTileDim(rewriter, loc, tile, 0);
     if (failed(leadingDim)) {
-      return rewriter.notifyMatchFailure(op, "failed to reify leading dimension");
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to reify leading dimension");
     }
 
     Value zero = arith::ConstantIndexOp::create(rewriter, loc, 0);
     Value one = arith::ConstantIndexOp::create(rewriter, loc, 1);
 
-    auto loop = scf::ForOp::create(rewriter, loc, zero, *leadingDim, one,
-                                   ValueRange{});
+    auto loop =
+        scf::ForOp::create(rewriter, loc, zero, *leadingDim, one, ValueRange{});
     {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(loop.getBody());
@@ -117,15 +118,15 @@ private:
 
 void LowerDynoPass::runOnOperation() {
   RewritePatternSet slicingPatterns(&getContext());
-  slicingPatterns
-      .add<DynoSliceLeadingDimPattern<StoreOp, Value (*)(StoreOp)>>(
-          &getContext(), targetRank, &getStoreTile);
+  slicingPatterns.add<DynoSliceLeadingDimPattern<StoreOp, Value (*)(StoreOp)>>(
+      &getContext(), targetRank, &getStoreTile);
   slicingPatterns
       .add<DynoSliceLeadingDimPattern<ScatterOp, Value (*)(ScatterOp)>>(
           &getContext(), targetRank, &getScatterTile);
   slicingPatterns.add<DynoSliceEffectMaskPattern>(&getContext(), targetRank);
 
-  if (failed(applyPatternsGreedily(getOperation(), std::move(slicingPatterns)))) {
+  if (failed(
+          applyPatternsGreedily(getOperation(), std::move(slicingPatterns)))) {
     signalPassFailure();
   }
 }

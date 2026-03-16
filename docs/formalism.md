@@ -210,8 +210,7 @@ Dyno uses one precise mask model.
 Let $m$ be a boolean tile with domain $D$. For a value-producing masked region that yields $x$ and optional `maskedoff` value $y$ with domain $D$,
 
 $$
-\llbracket \mathrm{mask}(m, x, y) \rrbracket(p)
-=
+\llbracket \mathrm{mask}(m, x, y) \rrbracket(p) =
 \begin{cases}
 \llbracket x \rrbracket(p) & \text{if } m(p) = \mathrm{true},\\
 \llbracket y \rrbracket(p) & \text{if } m(p) = \mathrm{false} \text{ and } y \text{ exists.}
@@ -253,8 +252,7 @@ reconstruct the full source index from preserved coordinate $q \in D_P$ and redu
 For combiner $\oplus$ and optional explicit init $a_0$, define the canonical reduced sequence
 
 $$
-\mathrm{Seq}_{R}(q)
-=
+\mathrm{Seq}_{R}(q) =
 \Bigl[
 \llbracket v \rrbracket(\iota_{P,R}(q,t))
 \Bigr]_{t \in D_R}^{\mathrm{lex}}

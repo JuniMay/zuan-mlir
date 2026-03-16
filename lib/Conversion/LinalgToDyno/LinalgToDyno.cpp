@@ -62,7 +62,7 @@ static Value getOrSplat(OpBuilder &builder, Value value,
     // adopted here, which is to create a splat op each time we need a
     // broadcasted value and rely on CSE to clean up.
     return dyno::SplatOp::create(builder, value.getLoc(), lookup,
-                                         state.ofrShape);
+                                 state.ofrShape);
   }
   return lookup;
 }
@@ -96,13 +96,14 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
       if (indexingMap.isProjectedPermutation()) {
         // Flat Dyno performs the destination write exactly where the linalg
         // yield happens instead of staging it in a hidden `dyno.yield` region.
-        Value transformedInitMemref = state.transformedMemRefs[linalgInitMemref];
+        Value transformedInitMemref =
+            state.transformedMemRefs[linalgInitMemref];
         dyno::StoreOp::create(builder, loc, mappedOpd, transformedInitMemref);
       } else {
         // Handle the non-projected permutation operands.
         auto indices = state.nonProjectedPermutationIndices[initOpOperand];
         dyno::ScatterOp::create(builder, loc, mappedOpd, linalgInitMemref,
-                                        indices);
+                                indices);
       }
     }
     return success();
@@ -251,9 +252,8 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
     // Recursively convert the regions, and merge the yielded values.
     auto cond = getOrSplat(builder, ifOp.getCondition(), state);
     // Negate the condition for the else branch.
-    Value trueElem =
-        arith::ConstantOp::create(builder, loc, builder.getI1Type(),
-                                          builder.getBoolAttr(true));
+    Value trueElem = arith::ConstantOp::create(
+        builder, loc, builder.getI1Type(), builder.getBoolAttr(true));
     Value trueValue =
         dyno::SplatOp::create(builder, loc, trueElem, state.ofrShape);
     Value negCond = arith::XOrIOp::create(builder, loc, cond, trueValue);
@@ -485,7 +485,8 @@ struct LinalgGenericToDynoPattern : RewritePattern {
           return rewriter.notifyMatchFailure(op,
                                              "unable to get the loop range");
         }
-        Value dim = memref::DimOp::create(rewriter, loc, operand, operandDimPos);
+        Value dim =
+            memref::DimOp::create(rewriter, loc, operand, operandDimPos);
         commonShape.push_back(dim);
       } else {
         commonShape.push_back(rewriter.getIndexAttr(staticSize));
@@ -592,14 +593,15 @@ struct LinalgGenericToDynoPattern : RewritePattern {
         for (unsigned i = 1; i < indexingMap.getNumResults(); ++i) {
           reassociation.push_back({static_cast<int64_t>(numDimsToExpand + i)});
         }
-        Value expanded = memref::ExpandShapeOp::create(rewriter, 
-            loc, resultShape, opOperand->get(), reassociation, outputShape);
+        Value expanded = memref::ExpandShapeOp::create(
+            rewriter, loc, resultShape, opOperand->get(), reassociation,
+            outputShape);
 
         //----------------------------------------------------------------------
         // 3) Transpose it to make sure all the dims are at their right place.
         //----------------------------------------------------------------------
-        Value transposed = memref::TransposeOp::create(rewriter, 
-            loc, expanded, AffineMapAttr::get(permutationMap));
+        Value transposed = memref::TransposeOp::create(
+            rewriter, loc, expanded, AffineMapAttr::get(permutationMap));
 
         //----------------------------------------------------------------------
         // 4) Use `subview` to broadcast the dimensions that are not present in
@@ -621,8 +623,8 @@ struct LinalgGenericToDynoPattern : RewritePattern {
             strides.push_back(rewriter.getIndexAttr(0));
           }
         }
-        Value subview = memref::SubViewOp::create(rewriter, 
-            loc, transposed, offsets, commonShape, strides);
+        Value subview = memref::SubViewOp::create(
+            rewriter, loc, transposed, offsets, commonShape, strides);
         // Map the original memref to the valueMap.
         transformedMemRefs[opOperand->get()] = subview;
         // bbArgs are not mapped here, dyno.loads will be created inside the
@@ -632,8 +634,9 @@ struct LinalgGenericToDynoPattern : RewritePattern {
         auto permutationMap =
             inversePermutation(reindexIndexingMap(indexingMap));
         // All the initial reads will be performed on this transposed memref.
-        auto transposed = memref::TransposeOp::create(rewriter, 
-            loc, opOperand->get(), AffineMapAttr::get(permutationMap));
+        auto transposed =
+            memref::TransposeOp::create(rewriter, loc, opOperand->get(),
+                                        AffineMapAttr::get(permutationMap));
         // Map the original and transposed memrefs.
         transformedMemRefs[opOperand->get()] = transposed;
       }

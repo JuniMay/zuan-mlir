@@ -30,7 +30,6 @@ struct DynoStrengthReductionPass
 
 void registerDynoStrengthReductionPass();
 
-
 } // namespace dyno
 } // namespace mlir
 

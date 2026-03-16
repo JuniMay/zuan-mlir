@@ -7,8 +7,8 @@
 #include "Dyno/Utils/Slicing.h"
 
 #include "Dyno/IR/Dyno.h"
-#include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ReductionSemantics.h"
+#include "Dyno/Utils/ShapeInference.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -22,8 +22,8 @@ namespace dyno {
 
 namespace {
 
-static FailureOr<SmallVector<OpFoldResult>> reifyShapedValueShape(
-    OpBuilder &builder, Value value) {
+static FailureOr<SmallVector<OpFoldResult>>
+reifyShapedValueShape(OpBuilder &builder, Value value) {
   if (isa<TileType>(value.getType())) {
     return reifyDynoShape(builder, value);
   }
@@ -40,7 +40,8 @@ static FailureOr<SmallVector<OpFoldResult>> reifyShapedValueShape(
       shape.push_back(builder.getIndexAttr(dim));
       continue;
     }
-    shape.push_back(memref::DimOp::create(builder, loc, value, idx).getResult());
+    shape.push_back(
+        memref::DimOp::create(builder, loc, value, idx).getResult());
   }
   return shape;
 }
@@ -69,9 +70,10 @@ static Operation *mapResults(Operation *oldOp, Operation *newOp,
   return newOp;
 }
 
-static FailureOr<Value> cloneScalarOrMemrefValue(OpBuilder &builder, Value value,
-                                                 SliceState &state);
-static FailureOr<Value> sliceOrCloneNonTileValue(OpBuilder &builder, Value value,
+static FailureOr<Value>
+cloneScalarOrMemrefValue(OpBuilder &builder, Value value, SliceState &state);
+static FailureOr<Value> sliceOrCloneNonTileValue(OpBuilder &builder,
+                                                 Value value,
                                                  const SliceSpec &spec,
                                                  SliceState &state);
 static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
@@ -89,8 +91,8 @@ static FailureOr<Value> getCurrentMemrefValue(OpBuilder &builder, Value memref,
   return cloneScalarOrMemrefValue(builder, memref, state);
 }
 
-static FailureOr<Value> cloneScalarOrMemrefValue(OpBuilder &builder, Value value,
-                                                 SliceState &state) {
+static FailureOr<Value>
+cloneScalarOrMemrefValue(OpBuilder &builder, Value value, SliceState &state) {
   if (state.valueMap.contains(value)) {
     return state.valueMap.lookup(value);
   }
@@ -105,8 +107,7 @@ static FailureOr<Value> cloneScalarOrMemrefValue(OpBuilder &builder, Value value
     if (failed(source) || failed(index)) {
       return failure();
     }
-    auto cloned =
-        memref::DimOp::create(builder, op->getLoc(), *source, *index);
+    auto cloned = memref::DimOp::create(builder, op->getLoc(), *source, *index);
     state.valueMap.map(dimOp.getResult(), cloned.getResult());
     return cloned.getResult();
   }
@@ -127,16 +128,17 @@ static FailureOr<Value> cloneScalarOrMemrefValue(OpBuilder &builder, Value value
     newOperands.push_back(*mapped);
   }
 
-  Operation *cloned = builder.create(op->getLoc(), op->getName().getIdentifier(),
-                                     newOperands, op->getResultTypes(),
-                                     op->getAttrs());
+  Operation *cloned =
+      builder.create(op->getLoc(), op->getName().getIdentifier(), newOperands,
+                     op->getResultTypes(), op->getAttrs());
   mapResults(op, cloned, state);
   return cloned->getResult(cast<OpResult>(value).getResultNumber());
 }
 
 // Scalar values inside a slice may still depend on sliced memrefs via
 // `memref.dim` or arithmetic on those sizes, so they need spec-aware cloning.
-static FailureOr<Value> sliceOrCloneNonTileValue(OpBuilder &builder, Value value,
+static FailureOr<Value> sliceOrCloneNonTileValue(OpBuilder &builder,
+                                                 Value value,
                                                  const SliceSpec &spec,
                                                  SliceState &state) {
   if (isa<TileType, MemRefType>(value.getType())) {
@@ -177,9 +179,9 @@ static FailureOr<Value> sliceOrCloneNonTileValue(OpBuilder &builder, Value value
     newOperands.push_back(*mapped);
   }
 
-  Operation *cloned = builder.create(op->getLoc(), op->getName().getIdentifier(),
-                                     newOperands, op->getResultTypes(),
-                                     op->getAttrs());
+  Operation *cloned =
+      builder.create(op->getLoc(), op->getName().getIdentifier(), newOperands,
+                     op->getResultTypes(), op->getAttrs());
   mapResults(op, cloned, state);
   return cloned->getResult(cast<OpResult>(value).getResultNumber());
 }
@@ -221,12 +223,14 @@ static FailureOr<Operation *> sliceElementwiseLike(OpBuilder &builder,
     }
   }
 
-  Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
-                                    newOperands, newResultTypes, op->getAttrs());
+  Operation *newOp =
+      builder.create(op->getLoc(), op->getName().getIdentifier(), newOperands,
+                     newResultTypes, op->getAttrs());
   return mapResults(op, newOp, state);
 }
 
-static FailureOr<Operation *> sliceSCFForOp(OpBuilder &builder, scf::ForOp forOp,
+static FailureOr<Operation *> sliceSCFForOp(OpBuilder &builder,
+                                            scf::ForOp forOp,
                                             const SliceSpec &spec,
                                             SliceState &state) {
   SmallVector<Value> newInits;
@@ -262,17 +266,18 @@ static FailureOr<Operation *> sliceSCFForOp(OpBuilder &builder, scf::ForOp forOp
   SliceState bodyState;
   bodyState.valueMap = IRMapping(state.valueMap);
   bodyState.valueMap.map(forOp.getInductionVar(), newForOp.getInductionVar());
-  bodyState.valueMap.map(forOp.getRegionIterArgs(), newForOp.getRegionIterArgs());
+  bodyState.valueMap.map(forOp.getRegionIterArgs(),
+                         newForOp.getRegionIterArgs());
 
   OpBuilder::InsertionGuard guard(builder);
   auto *oldYield = newForOp.getBody()->getTerminator();
   builder.setInsertionPoint(oldYield);
   SmallVector<Value> newYields;
   for (Value yielded : forOp.getYieldedValues()) {
-    auto mapped = isa<TileType>(yielded.getType())
-                      ? sliceValue(builder, yielded, spec, bodyState)
-                      : sliceOrCloneNonTileValue(builder, yielded, spec,
-                                                 bodyState);
+    auto mapped =
+        isa<TileType>(yielded.getType())
+            ? sliceValue(builder, yielded, spec, bodyState)
+            : sliceOrCloneNonTileValue(builder, yielded, spec, bodyState);
     if (failed(mapped)) {
       newForOp.erase();
       return failure();
@@ -294,7 +299,8 @@ static FailureOr<Operation *> sliceReductionOp(OpBuilder &builder,
   llvm::SmallDenseSet<int64_t> reducedDims(reductionOp.getDims().begin(),
                                            reductionOp.getDims().end());
 
-  if (resultSpec.getSourceRank() != reductionOp.getResult().getType().getRank()) {
+  if (resultSpec.getSourceRank() !=
+      reductionOp.getResult().getType().getRank()) {
     return failure();
   }
 
@@ -429,11 +435,9 @@ static Operation *buildMaskedInnerOp(OpBuilder &builder, Operation *maskedOp,
       }
       dims.push_back(dim - shift);
     }
-    auto newOp = ReductionOp::create(builder, reductionOp.getLoc(),
-                                     reductionOp.getKind(), operands.front(),
-                                     dims,
-                                     operands.size() == 2 ? operands[1]
-                                                          : Value());
+    auto newOp = ReductionOp::create(
+        builder, reductionOp.getLoc(), reductionOp.getKind(), operands.front(),
+        dims, operands.size() == 2 ? operands[1] : Value());
     copyReductionFloatingPointPolicy(reductionOp, newOp);
     return newOp;
   }
@@ -496,19 +500,21 @@ static Operation *buildMaskedInnerOp(OpBuilder &builder, Operation *maskedOp,
                           castOp.getKind(), operands.front());
   }
   if (auto selectOp = dyn_cast<SelectOp>(maskedOp)) {
-    return SelectOp::create(builder, selectOp.getLoc(), operands[0], operands[1],
-                            operands[2]);
+    return SelectOp::create(builder, selectOp.getLoc(), operands[0],
+                            operands[1], operands[2]);
   }
   if (isa<arith::CmpIOp, arith::CmpFOp>(maskedOp) ||
       maskedOp->hasTrait<OpTrait::Elementwise>()) {
     SmallVector<Type> resultTypes;
     for (Type resultType : maskedOp->getResultTypes()) {
-      resultTypes.push_back(isa<TileType>(resultType)
-                                ? Type(spec.getSlicedTileType(cast<TileType>(resultType)))
-                                : resultType);
+      resultTypes.push_back(
+          isa<TileType>(resultType)
+              ? Type(spec.getSlicedTileType(cast<TileType>(resultType)))
+              : resultType);
     }
-    return builder.create(maskedOp->getLoc(), maskedOp->getName().getIdentifier(),
-                          operands, resultTypes, maskedOp->getAttrs());
+    return builder.create(maskedOp->getLoc(),
+                          maskedOp->getName().getIdentifier(), operands,
+                          resultTypes, maskedOp->getAttrs());
   }
   return nullptr;
 }
@@ -568,9 +574,10 @@ static FailureOr<Operation *> sliceMaskOp(OpBuilder &builder, MaskOp maskOp,
       builder, maskOp.getLoc(), resultTypes, *mask,
       [&](OpBuilder &bodyBuilder, Location loc) {
         if (maskedOp) {
-          Operation *newMaskedOp = buildMaskedInnerOp(bodyBuilder, maskedOp,
-                                                      slicedMaskedOperands, spec);
-          assert(newMaskedOp && "pre-validated masked inner op must be sliceable");
+          Operation *newMaskedOp = buildMaskedInnerOp(
+              bodyBuilder, maskedOp, slicedMaskedOperands, spec);
+          assert(newMaskedOp &&
+                 "pre-validated masked inner op must be sliceable");
           MaskYieldOp::create(bodyBuilder, loc, newMaskedOp->getResults());
           return;
         }
@@ -635,7 +642,8 @@ static FailureOr<Operation *> sliceStepOp(OpBuilder &builder, StepOp stepOp,
   if (spec.getSourceRank() != stepOp.getResult().getType().getRank()) {
     return failure();
   }
-  auto start = sliceOrCloneNonTileValue(builder, stepOp.getStart(), spec, state);
+  auto start =
+      sliceOrCloneNonTileValue(builder, stepOp.getStart(), spec, state);
   if (failed(start)) {
     return failure();
   }
@@ -679,15 +687,15 @@ static FailureOr<Operation *> sliceStepOp(OpBuilder &builder, StepOp stepOp,
   for (unsigned idx = 0; idx < dim; ++idx) {
     newDim -= spec.dropsDim(idx) ? 1 : 0;
   }
-  auto newOp = StepOp::create(builder, stepOp.getLoc(), *start, newDim, newSizes);
+  auto newOp =
+      StepOp::create(builder, stepOp.getLoc(), *start, newDim, newSizes);
   return mapResults(stepOp, newOp, state);
 }
 
-static FailureOr<Operation *> sliceMemrefEffectOp(OpBuilder &builder, Operation *op,
-                                                  Value value, Value base,
-                                                  ValueRange indices,
-                                                  const SliceSpec &spec,
-                                                  SliceState &state) {
+static FailureOr<Operation *>
+sliceMemrefEffectOp(OpBuilder &builder, Operation *op, Value value, Value base,
+                    ValueRange indices, const SliceSpec &spec,
+                    SliceState &state) {
   auto slicedBase = sliceMemrefView(builder, base, spec, state);
   if (failed(slicedBase)) {
     return failure();
@@ -699,8 +707,8 @@ static FailureOr<Operation *> sliceMemrefEffectOp(OpBuilder &builder, Operation 
   }
 
   if (auto storeOp = dyn_cast<StoreOp>(op)) {
-    auto newOp = StoreOp::create(builder, storeOp.getLoc(), *slicedValue,
-                                 *slicedBase);
+    auto newOp =
+        StoreOp::create(builder, storeOp.getLoc(), *slicedValue, *slicedBase);
     return mapResults(storeOp, newOp, state);
   }
 
@@ -713,8 +721,8 @@ static FailureOr<Operation *> sliceMemrefEffectOp(OpBuilder &builder, Operation 
     slicedIndices.push_back(*slicedIndex);
   }
 
-  auto newOp = ScatterOp::create(builder, op->getLoc(), *slicedValue, *slicedBase,
-                                 slicedIndices);
+  auto newOp = ScatterOp::create(builder, op->getLoc(), *slicedValue,
+                                 *slicedBase, slicedIndices);
   return mapResults(op, newOp, state);
 }
 
@@ -777,8 +785,8 @@ static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
       }
       indices.push_back(*slicedIndex);
     }
-    auto newOp = ScatterOp::create(builder, scatterOp.getLoc(), *value, *base,
-                                   indices);
+    auto newOp =
+        ScatterOp::create(builder, scatterOp.getLoc(), *value, *base, indices);
     return mapResults(scatterOp, newOp, state);
   }
 
@@ -800,9 +808,8 @@ static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
       return failure();
     }
     auto resultType = spec.getSlicedTileType(castOp.getResult().getType());
-    auto newOp =
-        CastOp::create(builder, castOp.getLoc(), resultType, castOp.getKind(),
-                       *tile);
+    auto newOp = CastOp::create(builder, castOp.getLoc(), resultType,
+                                castOp.getKind(), *tile);
     return mapResults(castOp, newOp, state);
   }
   if (auto selectOp = dyn_cast<SelectOp>(op)) {
@@ -825,10 +832,11 @@ static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
     if (failed(source) || failed(index)) {
       return failure();
     }
-    auto constantIndex = dyn_cast_or_null<arith::ConstantIndexOp>(
-        (*index).getDefiningOp());
+    auto constantIndex =
+        dyn_cast_or_null<arith::ConstantIndexOp>((*index).getDefiningOp());
     if (!constantIndex) {
-      auto newOp = memref::DimOp::create(builder, dimOp.getLoc(), *source, *index);
+      auto newOp =
+          memref::DimOp::create(builder, dimOp.getLoc(), *source, *index);
       return mapResults(dimOp, newOp, state);
     }
     int64_t dim = constantIndex.value();
@@ -839,7 +847,8 @@ static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
       // first sliced user observes the dropped-dimension size immediately.
       if (!newValue.getDefiningOp()) {
         Value zero = arith::ConstantIndexOp::create(builder, dimOp.getLoc(), 0);
-        newValue = arith::AddIOp::create(builder, dimOp.getLoc(), newValue, zero);
+        newValue =
+            arith::AddIOp::create(builder, dimOp.getLoc(), newValue, zero);
       }
       state.valueMap.map(dimOp.getResult(), newValue);
       return newValue.getDefiningOp();
@@ -847,8 +856,7 @@ static FailureOr<Operation *> sliceOperation(OpBuilder &builder, Operation *op,
     for (unsigned prior = 0; prior < static_cast<unsigned>(dim); ++prior) {
       dim -= spec.dropsDim(prior) ? 1 : 0;
     }
-    auto newOp =
-        memref::DimOp::create(builder, dimOp.getLoc(), *source, dim);
+    auto newOp = memref::DimOp::create(builder, dimOp.getLoc(), *source, dim);
     return mapResults(dimOp, newOp, state);
   }
   if (isa<arith::CmpIOp, arith::CmpFOp>(op) ||
@@ -881,8 +889,8 @@ FailureOr<SliceSpec> SliceSpec::getIdentity(OpBuilder &builder, Value value) {
   return spec;
 }
 
-FailureOr<SliceSpec> SliceSpec::getSingleDimSlice(OpBuilder &builder, Value value,
-                                                  unsigned dim,
+FailureOr<SliceSpec> SliceSpec::getSingleDimSlice(OpBuilder &builder,
+                                                  Value value, unsigned dim,
                                                   OpFoldResult offset,
                                                   OpFoldResult size,
                                                   bool dropUnitDim) {
@@ -896,9 +904,10 @@ FailureOr<SliceSpec> SliceSpec::getSingleDimSlice(OpBuilder &builder, Value valu
   return spec;
 }
 
-FailureOr<SliceSpec> SliceSpec::getPrefixSlice(
-    OpBuilder &builder, Value value, ArrayRef<OpFoldResult> offsets,
-    ArrayRef<OpFoldResult> sizes, ArrayRef<bool> droppedDims) {
+FailureOr<SliceSpec> SliceSpec::getPrefixSlice(OpBuilder &builder, Value value,
+                                               ArrayRef<OpFoldResult> offsets,
+                                               ArrayRef<OpFoldResult> sizes,
+                                               ArrayRef<bool> droppedDims) {
   auto spec = getIdentity(builder, value);
   if (failed(spec) || offsets.size() != sizes.size() ||
       offsets.size() > spec->getSourceRank() ||
@@ -909,8 +918,7 @@ FailureOr<SliceSpec> SliceSpec::getPrefixSlice(
   for (unsigned dim = 0; dim < offsets.size(); ++dim) {
     spec->offsets[dim] = offsets[dim];
     spec->sizes[dim] = sizes[dim];
-    spec->droppedDims[dim] =
-        droppedDims.empty() ? false : droppedDims[dim];
+    spec->droppedDims[dim] = droppedDims.empty() ? false : droppedDims[dim];
   }
   return spec;
 }
@@ -1000,7 +1008,8 @@ FailureOr<Value> sliceMemrefView(OpBuilder &builder, Value memref,
   }
 
   auto memrefType = cast<MemRefType>((*currentMemref).getType());
-  SmallVector<OpFoldResult> strides(spec.getSourceRank(), builder.getIndexAttr(1));
+  SmallVector<OpFoldResult> strides(spec.getSourceRank(),
+                                    builder.getIndexAttr(1));
 
   Type unreducedType = memref::SubViewOp::inferResultType(
       memrefType, spec.offsets, spec.sizes, strides);
