@@ -34,11 +34,10 @@ func.func @reduce1d(%src: memref<?xf32>) -> f32 {
 // PAR: vp.getvl
 // PAR: dyno.splat
 // PAR: scf.while
-// PAR: dyno.step %c0, 0, [%{{.*}}] : index
-// PAR: dyno.splat %{{.*}} [%{{.*}}] : index
-// PAR: arith.cmpi ult, %{{.*}}, %{{.*}} : !dyno.tile<?xindex>
-// PAR: dyno.mask %{{.*}} : <?xi1>, %{{.*}} : !dyno.tile<?xf32>
-// PAR: arith.addf %{{.*}}, %{{.*}} : !dyno.tile<?xf32>
+// PAR-NOT: dyno.step
+// PAR-NOT: arith.cmpi ult
+// PAR-NOT: dyno.mask
+// PAR: dyno.reduction_accumulate <add> %{{.*}}, %{{.*}} : !dyno.tile<?xf32>, !dyno.tile<?xf32>
 // PAR: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "relaxed", dyno.parallel_reassoc, dyno.parallel_stripmine, dyno.stripmined}
 // PAR: dyno.extract
 

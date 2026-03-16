@@ -271,6 +271,16 @@ If no explicit init is present, the combiner must admit an implicit identity $e_
 
 This canonical ordered fold is the source semantics against which all reduction lowerings are judged.
 
+### `dyno.reduction_accumulate`
+
+`dyno.reduction_accumulate` is a narrow internal helper used only in the
+strip-mined parallel reduction path. For accumulator tile $a$ of length $N$ and
+chunk tile $c$ of length $M \leq N$, it combines only the prefix covered by the
+chunk and preserves the remaining accumulator lanes unchanged. This does not
+relax the common-domain requirement of ordinary Dyno pointwise ops; it makes
+the prefix-update semantics explicit so backend-specific EVL/passthru lowering
+is sound.
+
 ## Numerical policy and admissibility
 
 Dyno reduction-preserving rewrites are parameterized by an explicit numerical policy $\Pi$.
@@ -568,6 +578,7 @@ Immediately before the VP-oriented lowering:
   1. a 1-D reduction eligible for **parallel** strip-mining,
   2. a 1-D reduction eligible for **sequential** strip-mining,
   3. an ordered loop-carried scalar or 1-lane accumulation produced from a non-factorizable higher-dimensional reduction,
+- the strip-mined parallel path may use internal `dyno.reduction_accumulate` prefix updates without changing the common-domain rule for ordinary pointwise ops,
 - no illegal higher-dimensional strict floating-point reduction remains disguised as repeated 1-D partial sums.
 
 ### VP Conversion Input Form (VP-CIF)

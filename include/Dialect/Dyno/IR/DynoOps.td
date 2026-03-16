@@ -89,7 +89,7 @@ def Dyno_MaskOp : Dyno_Op<"mask", [
 // Reduction-like tile operations
 //===----------------------------------------------------------------------===//
 
- def Dyno_ReductionOp : Dyno_Op<"reduction", [
+def Dyno_ReductionOp : Dyno_Op<"reduction", [
   Pure, InferTypeOpAdaptor,
   AllElementTypesMatch<["tile", "result"]>,
   OptionalTypesMatchWith<"result and the init have the same type",
@@ -111,6 +111,31 @@ def Dyno_MaskOp : Dyno_Op<"mask", [
   let assemblyFormat = [{
     $kind $tile $dims (`,` $init^)? attr-dict
     `:` qualified(type($tile)) (`,` qualified(type($init))^)?
+  }];
+
+  let hasVerifier = 1;
+}
+
+def Dyno_ReductionAccumulateOp : Dyno_Op<"reduction_accumulate", [
+  Pure, InferTypeOpAdaptor
+]> {
+  let summary = "Prefix-preserving accumulator update for strip-mined reductions";
+  let description = [{
+    `dyno.reduction_accumulate` is a narrow internal helper used by the
+    strip-mined parallel reduction path. It combines `chunk` into the prefix of
+    `acc` covered by the chunk length and preserves the remaining accumulator
+    lanes unchanged. This does not relax the common-domain requirement of
+    ordinary Dyno pointwise ops.
+  }];
+
+  let arguments = (ins Dyno_CombiningKindAttr:$kind,
+                       Dyno_TileType:$acc,
+                       Dyno_TileType:$chunk);
+  let results = (outs Dyno_TileType:$result);
+
+  let assemblyFormat = [{
+    $kind $acc `,` $chunk attr-dict
+    `:` qualified(type($acc)) `,` qualified(type($chunk))
   }];
 
   let hasVerifier = 1;

@@ -26,4 +26,13 @@ add_lit_testsuite(check-dyno "Running the dyno compiler regression tests"
 
 set_target_properties(check-dyno PROPERTIES FOLDER "Tests")
 
-add_lit_testsuites(DYNO ${CMAKE_CURRENT_SOURCE_DIR} DEPENDS ${DYNO_TEST_DEPENDS})
+# Only materialize the lit sub-suite targets that correspond to real compiler
+# test trees. The empty `test/runtime` directory is reserved for CTest-based
+# runtime regressions configured under `regression/`, so it must not produce a
+# misleading `check-dyno-runtime` lit target.
+add_lit_testsuites(
+  DYNO
+  ${CMAKE_CURRENT_SOURCE_DIR}/Dyno
+  ${CMAKE_CURRENT_SOURCE_DIR}/VP
+  DEPENDS ${DYNO_TEST_DEPENDS}
+)

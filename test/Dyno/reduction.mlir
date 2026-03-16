@@ -19,11 +19,10 @@ func.func @factorized_i32(%src: memref<?x?xi32>) -> i32 {
 // CHECK: scf.while
 // CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1 iter_args(%{{.*}} = %{{.*}}) -> (!dyno.tile<?xi32>)
 // CHECK: arith.addi %{{.*}}, %{{.*}} : !dyno.tile<?xi32>
-// CHECK: dyno.step %c0, 0, [%{{.*}}] : index
-// CHECK: dyno.splat %{{.*}} [%{{.*}}] : index
-// CHECK: arith.cmpi ult, %{{.*}}, %{{.*}} : !dyno.tile<?xindex>
-// CHECK: dyno.mask %{{.*}} : <?xi1>, %{{.*}} : !dyno.tile<?xi32>
-// CHECK: arith.addi %{{.*}}, %{{.*}} : !dyno.tile<?xi32>
+// CHECK-NOT: dyno.step
+// CHECK-NOT: arith.cmpi ult
+// CHECK-NOT: dyno.mask
+// CHECK: dyno.reduction_accumulate <add> %{{.*}}, %{{.*}} : !dyno.tile<?xi32>, !dyno.tile<?xi32>
 // CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "strict", dyno.parallel_stripmine, dyno.stripmined}
 
 func.func @factorized_i32_3d(%src: memref<?x?x?xi32>) -> i32 {

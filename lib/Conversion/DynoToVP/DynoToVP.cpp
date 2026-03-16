@@ -189,7 +189,8 @@ static LogicalResult isRank1StripmineCandidate(ReductionOp op,
 }
 
 // Emit the formal parallel strip-mined reduction: lane-wise vector
-// accumulation, masked tail preservation, and one final register reduction.
+// accumulation via explicit accumulator-prefix updates and one final register
+// reduction.
 static LogicalResult
 rewriteParallelRank1Reduction(ReductionOp op, RewriterBase &rewriter,
                               unsigned vf, bool scalable,
@@ -214,12 +215,12 @@ rewriteParallelRank1Reduction(ReductionOp op, RewriterBase &rewriter,
   auto loc = op.getLoc();
   Type elementType = tile.getType().getElementType();
   Value dimValue = getOrCreateIndexValue(rewriter, *dim, loc);
-  Value vlmax =
+  Value accLen =
       vp::GetVLOp::create(rewriter, loc, dimValue, vf, elementType, scalable);
 
   Value zeroIdx = arith::ConstantIndexOp::create(rewriter, loc, 0);
   Value initAcc = dyno::SplatOp::create(rewriter, loc, *identity,
-                                        SmallVector<OpFoldResult>{vlmax});
+                                        SmallVector<OpFoldResult>{accLen});
 
   SmallVector<Value> inits = {dimValue, zeroIdx, initAcc};
   SmallVector<Type> resultTypes = {dimValue.getType(), zeroIdx.getType(),
@@ -260,27 +261,8 @@ rewriteParallelRank1Reduction(ReductionOp op, RewriterBase &rewriter,
       return failure();
     }
 
-    // TODO: Investigate if mask is really necessary here or if the VP lowering
-    // eliminates it. The problem is that for Dyno dialect, the elementwise ops
-    // enforces same shaped operands. An old solution was using
-    // `passthru-operand` as a marker attribute to annotate which operand can be
-    // "longer" (is the accumulator). But this is a quite ad-hoc solution, and
-    // should be treated carefully. Mask here is definitely a performance issue.
-    Value laneIndices = dyno::StepOp::create(rewriter, loc, zeroIdx, 0,
-                                             SmallVector<OpFoldResult>{vlmax});
-    Value activeVL = dyno::SplatOp::create(rewriter, loc, vl,
-                                           SmallVector<OpFoldResult>{vlmax});
-    Value activeMask = arith::CmpIOp::create(
-        rewriter, loc, arith::CmpIPredicate::ult, laneIndices, activeVL);
-    auto maskedAcc = dyno::MaskOp::create(
-        rewriter, loc, TypeRange{acc.getType()}, activeMask,
-        [&](OpBuilder &b, Location bodyLoc) {
-          Value combined =
-              createCombiningOp(b, bodyLoc, op.getKind(), acc, *chunk);
-          dyno::MaskYieldOp::create(b, bodyLoc, ValueRange{combined});
-        },
-        acc);
-    Value newAcc = maskedAcc.getResult(0);
+    Value newAcc = dyno::ReductionAccumulateOp::create(
+        rewriter, loc, op.getKind(), acc, *chunk);
 
     Value newAvl = arith::SubIOp::create(rewriter, loc, avl, vl);
     Value newIdx = arith::AddIOp::create(rewriter, loc, idx, vl);

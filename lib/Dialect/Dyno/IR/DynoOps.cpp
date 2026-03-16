@@ -373,6 +373,50 @@ LogicalResult ReductionOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ReductionAccumulateOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult ReductionAccumulateOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, Adaptor adaptor,
+    SmallVectorImpl<Type> &inferred) {
+  inferred.push_back(adaptor.getAcc().getType());
+  return success();
+}
+
+LogicalResult ReductionAccumulateOp::verify() {
+  auto accType = getAcc().getType();
+  auto chunkType = getChunk().getType();
+  auto resultType = getResult().getType();
+
+  if (accType.getRank() != 1) {
+    return emitOpError("expected acc to be a rank-1 tile");
+  }
+  if (chunkType.getRank() != 1) {
+    return emitOpError("expected chunk to be a rank-1 tile");
+  }
+  if (accType.getElementType() != chunkType.getElementType()) {
+    return emitOpError("expected acc and chunk to have the same element type");
+  }
+  if (resultType != accType) {
+    return emitOpError("expected result type to match the acc type exactly");
+  }
+  if (!isReductionTypeSupported(getKind(), accType.getElementType())) {
+    return emitOpError(
+        "expected the combiner to support the tile element type");
+  }
+
+  int64_t accLen = accType.getShape().front();
+  int64_t chunkLen = chunkType.getShape().front();
+  if (!ShapedType::isDynamic(accLen) && !ShapedType::isDynamic(chunkLen) &&
+      chunkLen > accLen) {
+    return emitOpError("expected static chunk length to be no greater than the "
+                       "static acc length");
+  }
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // LoadOp
 //===----------------------------------------------------------------------===//
 

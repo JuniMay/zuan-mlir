@@ -43,19 +43,6 @@ static void overlayStaticShape(Builder &builder, TileType tileType,
 }
 
 static FailureOr<Value> getForwardedShapeOperand(Operation *op) {
-  if (auto passthru =
-          op->getAttrOfType<IntegerAttr>("dyno_passthru_operand")) {
-    int64_t index = passthru.getInt();
-    if (index < 0 || index >= static_cast<int64_t>(op->getNumOperands())) {
-      return failure();
-    }
-    Value operand = op->getOperand(index);
-    if (!isa<TileType>(operand.getType())) {
-      return failure();
-    }
-    return operand;
-  }
-
   if (op->getNumResults() != 1 || op->getNumRegions() != 0 ||
       !isa<TileType>(op->getResult(0).getType())) {
     return failure();
@@ -182,6 +169,18 @@ reifyReductionShape(OpBuilder &builder, ReductionOp reductionOp) {
 }
 
 static FailureOr<SmallVector<OpFoldResult>>
+reifyReductionAccumulateShape(OpBuilder &builder,
+                              ReductionAccumulateOp reductionAccumulateOp) {
+  auto shape = reifyDynoShape(builder, reductionAccumulateOp.getAcc());
+  if (failed(shape)) {
+    return failure();
+  }
+  overlayStaticShape(builder, reductionAccumulateOp.getResult().getType(),
+                     *shape);
+  return *shape;
+}
+
+static FailureOr<SmallVector<OpFoldResult>>
 reifyMaskShape(OpBuilder &builder, MaskOp maskOp, unsigned resultNumber) {
   if (auto *maskedOp = maskOp.getMaskedOp()) {
     return reifyDynoShape(builder, maskedOp->getResult(resultNumber));
@@ -230,6 +229,9 @@ reifyOpResultShape(OpBuilder &builder, OpResult result) {
       .Case<StepOp>([&](StepOp stepOp) { return reifyStepShape(builder, stepOp); })
       .Case<ReductionOp>(
           [&](ReductionOp reductionOp) { return reifyReductionShape(builder, reductionOp); })
+      .Case<ReductionAccumulateOp>([&](ReductionAccumulateOp reductionAccumulateOp) {
+        return reifyReductionAccumulateShape(builder, reductionAccumulateOp);
+      })
       .Case<CastOp, SelectOp>(
           [&](auto shapePreservingOp) -> FailureOr<SmallVector<OpFoldResult>> {
         auto shape = reifyDynoShape(builder, shapePreservingOp->getOperand(0));

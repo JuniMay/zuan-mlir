@@ -126,10 +126,6 @@ struct SplatElementwisePattern : OpTraitRewritePattern<OpTrait::Elementwise> {
       return rewriter.notifyMatchFailure(op, "requires single result");
     }
 
-    if (op->hasAttr("dyno_passthru_operand")) {
-      return rewriter.notifyMatchFailure(op, "got passthru operand");
-    }
-
     SmallVector<Value> newOperands;
     SmallVector<OpFoldResult> splatDims;
     for (auto operand : op->getOperands()) {

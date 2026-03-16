@@ -522,13 +522,6 @@ static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
   Type elementType =
       cast<TileType>(op->getResult(0).getType()).getElementType();
 
-  // TODO: dyno_passthru_operand is no longer generted by DynoToVP, a better
-  // method of handling is needed.
-  bool hasPassthru = op->hasAttr("dyno_passthru_operand");
-  auto passthruIdxAttr =
-      op->getAttrOfType<IntegerAttr>("dyno_passthru_operand");
-  auto passthruIdx = passthruIdxAttr ? passthruIdxAttr.getInt() : 0;
-
   auto loc = op->getLoc();
 
   for (Value operand : op->getOperands()) {
@@ -555,11 +548,6 @@ static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
     Value lhs = lhsValues[i];
     Value rhs = rhsValues[i];
 
-    Value passthru = nullptr;
-    if (hasPassthru) {
-      passthru = passthruIdx == 0 ? lhs : rhs;
-    }
-
     auto maskPair = getMaskPair(state, i);
     auto mask = maskPair.first;
     auto maskedoff = maskPair.second;
@@ -567,7 +555,7 @@ static LogicalResult handleArithOp(OpBuilder &builder, Operation *op,
     if (plan->hasVector()) {
       auto arithOp = ArithOp::create(builder, loc, lhs, rhs);
       auto predOp = vp::predicateOperation(builder, arithOp, plan->evl, mask,
-                                           passthru, maskedoff);
+                                           nullptr, maskedoff);
       resultValues.push_back(predOp->getResult(0));
     } else {
       auto val = createSCFIfOp(
@@ -724,6 +712,42 @@ static LogicalResult handleReductionOp(OpBuilder &builder,
   auto predOp = vp::predicateOperation(builder, reduction, plan->evl, mask,
                                        nullptr, maskedoff);
   state.tileMap[reductionOp.getResult()] = {predOp->getResult(0)};
+  return success();
+}
+
+static LogicalResult
+handleReductionAccumulateOp(OpBuilder &builder,
+                            ReductionAccumulateOp reductionAccumulateOp,
+                            VPConversionState &state) {
+  auto loc = reductionAccumulateOp.getLoc();
+  if (failed(ensureTileMapped(builder, reductionAccumulateOp.getAcc(), state)) ||
+      failed(
+          ensureTileMapped(builder, reductionAccumulateOp.getChunk(), state))) {
+    return failure();
+  }
+
+  auto chunkShape = reifyDynoShape(builder, reductionAccumulateOp.getChunk());
+  if (failed(chunkShape)) {
+    return failure();
+  }
+  auto plan = planVPShape(builder, loc, *chunkShape, state);
+  if (failed(plan) || !plan->hasVector()) {
+    return failure();
+  }
+
+  Value acc = lookupTileComponent(reductionAccumulateOp.getAcc(), 0, state);
+  Value chunk =
+      lookupTileComponent(reductionAccumulateOp.getChunk(), 0, state);
+  Value combined =
+      createCombiningOp(builder, loc, reductionAccumulateOp.getKind(), acc,
+                        chunk);
+
+  auto maskPair = getMaskPair(state, 0);
+  auto mask = maskPair.first;
+  auto maskedoff = maskPair.second;
+  auto predOp = vp::predicateOperation(builder, combined.getDefiningOp(),
+                                       plan->evl, mask, acc, maskedoff);
+  state.tileMap[reductionAccumulateOp.getResult()] = {predOp->getResult(0)};
   return success();
 }
 
@@ -1287,6 +1311,10 @@ LogicalResult convertToVP(OpBuilder &builder, Operation *op,
       })
       .Case([&](ReductionOp reductionOp) {
         return handleReductionOp(builder, reductionOp, state);
+      })
+      .Case([&](ReductionAccumulateOp reductionAccumulateOp) {
+        return handleReductionAccumulateOp(builder, reductionAccumulateOp,
+                                           state);
       })
       .Case([&](StepOp stepOp) { return handleStepOp(builder, stepOp, state); })
       .Case([&](CastOp castOp) { return handleCastOp(builder, castOp, state); })

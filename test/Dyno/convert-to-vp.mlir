@@ -40,7 +40,6 @@ func.func @sequential_reduce(%src: memref<?xf32>) -> f32 {
 // CHECK-NOT: fastmath<reassoc>
 // CHECK-NOT: scf.for
 // CHECK-NOT: memref.load
-
 func.func @rank2_store(%src: memref<2x?xf32>, %dst: memref<2x?xf32>) {
   %tile = dyno.load %src : memref<2x?xf32>
   dyno.store %tile, %dst : !dyno.tile<2x?xf32>, memref<2x?xf32>

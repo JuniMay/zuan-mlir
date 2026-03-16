@@ -172,3 +172,43 @@ func.func @extract_non_scalar(%arg0: !dyno.tile<?xf32>) {
   %0 = dyno.extract %arg0 : !dyno.tile<?xf32>
   return
 }
+
+// -----
+
+func.func @reduction_accumulate_non_rank1(%acc: !dyno.tile<?x?xf32>,
+                                          %chunk: !dyno.tile<?x?xf32>) {
+  // expected-error@+1 {{expected acc to be a rank-1 tile}}
+  %0 = dyno.reduction_accumulate <add> %acc, %chunk :
+      !dyno.tile<?x?xf32>, !dyno.tile<?x?xf32>
+  return
+}
+
+// -----
+
+func.func @reduction_accumulate_chunk_too_long(%acc: !dyno.tile<4xf32>,
+                                               %chunk: !dyno.tile<8xf32>) {
+  // expected-error@+1 {{expected static chunk length to be no greater than the static acc length}}
+  %0 = dyno.reduction_accumulate <add> %acc, %chunk :
+      !dyno.tile<4xf32>, !dyno.tile<8xf32>
+  return
+}
+
+// -----
+
+func.func @reduction_accumulate_element_mismatch(%acc: !dyno.tile<?xf32>,
+                                                 %chunk: !dyno.tile<?xi32>) {
+  // expected-error@+1 {{expected acc and chunk to have the same element type}}
+  %0 = dyno.reduction_accumulate <add> %acc, %chunk :
+      !dyno.tile<?xf32>, !dyno.tile<?xi32>
+  return
+}
+
+// -----
+
+func.func @reduction_accumulate_result_mismatch(%acc: !dyno.tile<4xf32>,
+                                                %chunk: !dyno.tile<2xf32>) {
+  // expected-error@+1 {{expected result type to match the acc type exactly}}
+  %0 = "dyno.reduction_accumulate"(%acc, %chunk) <{kind = #dyno.combining_kind<add>}> :
+      (!dyno.tile<4xf32>, !dyno.tile<2xf32>) -> !dyno.tile<2xf32>
+  return
+}
