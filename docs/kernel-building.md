@@ -166,7 +166,8 @@ It supports:
 - `REDUCTION_MODE`
   - passed into `-dyno-stripmining=... reduction-mode=<...>`
 - `FP_POLICY`
-  - passed into `-dyno-stripmining=... fp-policy=<...>`
+  - passed into `-dyno-stripmining=... fp-policy=<...>` as the default for
+    `dyno.reduction` ops that do not already carry `dyno.fp_policy`
 - `FUSE_ELEMENTWISE`
 - `STRENGTH_REDUCTION`
 - `PRE_VP_CANONICALIZE`
@@ -185,6 +186,16 @@ The generated pass structure is conceptually:
 6. optional VP-side cleanups
 7. `-convert-vp-to-llvm=...`
 8. standard LLVM-dialect lowering and cleanup
+
+Current notes:
+
+- `dyno.fp_policy` is per-reduction IR state. `dyno-stripmining` materializes
+  the `FP_POLICY` default only when a reduction is missing that attribute.
+- Value-producing `dyno.mask` without `maskedoff` does not guarantee any
+  specific false-lane value; effect-only masks still suppress writes on false
+  lanes.
+- Linalg-to-Dyno reduction lowering currently supports exactly one reduced
+  result per combiner region.
 
 ### `dyno_lower_autovec_mlir_to_llvm_ir`
 

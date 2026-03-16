@@ -39,19 +39,19 @@ func.func @reduce1d(%src: memref<?xf32>) -> f32 {
 // PAR: arith.cmpi ult, %{{.*}}, %{{.*}} : !dyno.tile<?xindex>
 // PAR: dyno.mask %{{.*}} : <?xi1>, %{{.*}} : !dyno.tile<?xf32>
 // PAR: arith.addf %{{.*}}, %{{.*}} : !dyno.tile<?xf32>
-// PAR: dyno.reduction <add> %{{.*}} [0] {dyno.parallel_reassoc, dyno.parallel_stripmine, dyno.stripmined}
+// PAR: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "relaxed", dyno.parallel_reassoc, dyno.parallel_stripmine, dyno.stripmined}
 // PAR: dyno.extract
 
 // SEQ-LABEL: func.func @reduce1d
 // SEQ: dyno.splat
 // SEQ: scf.while
-// SEQ: dyno.reduction <add> %{{.*}} [0], %{{.*}} {dyno.sequential_stripmine, dyno.stripmined}
+// SEQ: dyno.reduction <add> %{{.*}} [0], %{{.*}} {dyno.fp_policy = "strict", dyno.sequential_stripmine, dyno.stripmined}
 // SEQ-NOT: scf.for
 // SEQ-NOT: dyno.parallel_stripmine
 
 // AUTO-LABEL: func.func @reduce1d
 // AUTO: dyno.splat
 // AUTO: scf.while
-// AUTO: dyno.reduction <add> %{{.*}} [0], %{{.*}} {dyno.sequential_stripmine, dyno.stripmined}
+// AUTO: dyno.reduction <add> %{{.*}} [0], %{{.*}} {dyno.fp_policy = "strict", dyno.sequential_stripmine, dyno.stripmined}
 // AUTO-NOT: scf.for
 // AUTO-NOT: dyno.parallel_stripmine

@@ -32,6 +32,7 @@
 #include <optional>
 
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/ReductionAttrs.h"
 #include "Dyno/Utils/ReductionSemantics.h"
 #include "Dyno/Utils/ShapeInference.h"
 
@@ -304,6 +305,8 @@ struct ElideEmptyMaskOp : OpRewritePattern<MaskOp> {
     }
 
     auto terminator = cast<MaskYieldOp>(block->getTerminator());
+    // TODO: Make sure the semantic matches the formalism. Solely yielding a
+    // value should not be considered as a value-producing mask op.
     if (!terminator.getTiles().empty()) {
       rewriter.replaceAllUsesWith(op.getResults(), terminator.getTiles());
     }
@@ -361,6 +364,14 @@ LogicalResult ReductionOp::verify() {
   } else if (!hasImplicitIdentity(getKind(), tileType.getElementType())) {
     return emitOpError("expected an explicit init when the combiner has no "
                        "implicit identity for the tile element type");
+  }
+  // If the policy is present, check validity.
+  if (auto policyAttr = (*this)->getDiscardableAttr(kDynoFpPolicyAttr)) {
+    auto policyString = dyn_cast<StringAttr>(policyAttr);
+    if (!policyString || !parseFloatingPointPolicy(policyString.getValue())) {
+      return emitOpError() << "expected " << kDynoFpPolicyAttr
+                           << " to be one of: strict, relaxed";
+    }
   }
   return success();
 }

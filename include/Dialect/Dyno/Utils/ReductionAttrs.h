@@ -13,6 +13,8 @@ namespace dyno {
 
 /// Prevents generated reductions from being normalized or strip-mined again.
 inline constexpr const char *kDynoStripminedAttr = "dyno.stripmined";
+/// Records the floating-point legality policy attached to one reduction.
+inline constexpr const char *kDynoFpPolicyAttr = "dyno.fp_policy";
 /// Marks the final register reduction emitted by parallel strip-mining.
 inline constexpr const char *kDynoParallelReductionAttr =
     "dyno.parallel_stripmine";

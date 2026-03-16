@@ -8,6 +8,7 @@
 #ifndef DYNO_UTILS_REDUCTIONSEMANTICS_H
 #define DYNO_UTILS_REDUCTIONSEMANTICS_H
 
+#include "llvm/ADT/StringRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 
@@ -15,6 +16,7 @@ namespace mlir {
 namespace dyno {
 
 enum class CombiningKind : uint32_t;
+class ReductionOp;
 
 enum class FloatingPointPolicy {
   Strict,
@@ -40,6 +42,18 @@ bool isFactorizationAdmissible(CombiningKind kind, Type elementType,
 /// Return whether lane-wise chunk accumulation plus final lane reduction is legal.
 bool isParallelStripmineAdmissible(CombiningKind kind, Type elementType,
                                    FloatingPointPolicy policy);
+/// Parse the string spelling of a reduction floating-point policy.
+std::optional<FloatingPointPolicy> parseFloatingPointPolicy(StringRef policy);
+/// Return the canonical string spelling of a reduction floating-point policy.
+StringRef stringifyFloatingPointPolicy(FloatingPointPolicy policy);
+/// Read the optional floating-point policy attached to a reduction.
+std::optional<FloatingPointPolicy>
+getReductionFloatingPointPolicy(ReductionOp op);
+/// Attach the floating-point policy to a reduction as discardable IR state.
+void setReductionFloatingPointPolicy(ReductionOp op,
+                                     FloatingPointPolicy policy);
+/// Preserve the floating-point policy when deriving a new reduction from one.
+void copyReductionFloatingPointPolicy(ReductionOp from, ReductionOp to);
 /// Resolve `auto` mode into the concrete 1-D reduction mode to lower.
 ReductionModeKind chooseReductionMode(CombiningKind kind, Type elementType,
                                       FloatingPointPolicy policy,

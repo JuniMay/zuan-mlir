@@ -8,8 +8,11 @@
 #include "Dyno/Utils/ReductionSemantics.h"
 
 #include "Dyno/IR/Dyno.h"
+#include "Dyno/Utils/ReductionAttrs.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "llvm/ADT/StringSwitch.h"
 #include <limits>
 
 namespace mlir {
@@ -98,6 +101,47 @@ static bool isFloatingReassociationSensitive(CombiningKind kind) {
   }
 
   llvm_unreachable("unexpected combining kind");
+}
+
+std::optional<FloatingPointPolicy> parseFloatingPointPolicy(StringRef policy) {
+  return llvm::StringSwitch<std::optional<FloatingPointPolicy>>(policy)
+      .Case("strict", FloatingPointPolicy::Strict)
+      .Case("relaxed", FloatingPointPolicy::Relaxed)
+      .Default(std::nullopt);
+}
+
+StringRef stringifyFloatingPointPolicy(FloatingPointPolicy policy) {
+  switch (policy) {
+  case FloatingPointPolicy::Strict:
+    return "strict";
+  case FloatingPointPolicy::Relaxed:
+    return "relaxed";
+  }
+
+  llvm_unreachable("unexpected floating-point policy");
+}
+
+std::optional<FloatingPointPolicy>
+getReductionFloatingPointPolicy(ReductionOp op) {
+  auto policyAttr =
+      dyn_cast_or_null<StringAttr>(op->getDiscardableAttr(kDynoFpPolicyAttr));
+  if (!policyAttr) {
+    return std::nullopt;
+  }
+  return parseFloatingPointPolicy(policyAttr.getValue());
+}
+
+void setReductionFloatingPointPolicy(ReductionOp op,
+                                     FloatingPointPolicy policy) {
+  op->setDiscardableAttr(kDynoFpPolicyAttr,
+                         StringAttr::get(op.getContext(),
+                                         stringifyFloatingPointPolicy(policy)));
+}
+
+void copyReductionFloatingPointPolicy(ReductionOp from, ReductionOp to) {
+  if (auto policy = getReductionFloatingPointPolicy(from)) {
+    setReductionFloatingPointPolicy(to, *policy);
+  }
 }
 
 bool isReductionTypeSupported(CombiningKind kind, Type elementType) {

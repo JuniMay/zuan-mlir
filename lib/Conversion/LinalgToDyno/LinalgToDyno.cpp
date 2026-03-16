@@ -319,6 +319,9 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
   //----------------------------------------------------------------------
   // Check Reductions.
   //----------------------------------------------------------------------
+  // Dyno currently lowers only the subset where each combiner op corresponds
+  // to exactly one reduced result. More general Linalg reductions remain
+  // user-visible unsupported cases instead of crashing here.
 
   SmallVector<std::pair<Value, Value>> reductionOperands;
   for (Value opd : op->getOperands()) {
@@ -341,7 +344,12 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
   }
 
   if (!reductionOperands.empty()) {
-    assert(reductionOperands.size() == 1);
+    if (reductionOperands.size() != 1) {
+      state.linalgOp.emitOpError(
+          "Dyno Linalg-to-Dyno lowering currently supports exactly one "
+          "reduced result per combiner region");
+      return failure();
+    }
     auto [reduceOpd, initialOpd] = reductionOperands.front();
     auto reduceTile = getOrSplat(builder, reduceOpd, state);
     auto initialTile = getOrSplat(builder, initialOpd, state);
@@ -357,8 +365,8 @@ static LogicalResult convertOneOpToDyno(OpBuilder &builder, Operation *op,
       return failure();
     }
     auto combiningKind = static_cast<dyno::CombiningKind>(*vectorCombiningKind);
-    auto multiReduction = dyno::ReductionOp::create(builder, 
-        loc, combiningKind, reduceTile, dimsToReduce, initialTile);
+    auto multiReduction = dyno::ReductionOp::create(
+        builder, loc, combiningKind, reduceTile, dimsToReduce, initialTile);
     state.valueMap.map(op->getResult(0), multiReduction.getResult());
     return success();
   }

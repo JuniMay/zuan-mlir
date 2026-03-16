@@ -8,6 +8,7 @@
 
 #include "Dyno/IR/Dyno.h"
 #include "Dyno/Utils/Builders.h"
+#include "Dyno/Utils/ReductionSemantics.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -346,6 +347,7 @@ static FailureOr<Operation *> sliceReductionOp(OpBuilder &builder,
 
   auto newOp = ReductionOp::create(builder, reductionOp.getLoc(),
                                    reductionOp.getKind(), *tile, newDims, init);
+  copyReductionFloatingPointPolicy(reductionOp, newOp);
   return mapResults(reductionOp, newOp, state);
 }
 
@@ -427,9 +429,13 @@ static Operation *buildMaskedInnerOp(OpBuilder &builder, Operation *maskedOp,
       }
       dims.push_back(dim - shift);
     }
-    return ReductionOp::create(builder, reductionOp.getLoc(),
-                               reductionOp.getKind(), operands.front(), dims,
-                               operands.size() == 2 ? operands[1] : Value());
+    auto newOp = ReductionOp::create(builder, reductionOp.getLoc(),
+                                     reductionOp.getKind(), operands.front(),
+                                     dims,
+                                     operands.size() == 2 ? operands[1]
+                                                          : Value());
+    copyReductionFloatingPointPolicy(reductionOp, newOp);
+    return newOp;
   }
   if (auto splatOp = dyn_cast<SplatOp>(maskedOp)) {
     auto resultType = spec.getSlicedTileType(splatOp.getResult().getType());

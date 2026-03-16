@@ -1,8 +1,8 @@
 #include "Conversion/DynoToVP.h"
 #include "Dyno/IR/Dyno.h"
-#include "Dyno/Utils/ReductionAttrs.h"
 #include "Dyno/Utils/Builders.h"
 #include "Dyno/Utils/ConvertToVP.h"
+#include "Dyno/Utils/ReductionAttrs.h"
 #include "Dyno/Utils/ReductionSemantics.h"
 #include "Dyno/Utils/ShapeInference.h"
 #include "Dyno/Utils/Slicing.h"
@@ -22,14 +22,6 @@ namespace mlir {
 namespace dyno {
 
 namespace {
-
-static std::optional<FloatingPointPolicy>
-parseFloatingPointPolicy(StringRef policy) {
-  return llvm::StringSwitch<std::optional<FloatingPointPolicy>>(policy)
-      .Case("strict", FloatingPointPolicy::Strict)
-      .Case("relaxed", FloatingPointPolicy::Relaxed)
-      .Default(std::nullopt);
-}
 
 static std::optional<ReductionModeKind> parseReductionModeKind(StringRef mode) {
   return llvm::StringSwitch<std::optional<ReductionModeKind>>(mode)
@@ -298,7 +290,8 @@ rewriteParallelRank1Reduction(ReductionOp op, RewriterBase &rewriter,
   Value finalReduction = dyno::ReductionOp::create(rewriter, loc, op.getKind(),
                                                    whileOp->getResult(2),
                                                    op.getDims(), op.getInit());
-  auto *finalReductionOp = finalReduction.getDefiningOp();
+  auto finalReductionOp = cast<ReductionOp>(finalReduction.getDefiningOp());
+  copyReductionFloatingPointPolicy(op, finalReductionOp);
   finalReductionOp->setAttr(kDynoStripminedAttr, rewriter.getUnitAttr());
   finalReductionOp->setAttr(kDynoParallelReductionAttr, rewriter.getUnitAttr());
   if (fpPolicy == FloatingPointPolicy::Relaxed &&
@@ -358,9 +351,9 @@ static LogicalResult rewriteSequentialRank1Reduction(ReductionOp op,
     Value vl =
         vp::GetVLOp::create(rewriter, loc, avl, vf, elementType, scalable);
 
-    auto chunkSpec = SliceSpec::getSingleDimSlice(rewriter, op.getTile(), 0,
-                                                  idx, vl,
-                                                  /*dropUnitDim=*/false);
+    auto chunkSpec =
+        SliceSpec::getSingleDimSlice(rewriter, op.getTile(), 0, idx, vl,
+                                     /*dropUnitDim=*/false);
     if (failed(chunkSpec)) {
       rewriter.eraseOp(whileOp);
       return failure();
@@ -376,10 +369,10 @@ static LogicalResult rewriteSequentialRank1Reduction(ReductionOp op,
 
     // Keep each chunk as an ordered 1-D reduction so the VP boundary can lower
     // it to an ordered vector reduction without lane scalarization here.
-    Value newAcc =
-        dyno::ReductionOp::create(rewriter, loc, op.getKind(), *chunk,
-                                  op.getDims(), acc);
-    auto *newAccOp = newAcc.getDefiningOp();
+    Value newAcc = dyno::ReductionOp::create(rewriter, loc, op.getKind(),
+                                             *chunk, op.getDims(), acc);
+    auto newAccOp = cast<ReductionOp>(newAcc.getDefiningOp());
+    copyReductionFloatingPointPolicy(op, newAccOp);
     newAccOp->setAttr(kDynoStripminedAttr, rewriter.getUnitAttr());
     newAccOp->setAttr(kDynoSequentialReductionAttr, rewriter.getUnitAttr());
 
@@ -395,9 +388,7 @@ static LogicalResult rewriteSequentialRank1Reduction(ReductionOp op,
 // Normalize higher-dimensional reductions before VP preparation: admissible
 // cases factorize, non-admissible ones become explicit ordered traversal.
 struct NormalizeHigherDimReductionPattern : OpRewritePattern<ReductionOp> {
-  NormalizeHigherDimReductionPattern(MLIRContext *context,
-                                     FloatingPointPolicy fpPolicy)
-      : OpRewritePattern<ReductionOp>(context, 4), fpPolicy(fpPolicy) {}
+  using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ReductionOp op,
                                 PatternRewriter &rewriter) const final {
@@ -406,8 +397,15 @@ struct NormalizeHigherDimReductionPattern : OpRewritePattern<ReductionOp> {
                                          "not a higher-dimensional reduction");
     }
 
+    // The default floating point policy should already be injected before
+    // invoking this pattern in DynoStripminingPass.
+    auto fpPolicy = getReductionFloatingPointPolicy(op);
+    if (!fpPolicy) {
+      return rewriter.notifyMatchFailure(op, "missing valid dyno.fp_policy");
+    }
+
     auto elementType = op.getTile().getType().getElementType();
-    if (!isFactorizationAdmissible(op.getKind(), elementType, fpPolicy)) {
+    if (!isFactorizationAdmissible(op.getKind(), elementType, *fpPolicy)) {
       if (failed(rewriteOrderedReduction(op, rewriter))) {
         return rewriter.notifyMatchFailure(op,
                                            "failed ordered reduction lowering");
@@ -426,14 +424,13 @@ struct NormalizeHigherDimReductionPattern : OpRewritePattern<ReductionOp> {
       current = dyno::ReductionOp::create(
           rewriter, op.getLoc(), op.getKind(), current,
           ArrayRef<int64_t>{static_cast<int64_t>(currentDim)}, init);
+      copyReductionFloatingPointPolicy(
+          op, cast<ReductionOp>(current.getDefiningOp()));
       reducedSourceDims.push_back(sourceDim);
     }
     rewriter.replaceOp(op, current);
     return success();
   }
-
-private:
-  FloatingPointPolicy fpPolicy;
 };
 
 // Any higher-rank reduction that survives normalization must stay in explicit
@@ -460,10 +457,9 @@ struct LowerHigherRankReductionPattern : OpRewritePattern<ReductionOp> {
 // after consulting the centralized legality helpers.
 struct LowerRank1ReductionPattern : OpRewritePattern<ReductionOp> {
   LowerRank1ReductionPattern(MLIRContext *context, unsigned vf, bool scalable,
-                             ReductionModeKind reductionMode,
-                             FloatingPointPolicy fpPolicy)
+                             ReductionModeKind reductionMode)
       : OpRewritePattern<ReductionOp>(context, 3), vf(vf), scalable(scalable),
-        reductionMode(reductionMode), fpPolicy(fpPolicy) {}
+        reductionMode(reductionMode) {}
 
   LogicalResult matchAndRewrite(ReductionOp op,
                                 PatternRewriter &rewriter) const final {
@@ -472,18 +468,25 @@ struct LowerRank1ReductionPattern : OpRewritePattern<ReductionOp> {
                                          "not a rank-1 stripmine candidate");
     }
 
+    // The default floating point policy should already be injected before
+    // invoking this pattern in DynoStripminingPass.
+    auto fpPolicy = getReductionFloatingPointPolicy(op);
+    if (!fpPolicy) {
+      return rewriter.notifyMatchFailure(op, "missing valid dyno.fp_policy");
+    }
+
     auto elementType = op.getTile().getType().getElementType();
-    ReductionModeKind selectedMode =
-        chooseReductionMode(op.getKind(), elementType, fpPolicy, reductionMode);
+    ReductionModeKind selectedMode = chooseReductionMode(
+        op.getKind(), elementType, *fpPolicy, reductionMode);
     if (selectedMode == ReductionModeKind::Parallel &&
-        !isParallelStripmineAdmissible(op.getKind(), elementType, fpPolicy)) {
+        !isParallelStripmineAdmissible(op.getKind(), elementType, *fpPolicy)) {
       return rewriter.notifyMatchFailure(
           op, "parallel strip-mining is illegal for the active policy");
     }
 
     if (selectedMode == ReductionModeKind::Parallel) {
       if (failed(rewriteParallelRank1Reduction(op, rewriter, vf, scalable,
-                                               fpPolicy))) {
+                                               *fpPolicy))) {
         return rewriter.notifyMatchFailure(op, "failed parallel strip-mining");
       }
       return success();
@@ -499,7 +502,6 @@ private:
   unsigned vf;
   bool scalable;
   ReductionModeKind reductionMode;
-  FloatingPointPolicy fpPolicy;
 };
 
 static bool isEffectOnlyMaskRoot(MaskOp op) {
@@ -878,12 +880,34 @@ void DynoStripminingPass::runOnOperation() {
     return;
   }
 
+  // Stripmining now treats the pass option as the default policy to stamp onto
+  // reductions that have not made their floating-point legality explicit yet.
+  bool sawInvalidReductionPolicy = false;
+  getOperation()->walk([&](ReductionOp op) {
+    if (sawInvalidReductionPolicy) {
+      return;
+    }
+    auto policyAttr = op->getDiscardableAttr(kDynoFpPolicyAttr);
+    if (!policyAttr) {
+      setReductionFloatingPointPolicy(op, *parsedFpPolicy);
+      return;
+    }
+    if (!getReductionFloatingPointPolicy(op)) {
+      op.emitOpError() << "expected " << kDynoFpPolicyAttr
+                       << " to be one of: strict, relaxed";
+      sawInvalidReductionPolicy = true;
+    }
+  });
+  if (sawInvalidReductionPolicy) {
+    signalPassFailure();
+    return;
+  }
+
   RewritePatternSet reductionPatterns(&getContext());
-  reductionPatterns.add<NormalizeHigherDimReductionPattern>(&getContext(),
-                                                            *parsedFpPolicy);
+  reductionPatterns.add<NormalizeHigherDimReductionPattern>(&getContext());
   reductionPatterns.add<LowerHigherRankReductionPattern>(&getContext());
-  reductionPatterns.add<LowerRank1ReductionPattern>(
-      &getContext(), vf, scalable, *parsedReductionMode, *parsedFpPolicy);
+  reductionPatterns.add<LowerRank1ReductionPattern>(&getContext(), vf, scalable,
+                                                    *parsedReductionMode);
   if (failed(applyPatternsGreedily(getOperation(),
                                    std::move(reductionPatterns)))) {
     signalPassFailure();
@@ -901,11 +925,19 @@ void DynoStripminingPass::runOnOperation() {
           op.getDims().front() != 0) {
         return;
       }
-      if (!isParallelStripmineAdmissible(
-              op.getKind(), tileType.getElementType(), *parsedFpPolicy)) {
-        op.emitOpError(
-            "parallel strip-mining is illegal for this combiner/type "
-            "under the active fp-policy");
+      auto policy = getReductionFloatingPointPolicy(op);
+      if (!policy) {
+        op.emitOpError("missing valid dyno.fp_policy after stripmining "
+                       "materialization");
+        sawIllegalParallel = true;
+        return;
+      }
+      if (!isParallelStripmineAdmissible(op.getKind(),
+                                         tileType.getElementType(), *policy)) {
+        op.emitOpError()
+            << "parallel strip-mining is illegal for this combiner/type under "
+               "the active "
+            << kDynoFpPolicyAttr;
         sawIllegalParallel = true;
       }
     });

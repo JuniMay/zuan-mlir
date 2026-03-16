@@ -37,7 +37,8 @@ struct DynoStripminingPass
                         llvm::cl::init(true)};
   Option<std::string> fpPolicy{
       *this, "fp-policy",
-      llvm::cl::desc("Floating-point reduction policy: strict, relaxed"),
+      llvm::cl::desc(
+          "Fallback floating-point reduction policy: strict, relaxed"),
       llvm::cl::init("strict")};
   Option<std::string> reductionMode{
       *this, "reduction-mode",

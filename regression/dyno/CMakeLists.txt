@@ -1,5 +1,7 @@
 add_subdirectory(mask-gather-scatter)
+add_subdirectory(reduction-maximumf-relaxed)
 add_subdirectory(reduction-3d-factorized)
 add_subdirectory(reduction-3d-nonconsecutive)
 add_subdirectory(reduction-3d-ordered)
+add_subdirectory(reduction-minimumf-strict)
 add_subdirectory(softmax)

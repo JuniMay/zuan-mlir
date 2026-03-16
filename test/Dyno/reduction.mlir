@@ -24,7 +24,7 @@ func.func @factorized_i32(%src: memref<?x?xi32>) -> i32 {
 // CHECK: arith.cmpi ult, %{{.*}}, %{{.*}} : !dyno.tile<?xindex>
 // CHECK: dyno.mask %{{.*}} : <?xi1>, %{{.*}} : !dyno.tile<?xi32>
 // CHECK: arith.addi %{{.*}}, %{{.*}} : !dyno.tile<?xi32>
-// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.parallel_stripmine, dyno.stripmined}
+// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "strict", dyno.parallel_stripmine, dyno.stripmined}
 
 func.func @factorized_i32_3d(%src: memref<?x?x?xi32>) -> i32 {
   %tile = dyno.load %src : memref<?x?x?xi32>
@@ -40,7 +40,7 @@ func.func @factorized_i32_3d(%src: memref<?x?x?xi32>) -> i32 {
 // CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1 iter_args(%{{.*}} = %{{.*}}) -> (!dyno.tile<?xi32>)
 // CHECK: dyno.load %{{.*}} : memref<?xi32, strided<[?], offset: ?>>
 // CHECK: arith.addi %{{.*}}, %{{.*}} : !dyno.tile<?xi32>
-// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.parallel_stripmine, dyno.stripmined}
+// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "strict", dyno.parallel_stripmine, dyno.stripmined}
 
 func.func @factorized_i32_nonconsecutive(%src: memref<?x?x?xi32>) -> i32 {
   %tile = dyno.load %src : memref<?x?x?xi32>
@@ -57,7 +57,7 @@ func.func @factorized_i32_nonconsecutive(%src: memref<?x?x?xi32>) -> i32 {
 // CHECK: memref.subview %arg0[0, %{{.*}}, 0] [%{{.*}}, %{{.*}}, %{{.*}}] [1, 1, 1]
 // CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1 iter_args(%{{.*}} = %{{.*}}) -> (!dyno.tile<?xi32>)
 // CHECK: scf.for %{{.*}} = %c0 to %{{.*}} step %c1 iter_args(%{{.*}} = %{{.*}}) -> (!dyno.tile<?xi32>)
-// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.parallel_stripmine, dyno.stripmined}
+// CHECK: dyno.reduction <add> %{{.*}} [0] {dyno.fp_policy = "strict", dyno.parallel_stripmine, dyno.stripmined}
 
 func.func @ordered_f32(%src: memref<?x?xf32>) -> f32 {
   %tile = dyno.load %src : memref<?x?xf32>

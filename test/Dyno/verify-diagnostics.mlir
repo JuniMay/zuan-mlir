@@ -40,6 +40,14 @@ func.func @reduction_unsupported_combiner_type(%arg0: !dyno.tile<?xf32>) {
 
 // -----
 
+func.func @reduction_bad_fp_policy(%arg0: !dyno.tile<?xf32>) {
+  // expected-error@+1 {{expected dyno.fp_policy to be one of: strict, relaxed}}
+  %0 = dyno.reduction <add> %arg0 [0] {dyno.fp_policy = "fast"} : !dyno.tile<?xf32>
+  return
+}
+
+// -----
+
 func.func @splat_bad_suffix(%arg0: !dyno.tile<2xf32>) {
   // expected-error@+1 {{expected result suffix shape to match the operand tile shape exactly}}
   %0 = "dyno.splat"(%arg0) {staticDims = array<i64: 4>} : (!dyno.tile<2xf32>) -> !dyno.tile<4x3xf32>

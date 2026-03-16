@@ -45,13 +45,13 @@ def Dyno_MaskOp : Dyno_Op<"mask", [
     `dyno.mask` operation is a region that contains conditional tile operations.
     Only the elements whose corresponding mask is true will be computed. An
     optional passthru tile `maskedoff` can be provided to fill the masked-off
-    elements.
+    elements for value-producing masks.
 
-    If no passthru is provided, using the masked-off values is undefined and
-    the result can be arbitrary.
+    If no passthru is provided on a value-producing mask, false-lane elements
+    are outside the guaranteed semantics and the result can be arbitrary there.
+    Programs must not depend on observing any specific false-lane value.
 
-    The passthru and mask are up to operations to decide their semantics. The
-    mask regions cannot be nested.
+    For effect-only masks, false lanes suppress the contained write effect.
 
     At most one operation can be inside the mask operation, and the yielded
     value must have tile type.
