@@ -10,7 +10,7 @@ include(CTest)
 option(ENABLE_RISCV_GNU_TOOLCHAIN "Build the RISC-V GNU toolchain" OFF)
 option(ENABLE_BENCHMARKS "Build benchmark targets" OFF)
 option(ENABLE_TRITON_BENCHMARKS "Build Triton-based benchmark targets" OFF)
-option(ENABLE_RUNTIME_REGRESSIONS "Enable regression testing" OFF)
+option(ENABLE_RUNTIME_REGRESSIONS "Enable runtime regression testing" OFF)
 option(DYNO_BENCHMARK_DUMP_IR "Dump MLIR after each pass" OFF)
 
 #-------------------------------------------------------------------------------
@@ -64,9 +64,6 @@ add_subdirectory(lib)
 add_subdirectory(tools)
 if (BUILD_TESTING)
   add_subdirectory(test)
-  if (ENABLE_RUNTIME_REGRESSIONS)
-    add_subdirectory(regression)
-  endif()
 endif()
 
 #-------------------------------------------------------------------------------

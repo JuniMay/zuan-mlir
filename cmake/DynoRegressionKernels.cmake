@@ -90,7 +90,7 @@ function(_dyno_add_runtime_regression)
 
   add_executable(${ARG_NAME} ${ARG_DRIVER})
   target_include_directories(${ARG_NAME} PRIVATE
-    ${DYNO_SOURCE_DIR}/regression/common
+    ${DYNO_SOURCE_DIR}/test/runtime/common
   )
   target_compile_definitions(${ARG_NAME} PRIVATE
     DYNO_REGRESSION_NAME="${ARG_NAME}"

@@ -20,11 +20,12 @@ The implementation lives primarily in:
 Dyno currently has two kernel-consuming layers:
 
 1. `benchmarks/`
-2. `regression/`
+2. `test/runtime/`
 
 Both layers share the same lowering and object-generation helpers. The
 benchmark layer adds benchmark-specific packaging such as Google Benchmark. The
 runtime regression layer adds driver executables and `CTest` registration.
+Compiler-only lit regressions live separately under `test/lit/`.
 
 ## High-Level Flow
 
@@ -247,13 +248,13 @@ The runtime regression layer is enabled by:
 -DENABLE_RUNTIME_REGRESSIONS=ON
 ```
 
-and configured from `regression/CMakeLists.txt`.
+and configured from `test/runtime/CMakeLists.txt`.
 
 It:
 
 1. configures the shared kernel build layer
 2. loads `DynoRegressionKernels.cmake`
-3. adds regression subdirectories
+3. adds runtime regression subdirectories
 4. creates the convenience target `check-dyno-runtime-regressions`
 
 The public regression helpers are:
