@@ -138,8 +138,7 @@ $$
 If index tiles $i_0, \dots, i_{k-1}$ share common domain $D$, then
 
 $$
-\llbracket \mathrm{gather}(A, i_0,\dots,i_{k-1}) \rrbracket(p)
-=
+\llbracket \mathrm{gather}(A, i_0,\dots,i_{k-1}) \rrbracket(p) =
 A[i_0(p),\dots,i_{k-1}(p)].
 $$
 
@@ -198,8 +197,7 @@ $$
 Let $f : T_1 \times \dots \times T_n \to U$ be a scalar operator. If operands $v_1, \dots, v_n$ share common domain $D$, then
 
 $$
-\llbracket f(v_1,\dots,v_n) \rrbracket(p)
-=
+\llbracket f(v_1,\dots,v_n) \rrbracket(p) = 
 f(\llbracket v_1 \rrbracket(p),\dots,\llbracket v_n \rrbracket(p)).
 $$
 
@@ -267,8 +265,7 @@ where the enumeration is the canonical lexicographic order over $D_R$ in ascendi
 Then
 
 $$
-\llbracket \mathrm{reduction}^{\oplus}_{R}(v, a_0) \rrbracket(q)
-=
+\llbracket \mathrm{reduction}^{\oplus}_{R}(v, a_0) \rrbracket(q) =
 \mathrm{foldl}_{\oplus}(a_0(q), \mathrm{Seq}_{R}(q)).
 $$
 
@@ -349,8 +346,7 @@ The old “one generic unroll interface for everything” is not a correct abstr
 Let $f$ be a shape-preserving pointwise operation, and let $\sigma$ be a slice operator on the result domain. Then
 
 $$
-\sigma(f(v_1,\dots,v_n))
-=
+\sigma(f(v_1,\dots,v_n)) =
 f(\sigma_1(v_1),\dots,\sigma_n(v_n)),
 $$
 
@@ -406,8 +402,7 @@ restricted to indices $< n$, for each lane $\lambda \in [0,w)$.
 The **parallel strip-mined** result is
 
 $$
-y_{\mathrm{par}}(q)
-=
+y_{\mathrm{par}}(q) =
 \mathrm{foldl}_{\oplus}
 \Bigl(
  a_0(q),
@@ -444,16 +439,14 @@ in increasing source order.
 Define the ordered chunk-fold operator
 
 $$
-\mathrm{ordchunk}_{\oplus}(a, C_j)
-=
+\mathrm{ordchunk}_{\oplus}(a, C_j) =
 \mathrm{foldl}_{\oplus}(a, [x_q(i)]_{i \in C_j}^{\uparrow}).
 $$
 
 The **sequential strip-mined** result is
 
 $$
-y_{\mathrm{seq}}(q)
-=
+y_{\mathrm{seq}}(q) =
 \mathrm{ordchunk}_{\oplus}(
   \dots \mathrm{ordchunk}_{\oplus}(
     \mathrm{ordchunk}_{\oplus}(a_0(q), C_0),
