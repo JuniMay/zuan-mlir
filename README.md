@@ -55,16 +55,6 @@ unchanged:
 ./scripts/build-dyno.sh
 ```
 
-If you also want the optional Triton benchmarks on the host, bootstrap the
-split Triton toolchain into your host build tree and configure with
-`ENABLE_TRITON_BENCHMARKS=ON`:
-
-```bash
-./scripts/setup-triton.sh build
-cmake -S . -B build -DENABLE_BENCHMARKS=ON -DENABLE_TRITON_BENCHMARKS=ON
-ninja -C build triton-vector-add-benchmark triton-vector-mul-benchmark triton-saxpy-benchmark triton-matmul-benchmark
-```
-
 ## RISC-V Benchmarking
 
 To build the benchmarks for RISC-V platforms, cross-compile the project.
